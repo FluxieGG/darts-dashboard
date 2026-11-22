@@ -62,6 +62,22 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       order: 6,
       colSpan: 1,
     },
+    {
+      id: 'objectives-tracker',
+      title: 'Daily & Weekly Objectives',
+      description: 'Live fun & skill challenges tied to your Career Vault',
+      enabled: true,
+      order: 7,
+      colSpan: 2,
+    },
+    {
+      id: 'career-streak',
+      title: 'Streak Calendar & Career Vault',
+      description: 'Practice calendar, daily streak tracker, and Best Days Ever archive',
+      enabled: true,
+      order: 8,
+      colSpan: 2,
+    },
   ],
 };
 

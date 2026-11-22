@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { useReplayStore } from '../../store/useReplayStore';
+import { ocheCamService } from '../../services/ocheCamService';
 import { cloudService } from '../../services/cloudApi';
 import { Modal } from '../common/Modal';
 import {
@@ -12,6 +14,13 @@ import {
   ExternalLink,
   ShieldAlert,
   Server,
+  Video,
+  VideoOff,
+  FolderOpen,
+  FlaskConical,
+  RefreshCw,
+  Mic,
+  Clapperboard,
 } from 'lucide-react';
 import { DataConnectionMode } from '../../types/config';
 
@@ -39,10 +48,76 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   } = useSettingsStore();
 
   const resetActiveStats = usePlayerStore((s) => s.resetSessionStats);
+  const {
+    status: camStatus,
+    errorMessage: camError,
+    boardFeedError,
+    availableCameras,
+    autoStartCamera,
+    selectedDeviceId,
+    boardCameraMode,
+    boardCameraDeviceId,
+    autodartsCamIndex,
+    autodartsCamCustomUrl,
+    includeAudio,
+    saveDir,
+    triggers,
+    devCaptureNextDartArmed,
+    refreshCameras,
+    startCamera,
+    stopCamera,
+    setAutoStartCamera,
+    setSelectedDeviceId,
+    setBoardCameraMode,
+    setBoardCameraDeviceId,
+    setAutodartsCamIndex,
+    setAutodartsCamCustomUrl,
+    setIncludeAudio,
+    setSaveDir,
+    updateTrigger,
+    armDevNextDartCapture,
+    cancelDevNextDartCapture,
+    openGallery,
+  } = useReplayStore();
+
   const [clientIdInput, setClientIdInput] = useState(cloudClientId);
   const [wsUrlInput, setWsUrlInput] = useState(localWsUrl);
   const [httpUrlInput, setHttpUrlInput] = useState(localHttpUrl);
+  const [saveDirInput, setSaveDirInput] = useState(saveDir);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [dirSaved, setDirSaved] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      void refreshCameras();
+      setSaveDirInput(saveDir);
+    }
+  }, [isOpen, refreshCameras, saveDir]);
+
+  useEffect(() => {
+    const videoEl = previewVideoRef.current;
+    if (!videoEl) return;
+    if (isOpen && (camStatus === 'buffering' || camStatus === 'capturing')) {
+      videoEl.srcObject = ocheCamService.getStream();
+    } else {
+      videoEl.srcObject = null;
+    }
+  }, [isOpen, camStatus]);
+
+  /* [DEV-TEST: REMOVE WHEN DONE] Auto-starts camera if idle and arms next-dart capture */
+  const handleArmDevCapture = async () => {
+    if (devCaptureNextDartArmed) {
+      cancelDevNextDartCapture();
+      return;
+    }
+    if (camStatus !== 'buffering' && camStatus !== 'capturing') {
+      await startCamera();
+    }
+    if (ocheCamService.isRunning()) {
+      armDevNextDartCapture();
+    }
+  };
 
   const handleSaveUrls = (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,6 +236,335 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </form>
+        </div>
+
+        {/* Oche-Cam & Action Replays (Auto-Clipper) */}
+        <div className="p-4 rounded-xl bg-slate-900/60 border border-rose-500/20 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Video className="w-4 h-4 text-rose-400" />
+              <h4 className="font-semibold text-white text-xs uppercase tracking-wider">
+                Oche-Cam &amp; Action Replays (10s Rolling Buffer)
+              </h4>
+            </div>
+            <span
+              className={`text-xs font-mono font-semibold px-2 py-0.5 rounded-full border ${
+                camStatus === 'buffering'
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                  : camStatus === 'capturing'
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-400/50 animate-pulse'
+                  : camStatus === 'error'
+                  ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                  : 'bg-slate-800 text-slate-400 border-white/10'
+              }`}
+            >
+              {camStatus === 'buffering'
+                ? 'Live Buffer Armed'
+                : camStatus === 'capturing'
+                ? 'Capturing Clip...'
+                : camStatus === 'starting'
+                ? 'Starting...'
+                : camStatus === 'error'
+                ? 'Camera Error'
+                : 'Off'}
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Stitches your <strong className="text-slate-200">Oche Reaction Cam (Left)</strong> and{' '}
+            <strong className="text-slate-200">Dartboard Cam (Right)</strong> side-by-side into one
+            10-second broadcast WebM clip (~5s before impact + ~5s reaction).
+          </p>
+
+          {/* LEFT CAMERA: Oche / Player Reaction Cam */}
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-mono uppercase tracking-wider text-rose-300 font-bold">
+              Left Split — Oche / Reaction Webcam
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedDeviceId}
+                onChange={(e) => {
+                  setSelectedDeviceId(e.target.value);
+                  if (camStatus === 'buffering') {
+                    void startCamera({ ocheDeviceId: e.target.value });
+                  }
+                }}
+                className="flex-1 min-w-[180px] bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-400"
+              >
+                {availableCameras.length === 0 ? (
+                  <option value="">Default Webcam (click Start to grant permission)</option>
+                ) : (
+                  availableCameras.map((cam) => (
+                    <option key={cam.deviceId} value={cam.deviceId}>
+                      {cam.label}
+                    </option>
+                  ))
+                )}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => void refreshCameras()}
+                title="Refresh camera list"
+                className="p-2 rounded-lg bg-slate-950 border border-white/10 text-slate-300 hover:text-white cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+
+              {camStatus === 'buffering' || camStatus === 'capturing' ? (
+                <button
+                  type="button"
+                  onClick={stopCamera}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 text-xs font-bold cursor-pointer"
+                >
+                  <VideoOff className="w-3.5 h-3.5" />
+                  Stop Cams
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startCamera()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 text-xs font-bold cursor-pointer"
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  Start Split-Cam
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT CAMERA: Dartboard Close-Up Cam */}
+          <div className="p-3 rounded-xl bg-slate-950/60 border border-white/[0.08] space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-[11px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
+                Right Split — Dartboard Camera
+              </label>
+              <div className="flex items-center gap-1">
+                {(
+                  [
+                    { id: 'usb', label: 'USB Cam' },
+                    { id: 'autodarts', label: 'Autodarts 3180' },
+                    { id: 'none', label: 'Single Cam' },
+                  ] as const
+                ).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => {
+                      setBoardCameraMode(mode.id);
+                      if (camStatus === 'buffering') {
+                        void startCamera({ boardCameraMode: mode.id });
+                      }
+                    }}
+                    className={`px-2 py-1 rounded-md text-[10px] font-mono font-bold border transition-colors cursor-pointer ${
+                      boardCameraMode === mode.id
+                        ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
+                        : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {boardCameraMode === 'usb' && (
+              <select
+                value={boardCameraDeviceId}
+                onChange={(e) => {
+                  setBoardCameraDeviceId(e.target.value);
+                  if (camStatus === 'buffering') {
+                    void startCamera({ boardDeviceId: e.target.value });
+                  }
+                }}
+                className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
+              >
+                <option value="">Select 2nd USB / Virtual Board Camera...</option>
+                {availableCameras.map((cam) => (
+                  <option key={cam.deviceId} value={cam.deviceId}>
+                    {cam.label} {cam.deviceId === selectedDeviceId ? '(Used as Oche Cam)' : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {boardCameraMode === 'autodarts' && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-mono text-slate-400">Board Cam Index:</span>
+                  {[0, 1, 2].map((idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setAutodartsCamIndex(idx);
+                        if (camStatus === 'buffering') {
+                          void startCamera({ autodartsCamIndex: idx });
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border cursor-pointer ${
+                        autodartsCamIndex === idx
+                          ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
+                          : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Cam {idx}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={autodartsCamCustomUrl}
+                  onChange={(e) => setAutodartsCamCustomUrl(e.target.value)}
+                  placeholder="Optional custom MJPEG URL (blank = /api/board/api/streams/live?cam=0&warp=true)"
+                  className="w-full bg-slate-900 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+            )}
+
+            {boardFeedError && (
+              <div className="p-2 rounded-lg bg-amber-500/15 border border-amber-400/35 text-[11px] text-amber-200">
+                {boardFeedError}
+              </div>
+            )}
+          </div>
+
+          {camError && (
+            <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-200">
+              {camError}
+            </div>
+          )}
+
+          {/* Live Side-by-Side Composite Preview */}
+          {(camStatus === 'buffering' || camStatus === 'capturing') && (
+            <div className="relative rounded-xl overflow-hidden bg-black border border-white/15">
+              <video
+                ref={previewVideoRef}
+                autoPlay
+                muted
+                playsInline
+                className="w-full max-h-48 object-contain block mx-auto"
+              />
+              <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/75 text-[10px] font-mono font-bold text-emerald-300 flex items-center gap-1.5 border border-white/10">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                {boardCameraMode === 'none' ? 'SINGLE CAM LIVE' : 'SIDE-BY-SIDE COMPOSITE LIVE'}
+              </span>
+            </div>
+          )}
+
+          {/* Save Folder Path */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5">
+              <FolderOpen className="w-3.5 h-3.5 text-sky-400" />
+              Clip Output Folder
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={saveDirInput}
+                onChange={(e) => setSaveDirInput(e.target.value)}
+                className="flex-1 bg-slate-950 border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveDir(saveDirInput.trim());
+                  setDirSaved(true);
+                  setTimeout(() => setDirSaved(false), 1800);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+              >
+                {dirSaved ? 'Saved ✓' : 'Set Folder'}
+              </button>
+            </div>
+          </div>
+
+          {/* Auto-Clip Trigger Checkboxes */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+            {[
+              { key: 'onBullseye' as const, label: 'Bullseye (50)' },
+              { key: 'onT20' as const, label: 'Treble 20' },
+              { key: 'onTonPlus' as const, label: '100+ Visits' },
+              { key: 'on140Plus' as const, label: '140+ / 180s' },
+              { key: 'autoShowOverlay' as const, label: 'Auto-Pop Replay' },
+            ].map((item) => (
+              <label
+                key={item.key}
+                className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/60 border border-white/[0.07] text-xs text-slate-200 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={triggers[item.key]}
+                  onChange={(e) => updateTrigger(item.key, e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-rose-500 cursor-pointer"
+                />
+                <span>{item.label}</span>
+              </label>
+            ))}
+
+            <label className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/60 border border-white/[0.07] text-xs text-slate-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeAudio}
+                onChange={(e) => setIncludeAudio(e.target.checked)}
+                className="w-3.5 h-3.5 rounded accent-rose-500 cursor-pointer"
+              />
+              <Mic className="w-3 h-3 text-slate-400" />
+              <span>Mic Audio</span>
+            </label>
+
+            <label className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/60 border border-emerald-500/20 text-xs text-emerald-200 cursor-pointer col-span-2 sm:col-span-3">
+              <input
+                type="checkbox"
+                checked={autoStartCamera}
+                onChange={(e) => setAutoStartCamera(e.target.checked)}
+                className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
+              />
+              <span>Auto-Start Side-by-Side Split-Cam during Kiosk Boot (Default)</span>
+            </label>
+          </div>
+
+          {/* =================================================================
+              [DEV-TEST: REMOVE WHEN DONE]
+              One-shot Next-Dart Debug Capture (records ANY next dart thrown)
+              ================================================================= */}
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/35 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                <FlaskConical className="w-3.5 h-3.5" />
+                Dev Test: Capture Next Dart
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  openGallery();
+                }}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-300 hover:text-sky-200 cursor-pointer"
+              >
+                <Clapperboard className="w-3.5 h-3.5" />
+                Open Gallery
+              </button>
+            </div>
+            <p className="text-[11px] text-amber-100/80 leading-snug">
+              Arms a one-shot debug watch for the very next dart (any bed). Clips ~5s before impact
+              + dart landing spot + ~5s reaction straight to your autoclipper folder.
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleArmDevCapture()}
+              className={`w-full py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer ${
+                devCaptureNextDartArmed
+                  ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.45)]'
+                  : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-400/50'
+              }`}
+            >
+              {devCaptureNextDartArmed
+                ? 'ARMED — Close Settings & Throw Any Dart (Click to Cancel)'
+                : 'Arm Next-Dart 10s Debug Capture'}
+            </button>
+          </div>
         </div>
 
         {/* Autodarts Cloud OAuth 2.0 (PKCE) */}

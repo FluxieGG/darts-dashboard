@@ -65,4 +65,10 @@ export interface PlayerProfile {
   nickname?: string;
   isPrimary?: boolean;
   email?: string;
+  /** Player's chosen darts colour (hex), drives their subtle custom gradient theme across the app */
+  dartColor?: string;
+  /** Friendly label for the chosen darts colour (e.g. "Crimson", "Electric Blue") */
+  dartColorName?: string;
+  /** If false, player profile & stats are session-only (not persisted to localStorage) */
+  isSaved?: boolean;
 }

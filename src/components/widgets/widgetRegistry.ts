@@ -7,6 +7,8 @@ import { ScoringPowerWidget } from './ScoringPowerWidget';
 import { DoublesTreblesWidget } from './DoublesTreblesWidget';
 import { TrendSparklineWidget } from './TrendSparklineWidget';
 import { RecentMatchesWidget } from './RecentMatchesWidget';
+import { ObjectivesWidget } from './ObjectivesWidget';
+import { CareerStreakWidget } from './CareerStreakWidget';
 import {
   Activity,
   Flame,
@@ -15,6 +17,8 @@ import {
   Crosshair,
   History,
   Target,
+  CalendarDays,
+  Trophy,
 } from 'lucide-react';
 
 export interface WidgetRegistryItem {
@@ -82,6 +86,22 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetRegistryItem> = {
     defaultColSpan: 2,
     icon: History,
     component: RecentMatchesWidget,
+  },
+  'objectives-tracker': {
+    id: 'objectives-tracker',
+    title: 'Daily & Weekly Objectives',
+    category: 'Scoring',
+    defaultColSpan: 2,
+    icon: Trophy,
+    component: ObjectivesWidget,
+  },
+  'career-streak': {
+    id: 'career-streak',
+    title: 'Streak Calendar & Career Vault',
+    category: 'History',
+    defaultColSpan: 2,
+    icon: CalendarDays,
+    component: CareerStreakWidget,
   },
 };
 

@@ -2,12 +2,18 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import { remoteRelayPlugin } from './scripts/viteRemoteRelayPlugin';
+import { careerVaultPlugin } from './scripts/viteCareerVaultPlugin';
+import { replayClipperPlugin } from './scripts/viteReplayClipperPlugin';
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    remoteRelayPlugin(),
+    careerVaultPlugin(),
+    replayClipperPlugin(),
   ],
   resolve: {
     alias: {
@@ -33,6 +39,10 @@ export default defineConfig({
         secure: true,
       },
     },
+  },
+  preview: {
+    port: 4173,
+    host: true,
   },
   build: {
     chunkSizeWarningLimit: 1000,

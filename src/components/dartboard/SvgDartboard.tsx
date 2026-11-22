@@ -7,9 +7,33 @@ import {
   getSegmentCenterAngle,
 } from '../../lib/geometry';
 
+export interface SegmentOverlayStyle {
+  /** Target beds to apply to. Defaults to 'all' (single + double + treble). */
+  beds?: 'all' | 'single' | 'double' | 'triple';
+  /** Fill color (hex/rgb/rgba) */
+  fill: string;
+  /** Fill opacity (0 to 1), defaults to 0.78 */
+  opacity?: number;
+  /** Optional highlighted border stroke */
+  stroke?: string;
+  /** Pulse animation (ideal for Lava zones or active targets) */
+  pulse?: boolean;
+  /** Optional short badge label rendered inside the outer single bed (e.g., "P1", "🔥", "R") */
+  badge?: string;
+  badgeColor?: string;
+}
+
 interface SvgDartboardProps {
   size?: number;
   highlightSegment?: string;
+  /**
+   * Game-ready multi-segment overlays keyed by:
+   * - Segment number as string ("20", "19", ..., "1") for a whole wedge
+   * - Specific bed ("T20", "D16", "S20", "Bull", "25")
+   */
+  segmentOverlays?: Record<string, SegmentOverlayStyle>;
+  /** Dim non-highlighted beds so active game targets pop from 8ft away */
+  dimInactiveSegments?: boolean;
   onBoardClick?: (coords: { x: number; y: number }) => void;
   children?: React.ReactNode;
 }
@@ -17,6 +41,8 @@ interface SvgDartboardProps {
 export const SvgDartboard: React.FC<SvgDartboardProps> = ({
   size = 400,
   highlightSegment,
+  segmentOverlays,
+  dimInactiveSegments = false,
   onBoardClick,
   children,
 }) => {
@@ -51,21 +77,45 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
       const singleColor = isEven ? '#121824' : '#E2E8F0';
       const ringColor = isEven ? '#DC2626' : '#10B981';
 
-      // Check for highlight
+      // Check for highlight & game overlays
       const isHighT = highlightSegment === `T${num}`;
       const isHighD = highlightSegment === `D${num}`;
       const isHighS = highlightSegment === `S${num}`;
+
+      const wholeOverlay = segmentOverlays?.[String(num)];
+      const overlayT =
+        segmentOverlays?.[`T${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'triple')
+          ? wholeOverlay
+          : undefined);
+      const overlayD =
+        segmentOverlays?.[`D${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'double')
+          ? wholeOverlay
+          : undefined);
+      const overlayS =
+        segmentOverlays?.[`S${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'single')
+          ? wholeOverlay
+          : undefined);
 
       // Numbers position on number ring
       const numAngleRad = (centerAngle * Math.PI) / 180;
       const numX = center + (rNumberRing - 14) * Math.cos(numAngleRad);
       const numY = center - (rNumberRing - 14) * Math.sin(numAngleRad);
 
+      // Badge position in the outer single bed for game overlays
+      const rBadge = (rOuterTreble + rInnerDouble) / 2;
+      const badgeX = center + rBadge * Math.cos(numAngleRad);
+      const badgeY = center - rBadge * Math.sin(numAngleRad);
+
       return {
         num,
         centerAngle,
         numX,
         numY,
+        badgeX,
+        badgeY,
         pathDouble: describeArcSector(center, center, rInnerDouble, rOuterDouble, startAngle, endAngle),
         pathOuterSingle: describeArcSector(center, center, rOuterTreble, rInnerDouble, startAngle, endAngle),
         pathTreble: describeArcSector(center, center, rInnerTreble, rOuterTreble, startAngle, endAngle),
@@ -75,6 +125,11 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
         isHighD,
         isHighT,
         isHighS,
+        overlayT,
+        overlayD,
+        overlayS,
+        badge: wholeOverlay?.badge || overlayS?.badge || overlayD?.badge || overlayT?.badge,
+        badgeColor: wholeOverlay?.badgeColor || '#FFFFFF',
       };
     });
   }, [
@@ -86,6 +141,7 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
     rOuterBull,
     rNumberRing,
     highlightSegment,
+    segmentOverlays,
   ]);
 
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -135,38 +191,100 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
 
         {/* Segments: Singles, Doubles, Trebles */}
         <g id="dartboard-beds">
-          {segments.map((s) => (
-            <g key={`seg-${s.num}`}>
-              {/* Outer Single Bed */}
-              <path
-                d={s.pathOuterSingle}
-                fill={s.isHighS ? '#38BDF8' : s.singleColor}
-                stroke="#475569"
-                strokeWidth="0.8"
-              />
-              {/* Inner Single Bed */}
-              <path
-                d={s.pathInnerSingle}
-                fill={s.isHighS ? '#38BDF8' : s.singleColor}
-                stroke="#475569"
-                strokeWidth="0.8"
-              />
-              {/* Double Bed */}
-              <path
-                d={s.pathDouble}
-                fill={s.isHighD ? '#FACC15' : s.ringColor}
-                stroke="#475569"
-                strokeWidth="0.8"
-              />
-              {/* Treble Bed */}
-              <path
-                d={s.pathTreble}
-                fill={s.isHighT ? '#FACC15' : s.ringColor}
-                stroke="#475569"
-                strokeWidth="0.8"
-              />
-            </g>
-          ))}
+          {segments.map((s) => {
+            const hasAnyOverlay = Boolean(s.overlayS || s.overlayD || s.overlayT || s.isHighS || s.isHighD || s.isHighT);
+            const inactiveOpacity = dimInactiveSegments && !hasAnyOverlay ? 0.35 : 1;
+
+            return (
+              <g key={`seg-${s.num}`} opacity={inactiveOpacity}>
+                {/* Outer Single Bed */}
+                <path
+                  d={s.pathOuterSingle}
+                  fill={s.isHighS ? '#38BDF8' : s.singleColor}
+                  stroke="#475569"
+                  strokeWidth="0.8"
+                />
+                {s.overlayS && (
+                  <path
+                    d={s.pathOuterSingle}
+                    fill={s.overlayS.fill}
+                    fillOpacity={s.overlayS.opacity ?? 0.72}
+                    stroke={s.overlayS.stroke || s.overlayS.fill}
+                    strokeWidth="1.1"
+                    className={s.overlayS.pulse ? 'animate-pulse-glow' : undefined}
+                  />
+                )}
+
+                {/* Inner Single Bed */}
+                <path
+                  d={s.pathInnerSingle}
+                  fill={s.isHighS ? '#38BDF8' : s.singleColor}
+                  stroke="#475569"
+                  strokeWidth="0.8"
+                />
+                {s.overlayS && (
+                  <path
+                    d={s.pathInnerSingle}
+                    fill={s.overlayS.fill}
+                    fillOpacity={s.overlayS.opacity ?? 0.72}
+                    stroke={s.overlayS.stroke || s.overlayS.fill}
+                    strokeWidth="1.1"
+                    className={s.overlayS.pulse ? 'animate-pulse-glow' : undefined}
+                  />
+                )}
+
+                {/* Double Bed */}
+                <path
+                  d={s.pathDouble}
+                  fill={s.isHighD ? '#FACC15' : s.ringColor}
+                  stroke="#475569"
+                  strokeWidth="0.8"
+                />
+                {s.overlayD && (
+                  <path
+                    d={s.pathDouble}
+                    fill={s.overlayD.fill}
+                    fillOpacity={s.overlayD.opacity ?? 0.85}
+                    stroke={s.overlayD.stroke || '#FFFFFF'}
+                    strokeWidth="1.2"
+                    className={s.overlayD.pulse ? 'animate-pulse-glow' : undefined}
+                  />
+                )}
+
+                {/* Treble Bed */}
+                <path
+                  d={s.pathTreble}
+                  fill={s.isHighT ? '#FACC15' : s.ringColor}
+                  stroke="#475569"
+                  strokeWidth="0.8"
+                />
+                {s.overlayT && (
+                  <path
+                    d={s.pathTreble}
+                    fill={s.overlayT.fill}
+                    fillOpacity={s.overlayT.opacity ?? 0.85}
+                    stroke={s.overlayT.stroke || '#FFFFFF'}
+                    strokeWidth="1.2"
+                    className={s.overlayT.pulse ? 'animate-pulse-glow' : undefined}
+                  />
+                )}
+
+                {/* Optional Game Overlay Badge */}
+                {s.badge && (
+                  <text
+                    x={s.badgeX}
+                    y={s.badgeY + 1}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill={s.badgeColor}
+                    className="font-mono text-[11px] font-black pointer-events-none select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]"
+                  >
+                    {s.badge}
+                  </text>
+                )}
+              </g>
+            );
+          })}
         </g>
 
         {/* Outer Bull (25 - Green) */}
@@ -175,9 +293,22 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
           cy={center}
           r={rOuterBull}
           fill={highlightSegment === '25' ? '#FACC15' : '#10B981'}
+          opacity={dimInactiveSegments && !segmentOverlays?.['25'] && !segmentOverlays?.['Bull'] && highlightSegment !== '25' && highlightSegment !== 'Bull' ? 0.35 : 1}
           stroke="#475569"
           strokeWidth="0.8"
         />
+        {segmentOverlays?.['25'] && (
+          <circle
+            cx={center}
+            cy={center}
+            r={rOuterBull}
+            fill={segmentOverlays['25'].fill}
+            fillOpacity={segmentOverlays['25'].opacity ?? 0.8}
+            stroke={segmentOverlays['25'].stroke || '#FFFFFF'}
+            strokeWidth="1.2"
+            className={segmentOverlays['25'].pulse ? 'animate-pulse-glow' : undefined}
+          />
+        )}
 
         {/* Inner Bull (50 - Red) */}
         <circle
@@ -185,9 +316,22 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
           cy={center}
           r={rInnerBull}
           fill={highlightSegment === 'Bull' ? '#FACC15' : '#DC2626'}
+          opacity={dimInactiveSegments && !segmentOverlays?.['Bull'] && highlightSegment !== 'Bull' ? 0.35 : 1}
           stroke="#475569"
           strokeWidth="0.8"
         />
+        {segmentOverlays?.['Bull'] && (
+          <circle
+            cx={center}
+            cy={center}
+            r={rInnerBull}
+            fill={segmentOverlays['Bull'].fill}
+            fillOpacity={segmentOverlays['Bull'].opacity ?? 0.88}
+            stroke={segmentOverlays['Bull'].stroke || '#FFFFFF'}
+            strokeWidth="1.2"
+            className={segmentOverlays['Bull'].pulse ? 'animate-pulse-glow' : undefined}
+          />
+        )}
 
         {/* Segment Number Wire Labels */}
         <g id="number-ring" className="font-bold text-[14px] select-none pointer-events-none">

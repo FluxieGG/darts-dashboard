@@ -5,7 +5,9 @@ export type WidgetId =
   | 'scoring-power'
   | 'trend-sparkline'
   | 'doubles-trebles'
-  | 'recent-matches';
+  | 'recent-matches'
+  | 'objectives-tracker'
+  | 'career-streak';
 
 export interface WidgetConfig {
   id: WidgetId;

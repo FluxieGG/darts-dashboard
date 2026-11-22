@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { DartThrow, DartVisit } from '../types/darts';
 import { SegmentAccuracyItem } from '../types/stats';
 import { usePlayerStore } from './usePlayerStore';
+import { useGameStore } from './useGameStore';
+import { useCareerStore } from './useCareerStore';
+import { gameEventBus } from '../services/gameEventBus';
 
 interface LiveBoardState {
   // Authoritative live visit throws currently in the board (0 to 3 darts)
@@ -13,6 +16,8 @@ interface LiveBoardState {
   totalVisitsInSession: number;
   lastDartLandedAt: number | null;
   lastCompletedVisit: DartVisit | null;
+  // Prevents stale darts physically in the board during a Party Mode switch from committing
+  suppressUntilBoardEmpty: boolean;
 
   // Authoritative sync from Autodarts Desktop (Local Board Manager)
   syncBoardThrows: (throws: DartThrow[], status?: string, event?: string) => void;
@@ -20,6 +25,9 @@ interface LiveBoardState {
   // Demo mode actions
   addSimulatedDart: (dart: DartThrow) => void;
   clearCurrentVisit: () => void;
+
+  // Cleanly clears active board display and discards any in-progress visit when toggling Party Mode
+  resetBoardForModeSwitch: () => void;
 
   // Commit a finished visit into permanent player stats
   completeVisit: (explicitThrows?: DartThrow[]) => void;
@@ -80,12 +88,29 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
   totalVisitsInSession: 0,
   lastDartLandedAt: null,
   lastCompletedVisit: null,
+  suppressUntilBoardEmpty: false,
 
   /**
    * Authoritatively mirror the exact throws array reported by Autodarts Desktop.
    * Never auto-clears while darts are still in the board (e.g., during 'takeout').
    */
   syncBoardThrows: (throws: DartThrow[], status?: string, event?: string) => {
+    // If we just toggled Party Mode while darts were sitting in the board,
+    // wait until the board is cleared before tracking the next fresh visit.
+    if (get().suppressUntilBoardEmpty) {
+      if (throws.length === 0) {
+        set({
+          suppressUntilBoardEmpty: false,
+          currentVisitThrows: [],
+          visitScore: 0,
+          boardStatus: status || 'waiting',
+          boardEvent: event || '',
+        });
+        gameEventBus.resetVisitBuffer([]);
+      }
+      return;
+    }
+
     const visitScore = throws.reduce((sum, d) => sum + d.score, 0);
     set({
       currentVisitThrows: throws,
@@ -94,12 +119,16 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
       boardEvent: event || '',
       lastDartLandedAt: throws.length > 0 ? Date.now() : get().lastDartLandedAt,
     });
+    gameEventBus.processVisitSync(throws, status, event);
   },
 
   /**
    * Demo-mode only helper: appends one simulated dart and commits on dart 3
    */
   addSimulatedDart: (dart: DartThrow) => {
+    if (get().suppressUntilBoardEmpty) {
+      set({ suppressUntilBoardEmpty: false });
+    }
     const current = get().currentVisitThrows;
     if (current.length >= 3) {
       get().completeVisit(current);
@@ -107,13 +136,15 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
 
     const updated = [...get().currentVisitThrows, dart];
     const visitScore = updated.reduce((sum, d) => sum + d.score, 0);
+    const nextStatus = updated.length === 3 ? 'takeout' : 'throw';
 
     set({
       currentVisitThrows: updated,
       visitScore,
-      boardStatus: updated.length === 3 ? 'takeout' : 'throw',
+      boardStatus: nextStatus,
       lastDartLandedAt: Date.now(),
     });
+    gameEventBus.processVisitSync(updated, nextStatus, 'demo_throw');
 
     if (updated.length === 3) {
       setTimeout(() => {
@@ -126,6 +157,7 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
   },
 
   clearCurrentVisit: () => {
+    gameEventBus.resetVisitBuffer([]);
     set({
       currentVisitThrows: [],
       visitScore: 0,
@@ -134,15 +166,45 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
   },
 
   /**
+   * Discards any current visit in the board and waits for the next fresh visit.
+   * Used when entering or exiting Party Mode so zero throws leak across profiles.
+   */
+  resetBoardForModeSwitch: () => {
+    const hadDartsInBoard = get().currentVisitThrows.length > 0;
+    gameEventBus.resetVisitBuffer([]);
+    set({
+      currentVisitThrows: [],
+      visitScore: 0,
+      isBust: false,
+      boardStatus: 'waiting',
+      lastCompletedVisit: null,
+      suppressUntilBoardEmpty: hadDartsInBoard,
+    });
+  },
+
+  /**
    * Finalizes a completed visit (when darts are pulled from the board) and updates
-   * all Callum session stats from the exact authoritative throws.
+   * active player stats from the exact authoritative throws.
+   * Note: When an Arcade Game is actively playing, throws are forwarded to the game socket
+   * without skewing personal practice 3DA stats.
    */
   completeVisit: (explicitThrows) => {
+    // Discard stale visit if darts were already in the board when Party Mode was toggled
+    if (get().suppressUntilBoardEmpty) {
+      set({
+        suppressUntilBoardEmpty: false,
+        currentVisitThrows: [],
+        visitScore: 0,
+        isBust: false,
+      });
+      return;
+    }
+
     const throwsToCommit = explicitThrows || get().currentVisitThrows;
     if (throwsToCommit.length === 0) return;
 
     const totalScore = throwsToCommit.reduce((sum, d) => sum + d.score, 0);
-    const activePlayerId = usePlayerStore.getState().activePlayerId;
+    const activePlayerId = usePlayerStore.getState().getActivePlayer().id;
 
     // Assign unique IDs for permanent session log storage
     const timestamp = Date.now();
@@ -151,6 +213,20 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
       id: `${d.id}-${timestamp}-${i}`,
       timestamp,
     }));
+
+    // Notify any mounted modular game that darts have been pulled (takeout finished)
+    gameEventBus.processVisitCompleted(committedThrows);
+
+    // If an arcade game is currently active, clear visit state without mutating practice 3DA stats
+    const gameState = useGameStore.getState();
+    if (gameState.activeView === 'game-active' && gameState.matchPhase === 'playing') {
+      set({
+        currentVisitThrows: [],
+        visitScore: 0,
+        isBust: false,
+      });
+      return;
+    }
 
     const existingVisitsCount =
       usePlayerStore.getState().getActiveStats().tonBreakdown.totalVisits;
@@ -226,5 +302,8 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
         totalDartsThrown: newTotalDarts,
       };
     });
+
+    // Persist visit to Local Career Vault (automatically skips Party Mode & unsaved guests)
+    useCareerStore.getState().recordVisitForActivePlayer(committedThrows);
   },
 }));

@@ -1,0 +1,1 @@
+export { BoardIsLavaGame } from './BoardIsLavaGame';
