@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { RemoteCommand, RemoteKioskState, RemotePresencePayload } from '../../types/remote';
+import { ReplayClipCategory, ReplayTriggerSettings } from '../../types/replay';
 import { sendRemoteCommand } from '../../services/remoteBridge';
 import { GAME_REGISTRY, getGameDefinition } from '../../games/gameRegistry';
 import { DART_COLOR_OPTIONS, DEFAULT_DART_COLOR, hexToRgbTriplet } from '../../lib/playerThemes';
+import { DevConsoleQrModal } from '../dev/DevConsoleQrModal';
 import { Badge } from '../common/Badge';
 import {
   Gamepad2,
@@ -28,20 +30,45 @@ import {
   RefreshCw,
   Save,
   CheckCircle2,
+  Video,
+  VideoOff,
+  Columns2,
+  Gauge,
+  Monitor,
+  Eye,
+  EyeOff,
+  ChevronUp,
+  ChevronDown,
+  Maximize2,
+  Flame,
+  Palette,
+  FlaskConical,
+  Target,
+  Dices,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-type MobileTab = 'control' | 'games' | 'players' | 'throw';
-type TabletRightPanel = 'games' | 'players';
+type MobileTab = 'control' | 'games' | 'players' | 'replays' | 'display';
+type TabletRightPanel = 'games' | 'players' | 'replays' | 'display';
+type ClipFilter = 'all' | ReplayClipCategory;
 
 const QUICK_TARGETS = ['T20', 'S20', 'T19', 'T18', 'D20', 'D16', 'Bull', '25', 'Miss'] as const;
 const BOARD_NUMBERS = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1] as const;
 
+const TRIGGER_ITEMS: Array<{ key: keyof ReplayTriggerSettings; label: string }> = [
+  { key: 'onBullseye', label: 'Bullseye' },
+  { key: 'onT20', label: 'Treble 20' },
+  { key: 'onTonPlus', label: '100+ Visit' },
+  { key: 'on140Plus', label: '140+ / 180' },
+  { key: 'autoShowOverlay', label: 'Auto-Pop TV' },
+];
+
 /**
  * iPad-First Oche Command Deck (and responsive Phone Remote) at `/?remote=1`.
  *
- * Uses resilient SSE + instant HTTP pull recovery on iPadOS Safari wake/focus
- * plus a 3s fallback sync poll so the iPad NEVER stalls or loses sync at the oche.
+ * Holds 100% of Kiosk controls: Games, Setup, Players & Darts Colours, Split-Cam Replays & Gallery,
+ * Bento Layout, Heatmap, Objectives, Data Mode, and Kiosk Fullscreen.
+ * Secret Dev Console PIN (0161) QR Modal: tap the `AD` crest 5 times quickly.
  */
 export const MobileRemoteView: React.FC = () => {
   const [state, setState] = useState<RemoteKioskState | null>(null);
@@ -50,14 +77,38 @@ export const MobileRemoteView: React.FC = () => {
   const [mobileTab, setMobileTab] = useState<MobileTab>('control');
   const [tabletRightPanel, setTabletRightPanel] = useState<TabletRightPanel>('games');
   const [toast, setToast] = useState<string | null>(null);
+
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerColor, setNewPlayerColor] = useState<string>(DART_COLOR_OPTIONS[2].hex);
   const [saveNewPlayer, setSaveNewPlayer] = useState<boolean>(true);
+  const [editingColorPlayerId, setEditingColorPlayerId] = useState<string | null>(null);
+
   const [throwMult, setThrowMult] = useState<'S' | 'D' | 'T'>('S');
+  const [showMobileThrowPad, setShowMobileThrowPad] = useState(false);
+  const [clipFilter, setClipFilter] = useState<ClipFilter>('all');
   const [syncing, setSyncing] = useState(false);
+  const [isDevQrOpen, setIsDevQrOpen] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const lastEventAtRef = useRef<number>(0);
+  const devTapCountRef = useRef(0);
+  const devTapTimerRef = useRef<number | null>(null);
+
+  // Secret 5-tap on AD crest opens the PIN 0161 Dev Debug Console QR modal
+  const handleSecretCrestTap = () => {
+    devTapCountRef.current += 1;
+    if (devTapTimerRef.current !== null) {
+      window.clearTimeout(devTapTimerRef.current);
+    }
+    if (devTapCountRef.current >= 5) {
+      devTapCountRef.current = 0;
+      setIsDevQrOpen(true);
+      return;
+    }
+    devTapTimerRef.current = window.setTimeout(() => {
+      devTapCountRef.current = 0;
+    }, 2500);
+  };
 
   const pullLatestState = useCallback(async () => {
     try {
@@ -156,7 +207,7 @@ export const MobileRemoteView: React.FC = () => {
     setToast(msg);
     window.setTimeout(() => {
       setToast((prev) => (prev === msg ? null : prev));
-    }, 1500);
+    }, 1600);
   };
 
   const dispatch = async (cmd: RemoteCommand, feedbackLabel?: string) => {
@@ -215,6 +266,7 @@ export const MobileRemoteView: React.FC = () => {
   const canUndoNow = Boolean(activeGame && activeGame.phase === 'playing' && activeGame.canUndo);
   const camBuffering = state?.replayStatus === 'buffering';
   const camCapturing = state?.replayStatus === 'capturing';
+  const camActive = camBuffering || camCapturing || state?.replayStatus === 'starting';
 
   const remoteStyle = activeTintHex
     ? ({
@@ -223,7 +275,9 @@ export const MobileRemoteView: React.FC = () => {
       } as React.CSSProperties)
     : undefined;
 
-  // Shared Sub-Sections (reused cleanly across both iPad 2-col deck & Phone tabs)
+  // =========================================================================
+  // LEFT COLUMN / CONTROL SECTION
+  // =========================================================================
   const renderLiveReadoutCard = () => (
     <section className="card-matte rounded-2xl p-4 sm:p-5 space-y-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -238,7 +292,7 @@ export const MobileRemoteView: React.FC = () => {
             {activeGame
               ? `${activeGame.title} • ${activeGame.phase.toUpperCase()}`
               : state?.activeView === 'games-lobby'
-              ? 'Tech Darts Arcade Lobby'
+              ? 'Tech Darts Arcade Showcase'
               : `${state?.activePlayer.name || 'Player'} • Stats Dashboard`}
           </span>
         </div>
@@ -250,7 +304,13 @@ export const MobileRemoteView: React.FC = () => {
             </span>
           )}
           <Badge
-            variant={state?.boardStatus === 'takeout' ? 'amber' : state?.isLocalConnected ? 'emerald' : 'slate'}
+            variant={
+              state?.boardStatus === 'takeout'
+                ? 'amber'
+                : state?.isLocalConnected
+                ? 'emerald'
+                : 'slate'
+            }
             size="sm"
           >
             {state?.boardStatus === 'takeout'
@@ -304,51 +364,94 @@ export const MobileRemoteView: React.FC = () => {
 
   const renderPrimaryActions = () => (
     <div className="space-y-3">
-      {/* SAVE LAST RECORDING CARD (Appears prominently whenever a replay was captured!) */}
-      {state?.lastRecording && (
+      {/* ACTIVE REPLAY / SAVE LAST RECORDING CONTROL CARD */}
+      {(state?.hasActiveReplayOverlay || state?.lastRecording) && (
         <div
           className={cn(
-            'rounded-2xl p-3.5 border-2 flex items-center justify-between gap-3 transition-all',
-            state.lastRecording.isSaved
+            'rounded-2xl p-3.5 border-2 space-y-3 transition-all',
+            state.hasActiveReplayOverlay
+              ? 'bg-rose-950/35 border-rose-400/65 shadow-[0_0_28px_-4px_rgba(244,63,94,0.45)]'
+              : state.lastRecording?.isSaved
               ? 'bg-emerald-500/10 border-emerald-400/35'
               : 'bg-emerald-500/15 border-emerald-400/75 shadow-[0_0_24px_-4px_rgba(16,185,129,0.45)]'
           )}
         >
-          <div className="min-w-0">
-            <div className="text-xs font-mono uppercase tracking-wider font-black text-emerald-300 flex items-center gap-1.5">
-              {state.lastRecording.isSaved ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  Last Clip Saved to PC
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4 animate-bounce" />
-                  Unsaved Replay Ready
-                </>
+          {state.lastRecording && (
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-mono uppercase tracking-wider font-black text-emerald-300 flex items-center gap-1.5">
+                  {state.lastRecording.isSaved ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      Last Clip Saved to PC
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4 animate-bounce" />
+                      Unsaved Replay Ready
+                    </>
+                  )}
+                </div>
+                <div className="text-sm font-bold text-white truncate mt-0.5">
+                  {state.lastRecording.playerName} • {state.lastRecording.reason} (
+                  {state.lastRecording.durationSec.toFixed(1)}s)
+                </div>
+              </div>
+
+              {!state.lastRecording.isSaved && (
+                <button
+                  type="button"
+                  disabled={state.isSavingReplay}
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'save_last_replay' },
+                      'Saved clip to darts-autoclipper!'
+                    )
+                  }
+                  className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider active:scale-95 transition-transform cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  {state.isSavingReplay ? 'Saving...' : 'Save Clip'}
+                </button>
               )}
             </div>
-            <div className="text-sm font-bold text-white truncate mt-0.5">
-              {state.lastRecording.playerName} • {state.lastRecording.reason} (
-              {state.lastRecording.durationSec.toFixed(1)}s)
-            </div>
-          </div>
+          )}
 
-          {!state.lastRecording.isSaved && (
-            <button
-              type="button"
-              disabled={state.isSavingReplay}
-              onClick={() =>
-                void dispatch(
-                  { type: 'save_last_replay' },
-                  'Saved clip to darts-autoclipper!'
-                )
-              }
-              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider active:scale-95 transition-transform cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              {state.isSavingReplay ? 'Saving...' : 'Save Clip'}
-            </button>
+          {state.hasActiveReplayOverlay && (
+            <div className="pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-mono uppercase text-slate-400 flex items-center gap-1 mr-0.5">
+                  <Gauge className="w-3.5 h-3.5" />
+                  Speed
+                </span>
+                {([0.5, 0.75, 1] as const).map((rate) => (
+                  <button
+                    key={rate}
+                    type="button"
+                    onClick={() =>
+                      void dispatch({ type: 'set_replay_speed', rate }, `Replay ${rate}x`)
+                    }
+                    className={cn(
+                      'px-2.5 py-1.5 rounded-lg text-xs font-mono font-black border cursor-pointer transition-colors',
+                      state.replayPlaybackRate === rate
+                        ? 'bg-emerald-500/25 border-emerald-400/65 text-emerald-200'
+                        : 'bg-slate-900/90 border-white/15 text-slate-300 hover:text-white'
+                    )}
+                  >
+                    {rate === 1 ? '1.0x' : `${rate}x`}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void dispatch({ type: 'dismiss_replay' }, 'Closed Replay on TV')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black text-xs uppercase tracking-wider active:scale-95 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                Dismiss Replay
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -384,62 +487,49 @@ export const MobileRemoteView: React.FC = () => {
         </button>
       </div>
 
-      {/* Action Replay Trigger / Dismiss Strip */}
+      {/* Action Replay Trigger + Audio Strip */}
       <div className="grid grid-cols-2 gap-3">
-        {state?.hasActiveReplayOverlay ? (
-          <button
-            type="button"
-            onClick={() => void dispatch({ type: 'dismiss_replay' }, 'Closed Replay Overlay')}
-            className="col-span-2 p-3.5 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 border-2 border-rose-400/60 text-rose-100 font-black text-sm flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-            Dismiss Action Replay on Big Screen
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={!camBuffering || camCapturing}
-            onClick={() =>
-              void dispatch({ type: 'trigger_manual_replay' }, 'Recording 10s Split-Cam Clip!')
-            }
-            className={cn(
-              'p-3.5 rounded-2xl border flex items-center justify-center gap-2 text-xs sm:text-sm font-black transition-all active:scale-[0.97]',
-              camCapturing
-                ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
-                : camBuffering
-                ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
-                : 'card-matte opacity-45 text-slate-500 cursor-not-allowed'
-            )}
-          >
-            <Clapperboard className="w-4 h-4" />
-            <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (10s)'}</span>
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={!camBuffering || camCapturing}
+          onClick={() =>
+            void dispatch({ type: 'trigger_manual_replay' }, 'Recording 10s Split-Cam Clip!')
+          }
+          className={cn(
+            'p-3.5 rounded-2xl border flex items-center justify-center gap-2 text-xs sm:text-sm font-black transition-all active:scale-[0.97]',
+            camCapturing
+              ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
+              : camBuffering
+              ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
+              : 'card-matte opacity-45 text-slate-500 cursor-not-allowed'
+          )}
+        >
+          <Clapperboard className="w-4 h-4" />
+          <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (10s)'}</span>
+        </button>
 
-        {!state?.hasActiveReplayOverlay && (
-          <button
-            type="button"
-            onClick={() =>
-              void dispatch(
-                { type: 'toggle_sound' },
-                state?.soundEnabled ? 'Sound Muted' : 'Sound Unmuted'
-              )
-            }
-            className="card-matte p-3.5 rounded-2xl flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-slate-200 active:scale-[0.97] cursor-pointer"
-          >
-            {state?.soundEnabled ? (
-              <>
-                <Volume2 className="w-4 h-4 text-sky-400" />
-                <span>Audio On</span>
-              </>
-            ) : (
-              <>
-                <VolumeX className="w-4 h-4 text-rose-400" />
-                <span className="text-rose-300">Muted</span>
-              </>
-            )}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() =>
+            void dispatch(
+              { type: 'toggle_sound' },
+              state?.soundEnabled ? 'Sound Muted' : 'Sound Unmuted'
+            )
+          }
+          className="card-matte p-3.5 rounded-2xl flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-slate-200 active:scale-[0.97] cursor-pointer"
+        >
+          {state?.soundEnabled ? (
+            <>
+              <Volume2 className="w-4 h-4 text-sky-400" />
+              <span>Audio On</span>
+            </>
+          ) : (
+            <>
+              <VolumeX className="w-4 h-4 text-rose-400" />
+              <span className="text-rose-300">Muted</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Contextual Game or Dashboard Utility Row */}
@@ -558,15 +648,18 @@ export const MobileRemoteView: React.FC = () => {
     </section>
   );
 
+  // =========================================================================
+  // RIGHT PANEL 1: GAMES & SETUP
+  // =========================================================================
   const renderGamesPanel = () => (
     <div className="space-y-4">
-      {/* ACTIVE GAME SETUP (Full Roster + Saved Profiles + Dynamic Match Options!) */}
+      {/* ACTIVE GAME SETUP */}
       {activeGame && activeGame.phase === 'setup' && (
         <section className="card-matte rounded-2xl p-4 sm:p-5 border-emerald-400/45 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-base sm:text-lg font-black text-white">
-                {activeGame.title} — Match Setup
+                {activeGame.title} — Setup
               </h2>
               <p className="text-xs text-slate-400 font-mono">
                 {activeGame.roster.length} / {activeGame.maxPlayers} players (min{' '}
@@ -610,14 +703,12 @@ export const MobileRemoteView: React.FC = () => {
             ))}
           </div>
 
-          {/* Quick-Add Saved Profiles into Match Roster */}
+          {/* Quick-Add Saved Profiles */}
           {(state?.players || []).some(
             (sp) => !activeGame.roster.some((r) => r.id === sp.id)
           ) && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
-                Saved:
-              </span>
+              <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">Saved:</span>
               {(state?.players || [])
                 .filter((sp) => !activeGame.roster.some((r) => r.id === sp.id))
                 .map((sp) => (
@@ -687,7 +778,7 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           </form>
 
-          {/* Dynamic Match Config Options synced live with Kiosk! */}
+          {/* Dynamic Match Config Options */}
           {activeGameDef && activeGameDef.configOptions.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-white/10">
               <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
@@ -830,6 +921,9 @@ export const MobileRemoteView: React.FC = () => {
     </div>
   );
 
+  // =========================================================================
+  // RIGHT PANEL 2: PLAYERS & DARTS COLOURS
+  // =========================================================================
   const renderPlayersPanel = () => (
     <div className="space-y-3">
       {isPartyMode && (
@@ -844,52 +938,104 @@ export const MobileRemoteView: React.FC = () => {
 
       <section className="card-matte rounded-2xl p-4 space-y-2.5">
         <div className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-          Saved Profiles
+          Saved Profiles &amp; Theme Colours
         </div>
         {(state?.players || []).map((p) => {
           const isCurrent = !isPartyMode && state?.activePlayer.id === p.id;
           const inGameSetup = activeGame?.phase === 'setup';
           const alreadyInRoster = activeGame?.roster.some((r) => r.id === p.id);
+          const isEditingColor = editingColorPlayerId === p.id;
 
           return (
-            <button
+            <div
               key={p.id}
-              type="button"
-              disabled={isPartyMode && !inGameSetup}
-              onClick={() => {
-                if (inGameSetup && !alreadyInRoster) {
-                  void dispatch(
-                    { type: 'add_saved_to_roster', playerId: p.id },
-                    `Added ${p.name} to lineup`
-                  );
-                } else if (!isPartyMode) {
-                  void dispatch({ type: 'switch_player', playerId: p.id }, `Switched to ${p.name}`);
-                }
-              }}
               className={cn(
-                'w-full flex items-center justify-between p-3 rounded-xl border transition-colors cursor-pointer',
+                'rounded-xl border transition-colors overflow-hidden',
                 isCurrent
-                  ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-200'
-                  : 'bg-slate-900/80 border-white/10 text-white hover:border-white/25'
+                  ? 'bg-emerald-500/15 border-emerald-400/50'
+                  : 'bg-slate-900/80 border-white/10'
               )}
             >
-              <span className="font-bold text-sm flex items-center gap-2">
-                <span
-                  className="w-3 h-3 rounded-full shrink-0"
-                  style={{ backgroundColor: p.dartColor || DEFAULT_DART_COLOR }}
-                />
-                {p.name} {p.isPrimary ? '(Primary)' : ''}
-              </span>
-              <span className="text-xs font-mono text-slate-400">
-                {inGameSetup
-                  ? alreadyInRoster
-                    ? 'In Game'
-                    : '+ Add to Game'
-                  : isCurrent
-                  ? 'Active'
-                  : 'Select'}
-              </span>
-            </button>
+              <div className="flex items-center justify-between p-2.5 gap-2">
+                <button
+                  type="button"
+                  disabled={isPartyMode && !inGameSetup}
+                  onClick={() => {
+                    if (inGameSetup && !alreadyInRoster) {
+                      void dispatch(
+                        { type: 'add_saved_to_roster', playerId: p.id },
+                        `Added ${p.name} to lineup`
+                      );
+                    } else if (!isPartyMode) {
+                      void dispatch({ type: 'switch_player', playerId: p.id }, `Switched to ${p.name}`);
+                    }
+                  }}
+                  className="flex-1 flex items-center justify-between text-left cursor-pointer disabled:cursor-not-allowed min-w-0"
+                >
+                  <span className="font-bold text-sm text-white flex items-center gap-2 truncate">
+                    <span
+                      className="w-3.5 h-3.5 rounded-full shrink-0 border border-white/25"
+                      style={{ backgroundColor: p.dartColor || DEFAULT_DART_COLOR }}
+                    />
+                    <span className="truncate">
+                      {p.name} {p.isPrimary ? '(Primary)' : ''}
+                    </span>
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-400 ml-2 shrink-0">
+                    {inGameSetup
+                      ? alreadyInRoster
+                        ? 'In Game'
+                        : '+ Add'
+                      : isCurrent
+                      ? 'Active'
+                      : 'Select'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setEditingColorPlayerId(isEditingColor ? null : p.id)}
+                  title="Edit Darts Colour"
+                  className={cn(
+                    'p-1.5 rounded-lg border transition-colors cursor-pointer shrink-0',
+                    isEditingColor
+                      ? 'bg-white/15 border-white/30 text-white'
+                      : 'bg-slate-950/70 border-white/10 text-slate-400 hover:text-white'
+                  )}
+                >
+                  <Palette className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {isEditingColor && (
+                <div className="px-3 pb-3 pt-1.5 border-t border-white/10 flex flex-wrap items-center gap-2 bg-slate-950/60">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
+                    Colour:
+                  </span>
+                  {DART_COLOR_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        void dispatch(
+                          { type: 'update_player_color', playerId: p.id, dartColor: opt.hex },
+                          `${p.name} theme -> ${opt.label}`
+                        );
+                        setEditingColorPlayerId(null);
+                      }}
+                      title={opt.label}
+                      className={cn(
+                        'w-6 h-6 rounded-full transition-transform cursor-pointer',
+                        (p.dartColor || DEFAULT_DART_COLOR) === opt.hex
+                          ? 'ring-2 ring-white scale-110'
+                          : 'opacity-80 hover:opacity-100'
+                      )}
+                      style={{ backgroundColor: opt.hex }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           );
         })}
       </section>
@@ -944,6 +1090,533 @@ export const MobileRemoteView: React.FC = () => {
     </div>
   );
 
+  // =========================================================================
+  // RIGHT PANEL 3: REPLAYS, SPLIT-CAM & SAVED CLIPS GALLERY
+  // =========================================================================
+  const filteredClips = (state?.recentClips || []).filter((c) =>
+    clipFilter === 'all' ? true : (c.category || 'game') === clipFilter
+  );
+
+  const renderReplaysPanel = () => (
+    <div className="space-y-4">
+      {/* Split-Cam Engine Card */}
+      <section className="card-matte rounded-2xl p-4 space-y-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Columns2 className="w-4 h-4 text-rose-400" />
+            <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
+              Split-Cam Auto-Clipper
+            </span>
+          </div>
+          <Badge
+            variant={camCapturing ? 'rose' : camBuffering ? 'emerald' : 'slate'}
+            size="sm"
+            dot
+          >
+            {camCapturing ? 'CLIPPING' : camBuffering ? 'LIVE' : state?.replayStatus || 'IDLE'}
+          </Badge>
+        </div>
+
+        {/* Start / Stop + Dev Arm */}
+        <div className="grid grid-cols-2 gap-2">
+          {camActive ? (
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'stop_cameras' }, 'Cameras Stopped')}
+              className="py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/45 text-rose-200 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <VideoOff className="w-4 h-4" />
+              Stop Split-Cam
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'start_cameras' }, 'Starting Split-Cam...')}
+              className="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Video className="w-4 h-4" />
+              Start Split-Cam
+            </button>
+          )}
+
+          {state?.replayDevArmed ? (
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'cancel_dev_replay' }, 'Cancelled Dev Test')}
+              className="py-2.5 px-3 rounded-xl bg-amber-500/25 border border-amber-400/60 text-amber-200 font-black text-xs flex items-center justify-center gap-1.5 animate-pulse cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+              Cancel Dev Test
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'arm_dev_replay' }, 'Armed: Throw any dart to test!')
+              }
+              className="py-2.5 px-3 rounded-xl bg-amber-500/12 hover:bg-amber-500/20 border border-amber-400/35 text-amber-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <FlaskConical className="w-4 h-4" />
+              Test Next Dart
+            </button>
+          )}
+        </div>
+
+        {/* Board Cam Mode */}
+        <div className="space-y-1.5">
+          <div className="text-[10px] font-mono uppercase text-slate-400 font-bold">
+            Board Camera Source
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {(
+              [
+                { id: 'usb', label: '2nd USB' },
+                { id: 'autodarts', label: 'Autodarts' },
+                { id: 'none', label: 'Single Cam' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() =>
+                  void dispatch(
+                    { type: 'set_board_camera_mode', mode: opt.id },
+                    `Board cam -> ${opt.label}`
+                  )
+                }
+                className={cn(
+                  'py-2 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
+                  state?.replayBoardCameraMode === opt.id
+                    ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
+                    : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-white'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Auto-Start on Boot */}
+        <div className="flex items-center justify-between pt-2 border-t border-white/10">
+          <span className="text-xs font-bold text-slate-200">Auto-Start Cameras on Boot</span>
+          <button
+            type="button"
+            onClick={() =>
+              void dispatch(
+                { type: 'set_auto_start_camera', enabled: !state?.replayAutoStartCamera },
+                state?.replayAutoStartCamera ? 'Auto-Start Off' : 'Auto-Start On'
+              )
+            }
+            className={cn(
+              'w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer',
+              state?.replayAutoStartCamera ? 'bg-emerald-500' : 'bg-slate-700'
+            )}
+          >
+            <div
+              className={cn(
+                'w-5 h-5 rounded-full bg-white transition-transform',
+                state?.replayAutoStartCamera ? 'translate-x-5' : 'translate-x-0'
+              )}
+            />
+          </button>
+        </div>
+
+        {/* Auto-Clip Triggers */}
+        <div className="space-y-1.5 pt-2 border-t border-white/10">
+          <div className="text-[10px] font-mono uppercase text-slate-400 font-bold">
+            Auto-Clip Triggers
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {TRIGGER_ITEMS.map((item) => {
+              const enabled = Boolean(state?.replayTriggers?.[item.key]);
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() =>
+                    void dispatch({
+                      type: 'update_replay_trigger',
+                      key: item.key,
+                      value: !enabled,
+                    })
+                  }
+                  className={cn(
+                    'px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
+                    enabled
+                      ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
+                      : 'bg-slate-900/80 border-white/10 text-slate-400'
+                  )}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* Saved Replays Gallery */}
+      <section className="card-matte rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
+            Saved Clips ({state?.replayClipCount ?? 0})
+          </span>
+          <div className="flex items-center gap-1">
+            {(
+              [
+                { id: 'all', label: 'All' },
+                { id: 'game', label: 'Game' },
+                { id: 'user', label: 'Manual' },
+                { id: 'dev', label: 'Dev' },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setClipFilter(f.id)}
+                className={cn(
+                  'px-2 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer',
+                  clipFilter === f.id
+                    ? 'bg-rose-500/25 text-rose-200 border border-rose-400/45'
+                    : 'bg-slate-900 text-slate-400 hover:text-white'
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {filteredClips.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-500 font-mono">
+            No saved clips in this folder yet.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+            {filteredClips.map((clip) => (
+              <div
+                key={clip.id}
+                className="p-2.5 rounded-xl bg-slate-900/80 border border-white/10 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-white truncate">
+                    {clip.playerName} • {clip.reason}
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5 mt-0.5">
+                    <span className="text-amber-300 font-bold">{clip.segmentName}</span>
+                    <span>•</span>
+                    <span>{clip.durationSec.toFixed(1)}s</span>
+                    {clip.subfolder && (
+                      <>
+                        <span>•</span>
+                        <span className="truncate">{clip.subfolder}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void dispatch({ type: 'play_saved_clip', clipId: clip.id }, 'Playing on TV')
+                    }
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/45 text-emerald-200 text-[11px] font-black flex items-center gap-1 cursor-pointer"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    TV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void dispatch(
+                        { type: 'delete_saved_clip', path: clip.relativePath || clip.filename },
+                        'Deleted Clip'
+                      )
+                    }
+                    title="Delete Clip"
+                    className="p-1.5 rounded-lg bg-slate-950/70 hover:bg-rose-500/20 border border-white/10 text-slate-400 hover:text-rose-300 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+
+  // =========================================================================
+  // RIGHT PANEL 4: DISPLAY, LAYOUT, DATA MODE & CAREER VAULT
+  // =========================================================================
+  const sortedWidgets = [...(state?.layoutWidgets || [])].sort((a, b) => a.order - b.order);
+
+  const renderDisplayPanel = () => (
+    <div className="space-y-4">
+      {/* Heatmap + Objectives + Fullscreen */}
+      <section className="card-matte rounded-2xl p-4 space-y-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-mono uppercase tracking-wider font-black text-white flex items-center gap-1.5">
+            <Monitor className="w-4 h-4 text-sky-400" />
+            Kiosk Display Controls
+          </span>
+          <button
+            type="button"
+            onClick={() => void dispatch({ type: 'toggle_fullscreen' }, 'Toggled Kiosk Fullscreen')}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/15 text-[11px] font-bold text-slate-200 cursor-pointer"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-sky-400" />
+            Fullscreen
+          </button>
+        </div>
+
+        {/* Heatmap Mode */}
+        <div className="space-y-1.5">
+          <div className="text-[10px] font-mono uppercase text-slate-400 font-bold flex items-center gap-1">
+            <Target className="w-3 h-3 text-emerald-400" />
+            Dartboard Heatmap View
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {(
+              [
+                { id: 'dots', label: 'Dots' },
+                { id: 'density', label: 'Heat' },
+                { id: 'both', label: 'Both' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() =>
+                  void dispatch({ type: 'set_heatmap_mode', mode: opt.id }, `Heatmap -> ${opt.label}`)
+                }
+                className={cn(
+                  'py-2 rounded-lg text-xs font-bold border transition-colors cursor-pointer',
+                  state?.heatmapMode === opt.id
+                    ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                    : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-white'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Reroll Objectives */}
+        <div className="space-y-1.5 pt-2 border-t border-white/10">
+          <div className="text-[10px] font-mono uppercase text-slate-400 font-bold flex items-center gap-1">
+            <Dices className="w-3 h-3 text-amber-400" />
+            Practice Objectives
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'reroll_objectives', period: 'daily' }, 'Rerolled Daily Goals')
+              }
+              className="py-2 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
+            >
+              Reroll Daily
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch(
+                  { type: 'reroll_objectives', period: 'weekly' },
+                  'Rerolled Weekly Goals'
+                )
+              }
+              className="py-2 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
+            >
+              Reroll Weekly
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Bento Layout Customizer */}
+      <section className="card-matte rounded-2xl p-4 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
+            Bento Widgets
+          </span>
+          <button
+            type="button"
+            onClick={() => void dispatch({ type: 'reset_layout' }, 'Layout Reset to Default')}
+            className="text-[11px] font-mono font-bold text-slate-400 hover:text-emerald-300 cursor-pointer"
+          >
+            Reset Default
+          </button>
+        </div>
+
+        <div className="space-y-1.5">
+          {sortedWidgets.map((w, idx) => (
+            <div
+              key={w.id}
+              className={cn(
+                'flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl border',
+                w.enabled
+                  ? 'bg-slate-900/80 border-white/10 text-white'
+                  : 'bg-slate-950/50 border-white/[0.05] text-slate-500'
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => void dispatch({ type: 'toggle_widget', widgetId: w.id })}
+                className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
+              >
+                {w.enabled ? (
+                  <Eye className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                )}
+                <span className="text-xs font-bold truncate">{w.title}</span>
+              </button>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void dispatch({
+                      type: 'set_widget_span',
+                      widgetId: w.id,
+                      colSpan: w.colSpan === 2 ? 1 : 2,
+                    })
+                  }
+                  className="px-1.5 py-0.5 rounded bg-slate-950 border border-white/10 text-[10px] font-mono font-bold text-slate-300 hover:text-white cursor-pointer"
+                  title="Toggle 1-col / 2-col width"
+                >
+                  {w.colSpan === 2 ? 'WIDE' : 'HALF'}
+                </button>
+                <button
+                  type="button"
+                  disabled={idx === 0}
+                  onClick={() =>
+                    void dispatch({ type: 'move_widget', widgetId: w.id, direction: 'up' })
+                  }
+                  className="p-1 rounded bg-slate-950 border border-white/10 text-slate-300 disabled:opacity-30 cursor-pointer"
+                >
+                  <ChevronUp className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  disabled={idx === sortedWidgets.length - 1}
+                  onClick={() =>
+                    void dispatch({ type: 'move_widget', widgetId: w.id, direction: 'down' })
+                  }
+                  className="p-1 rounded bg-slate-950 border border-white/10 text-slate-300 disabled:opacity-30 cursor-pointer"
+                >
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Data Source & Demo Simulator */}
+      <section className="card-matte rounded-2xl p-4 space-y-3">
+        <div className="text-xs font-mono uppercase tracking-wider font-black text-white">
+          Board Source &amp; Demo Mode
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(
+            [
+              { id: 'local', label: 'Local 3180' },
+              { id: 'demo', label: 'Demo Sim' },
+              { id: 'cloud', label: 'Cloud' },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'set_data_mode', mode: m.id }, `Mode -> ${m.label}`)
+              }
+              className={cn(
+                'py-2 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
+                state?.dataMode === m.id
+                  ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                  : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-white'
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {state?.dataMode === 'demo' && (
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'simulate_visit' }, 'Simulated Visit')}
+              className="py-2 rounded-lg bg-sky-500/20 border border-sky-400/45 text-sky-200 text-xs font-black cursor-pointer"
+            >
+              Sim 3-Dart Visit
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch(
+                  { type: 'toggle_auto_sim' },
+                  state.isAutoSimulating ? 'Auto-Sim Stopped' : 'Auto-Sim Running'
+                )
+              }
+              className={cn(
+                'py-2 rounded-lg border text-xs font-black cursor-pointer',
+                state.isAutoSimulating
+                  ? 'bg-amber-500/25 border-amber-400/60 text-amber-200'
+                  : 'bg-slate-900 border-white/15 text-slate-200'
+              )}
+            >
+              {state.isAutoSimulating ? 'Stop Auto-Sim' : 'Start Auto-Sim'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Career Vault Readout */}
+      {state?.careerSummary && (
+        <section className="card-matte rounded-2xl p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono uppercase tracking-wider font-black text-white flex items-center gap-1.5">
+              <Flame className="w-4 h-4 text-amber-400" />
+              Career Vault
+            </span>
+            <Badge variant={state.careerSummary.isDiskSynced ? 'emerald' : 'slate'} size="sm">
+              {state.careerSummary.isDiskSynced ? 'Disk Synced' : 'Local'}
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="p-2 rounded-xl bg-slate-900/80 border border-white/[0.07]">
+              <div className="text-[10px] font-mono text-slate-400 uppercase">Streak</div>
+              <div className="text-base font-black font-mono text-amber-300 tabular-nums">
+                {state.careerSummary.currentStreak}d
+              </div>
+            </div>
+            <div className="p-2 rounded-xl bg-slate-900/80 border border-white/[0.07]">
+              <div className="text-[10px] font-mono text-slate-400 uppercase">Best 3DA</div>
+              <div className="text-base font-black font-mono text-emerald-300 tabular-nums">
+                {state.careerSummary.bestDay3DA.toFixed(1)}
+              </div>
+            </div>
+            <div className="p-2 rounded-xl bg-slate-900/80 border border-white/[0.07]">
+              <div className="text-[10px] font-mono text-slate-400 uppercase">Darts</div>
+              <div className="text-base font-black font-mono text-white tabular-nums">
+                {state.careerSummary.totalCareerDarts}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+
   return (
     <div
       data-theme={isPartyMode ? 'party' : 'default'}
@@ -962,11 +1635,12 @@ export const MobileRemoteView: React.FC = () => {
         )}
       >
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          {/* Left: Brand */}
+          {/* Left: Brand (Secret 5-tap on AD crest opens PIN 0161 Dev Console QR Modal) */}
           <div className="flex items-center gap-2.5">
             <div
+              onClick={handleSecretCrestTap}
               className={cn(
-                'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-slate-950 text-sm',
+                'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-slate-950 text-sm select-none cursor-default',
                 isPartyMode
                   ? 'bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-amber-300'
                   : 'bg-gradient-to-tr from-emerald-500 to-emerald-300'
@@ -984,12 +1658,14 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           </div>
 
-          {/* Center (iPad): Instant View Switcher + Party Toggle */}
+          {/* Center/Right: View Switcher + Party Mode + Resync + Pairing Badge */}
           <div className="flex items-center gap-2">
             <div className="hidden md:flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
               <button
                 type="button"
-                onClick={() => void dispatch({ type: 'navigate', view: 'dashboard' }, 'Stats Dashboard')}
+                onClick={() =>
+                  void dispatch({ type: 'navigate', view: 'dashboard' }, 'Stats Dashboard')
+                }
                 className={cn(
                   'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
                   state?.activeView === 'dashboard'
@@ -1002,7 +1678,9 @@ export const MobileRemoteView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => void dispatch({ type: 'navigate', view: 'games-lobby' }, 'Games Arcade')}
+                onClick={() =>
+                  void dispatch({ type: 'navigate', view: 'games-lobby' }, 'Games Arcade')
+                }
                 className={cn(
                   'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
                   state?.activeView !== 'dashboard'
@@ -1015,7 +1693,6 @@ export const MobileRemoteView: React.FC = () => {
               </button>
             </div>
 
-            {/* Dedicated Party Mode Toggle in Header */}
             <button
               type="button"
               onClick={() =>
@@ -1079,38 +1756,42 @@ export const MobileRemoteView: React.FC = () => {
           {renderThrowPad()}
         </div>
 
-        {/* RIGHT COLUMN (5 cols): Games / Setup + Players Switcher */}
+        {/* RIGHT COLUMN (5 cols): 4 Full Control Panels (Games, Players, Replays, Display) */}
         <div className="col-span-5 space-y-4">
-          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
-            <button
-              type="button"
-              onClick={() => setTabletRightPanel('games')}
-              className={cn(
-                'py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer',
-                tabletRightPanel === 'games'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
-                  : 'text-slate-400 hover:text-white'
-              )}
-            >
-              <Gamepad2 className="w-4 h-4" />
-              Games &amp; Setup
-            </button>
-            <button
-              type="button"
-              onClick={() => setTabletRightPanel('players')}
-              className={cn(
-                'py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer',
-                tabletRightPanel === 'players'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
-                  : 'text-slate-400 hover:text-white'
-              )}
-            >
-              <Users className="w-4 h-4" />
-              Players
-            </button>
+          <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
+            {(
+              [
+                { id: 'games', label: 'Games', icon: Gamepad2 },
+                { id: 'players', label: 'Players', icon: Users },
+                { id: 'replays', label: 'Replays', icon: Clapperboard },
+                { id: 'display', label: 'Display', icon: Monitor },
+              ] as const
+            ).map((tab) => {
+              const Icon = tab.icon;
+              const active = tabletRightPanel === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setTabletRightPanel(tab.id)}
+                  className={cn(
+                    'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
+                    active
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                      : 'text-slate-400 hover:text-white'
+                  )}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {tabletRightPanel === 'games' ? renderGamesPanel() : renderPlayersPanel()}
+          {tabletRightPanel === 'games' && renderGamesPanel()}
+          {tabletRightPanel === 'players' && renderPlayersPanel()}
+          {tabletRightPanel === 'replays' && renderReplaysPanel()}
+          {tabletRightPanel === 'display' && renderDisplayPanel()}
         </div>
       </main>
 
@@ -1123,48 +1804,69 @@ export const MobileRemoteView: React.FC = () => {
         {mobileTab === 'control' && (
           <div className="space-y-3">
             {renderPrimaryActions()}
-            <button
-              type="button"
-              onClick={() =>
-                void dispatch(
-                  {
-                    type: 'navigate',
-                    view: state?.activeView === 'dashboard' ? 'games-lobby' : 'dashboard',
-                  },
-                  state?.activeView === 'dashboard' ? 'Opened Arcade Lobby' : 'Back to Dashboard'
-                )
-              }
-              className="w-full card-matte p-3.5 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-emerald-300"
-            >
-              {state?.activeView === 'dashboard' ? (
-                <>
-                  <Gamepad2 className="w-5 h-5" />
-                  Open Games Arcade
-                </>
-              ) : (
-                <>
-                  <LayoutDashboard className="w-5 h-5" />
-                  Back to Stats Dashboard
-                </>
-              )}
-            </button>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() =>
+                  void dispatch(
+                    {
+                      type: 'navigate',
+                      view: state?.activeView === 'dashboard' ? 'games-lobby' : 'dashboard',
+                    },
+                    state?.activeView === 'dashboard' ? 'Opened Arcade Showcase' : 'Stats Dashboard'
+                  )
+                }
+                className="card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold text-emerald-300 cursor-pointer"
+              >
+                {state?.activeView === 'dashboard' ? (
+                  <>
+                    <Gamepad2 className="w-4 h-4" />
+                    Games Arcade
+                  </>
+                ) : (
+                  <>
+                    <LayoutDashboard className="w-4 h-4" />
+                    Dashboard
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowMobileThrowPad((v) => !v)}
+                className={cn(
+                  'card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold cursor-pointer',
+                  showMobileThrowPad ? 'border-emerald-400/50 text-emerald-200' : 'text-slate-200'
+                )}
+              >
+                <Crosshair className="w-4 h-4 text-emerald-400" />
+                {showMobileThrowPad ? 'Hide Throw Pad' : 'Throw Pad'}
+              </button>
+            </div>
+
+            {showMobileThrowPad && renderThrowPad()}
           </div>
         )}
 
         {mobileTab === 'games' && renderGamesPanel()}
         {mobileTab === 'players' && renderPlayersPanel()}
-        {mobileTab === 'throw' && renderThrowPad()}
+        {mobileTab === 'replays' && renderReplaysPanel()}
+        {mobileTab === 'display' && renderDisplayPanel()}
       </main>
 
       {/* Phone-Only Fixed Bottom Thumb Bar (< md) */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 py-2">
-        <div className="max-w-lg mx-auto grid grid-cols-4 gap-1">
-          {[
-            { id: 'control' as const, label: 'Control', icon: Sliders },
-            { id: 'games' as const, label: 'Games', icon: Gamepad2 },
-            { id: 'players' as const, label: 'Players', icon: Users },
-            { id: 'throw' as const, label: 'Throw', icon: Crosshair },
-          ].map((tab) => {
+        <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
+          {(
+            [
+              { id: 'control', label: 'Control', icon: Sliders },
+              { id: 'games', label: 'Games', icon: Gamepad2 },
+              { id: 'players', label: 'Players', icon: Users },
+              { id: 'replays', label: 'Replays', icon: Clapperboard },
+              { id: 'display', label: 'Display', icon: Monitor },
+            ] as const
+          ).map((tab) => {
             const Icon = tab.icon;
             const active = mobileTab === tab.id;
             return (
@@ -1173,7 +1875,7 @@ export const MobileRemoteView: React.FC = () => {
                 type="button"
                 onClick={() => setMobileTab(tab.id)}
                 className={cn(
-                  'flex flex-col items-center justify-center py-2 rounded-xl transition-colors',
+                  'flex flex-col items-center justify-center py-2 rounded-xl transition-colors cursor-pointer',
                   active
                     ? isPartyMode
                       ? 'bg-purple-500/25 text-amber-300'
@@ -1181,13 +1883,20 @@ export const MobileRemoteView: React.FC = () => {
                     : 'text-slate-400'
                 )}
               >
-                <Icon className="w-5 h-5" />
+                <Icon className="w-4 h-4" />
                 <span className="text-[10px] font-bold mt-1">{tab.label}</span>
               </button>
             );
           })}
         </div>
       </nav>
+
+      {/* Hidden PIN-Protected Dev Console QR Modal (Code: 0161 — 5-tap AD crest) */}
+      <DevConsoleQrModal
+        isOpen={isDevQrOpen}
+        onClose={() => setIsDevQrOpen(false)}
+        connectedDevs={0}
+      />
     </div>
   );
 };

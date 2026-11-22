@@ -1,19 +1,27 @@
 import { AppView, GameMatchConfig, GameMatchPhase } from './games';
-import { DataConnectionMode } from './config';
-import { OcheCamStatus } from './replay';
+import { DataConnectionMode, WidgetId } from './config';
+import {
+  BoardCameraMode,
+  OcheCamStatus,
+  ReplayClipCategory,
+  ReplayTriggerSettings,
+} from './replay';
 
 export interface RemoteInterfaceOption {
   address: string;
   name: string;
   url: string;
+  devUrl?: string;
 }
 
 export interface RemoteNetworkInfo {
   port: number;
   interfaces: RemoteInterfaceOption[];
   fallbackUrl: string;
+  fallbackDevUrl?: string;
   connectedRemotes: number;
   connectedKiosks: number;
+  connectedDevs?: number;
 }
 
 export interface RemotePresencePayload {
@@ -72,7 +80,28 @@ export interface RemoteKioskState {
     totalDartsThrown: number;
   };
   soundEnabled: boolean;
+  heatmapMode: 'dots' | 'density' | 'both';
+  isAutoSimulating: boolean;
+  layoutWidgets: Array<{
+    id: WidgetId;
+    title: string;
+    enabled: boolean;
+    order: number;
+    colSpan: 1 | 2;
+  }>;
+  careerSummary: {
+    currentStreak: number;
+    longestStreak: number;
+    bestDay3DA: number;
+    totalCareerDarts: number;
+    isDiskSynced: boolean;
+  };
   replayStatus: OcheCamStatus;
+  replayBoardCameraMode: BoardCameraMode;
+  replayAutoStartCamera: boolean;
+  replayPlaybackRate: 0.5 | 0.75 | 1;
+  replayTriggers: ReplayTriggerSettings;
+  replayDevArmed: boolean;
   hasActiveReplayOverlay: boolean;
   replayClipCount: number;
   isSavingReplay: boolean;
@@ -84,6 +113,20 @@ export interface RemoteKioskState {
     durationSec: number;
     isSaved: boolean;
   } | null;
+  recentClips: Array<{
+    id: string;
+    filename: string;
+    relativePath?: string;
+    subfolder?: string;
+    category?: ReplayClipCategory;
+    playerName: string;
+    segmentName: string;
+    score: number;
+    reason: string;
+    durationSec: number;
+    isDualCamera?: boolean;
+    createdAt: number;
+  }>;
   activeGame: RemoteActiveGameSnapshot | null;
   updatedAt: number;
 }
@@ -96,6 +139,7 @@ export type RemoteCommand =
   | { type: 'navigate'; view: 'dashboard' | 'games-lobby' }
   | { type: 'switch_player'; playerId: string }
   | { type: 'add_player'; name: string; addToRoster?: boolean; dartColor?: string; isSaved?: boolean }
+  | { type: 'update_player_color'; playerId: string; dartColor: string }
   | { type: 'add_saved_to_roster'; playerId: string }
   | { type: 'remove_roster_player'; playerId: string }
   | { type: 'launch_game'; gameId: string }
@@ -110,6 +154,26 @@ export type RemoteCommand =
   | { type: 'clear_visit' }
   | { type: 'reset_session' }
   | { type: 'inject_dart'; target: string }
+  | { type: 'set_heatmap_mode'; mode: 'dots' | 'density' | 'both' }
+  | { type: 'toggle_widget'; widgetId: WidgetId }
+  | { type: 'move_widget'; widgetId: WidgetId; direction: 'up' | 'down' }
+  | { type: 'set_widget_span'; widgetId: WidgetId; colSpan: 1 | 2 }
+  | { type: 'reset_layout' }
+  | { type: 'reroll_objectives'; period: 'daily' | 'weekly' }
+  | { type: 'set_data_mode'; mode: DataConnectionMode }
+  | { type: 'toggle_auto_sim' }
+  | { type: 'simulate_visit' }
+  | { type: 'start_cameras' }
+  | { type: 'stop_cameras' }
+  | { type: 'set_board_camera_mode'; mode: BoardCameraMode }
+  | { type: 'set_auto_start_camera'; enabled: boolean }
+  | { type: 'update_replay_trigger'; key: keyof ReplayTriggerSettings; value: boolean }
+  | { type: 'set_replay_speed'; rate: 0.5 | 0.75 | 1 }
   | { type: 'trigger_manual_replay' }
   | { type: 'save_last_replay' }
-  | { type: 'dismiss_replay' };
+  | { type: 'dismiss_replay' }
+  | { type: 'play_saved_clip'; clipId: string }
+  | { type: 'delete_saved_clip'; path: string }
+  | { type: 'arm_dev_replay' }
+  | { type: 'cancel_dev_replay' }
+  | { type: 'toggle_fullscreen' };

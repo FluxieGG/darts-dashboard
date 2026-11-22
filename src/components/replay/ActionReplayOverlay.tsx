@@ -8,31 +8,28 @@ import {
   FolderOpen,
   Gauge,
   Radio,
-  RotateCcw,
-  Save,
+  Tablet,
   Target,
-  X,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
 
+/**
+ * Pure Full-Viewport Broadcast Action Replay Cinema (Kiosk Display).
+ * Zero interactive buttons — playback speed, saving, and dismissal are controlled
+ * remotely from the iPad Oche Command Deck.
+ */
 export const ActionReplayOverlay: React.FC = () => {
   const {
     activeOverlayClip,
-    closeOverlayClip,
     playbackRate,
-    setPlaybackRate,
     devCaptureNextDartArmed,
-    cancelDevNextDartCapture,
     status,
     lastCaptureBanner,
-    saveLastRecording,
-    isSavingLastClip,
   } = useReplayStore();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [showStinger, setShowStinger] = useState(false);
 
-  // Trigger cool spinning broadcast stinger whenever a new replay clip opens
+  // Trigger spinning broadcast stinger whenever a new replay clip opens
   useEffect(() => {
     if (!activeOverlayClip) {
       setShowStinger(false);
@@ -57,9 +54,9 @@ export const ActionReplayOverlay: React.FC = () => {
 
   return (
     <>
-      {/* Floating Live Status Pills (Dev Test Armed OR Currently Recording Post-Roll) */}
+      {/* Passive Floating Live Status Pills (Dev Test Armed OR Currently Recording Post-Roll) */}
       {(devCaptureNextDartArmed || status === 'capturing') && !activeOverlayClip && (
-        <div className="fixed top-20 right-4 sm:right-6 z-50 flex flex-col items-end gap-2">
+        <div className="fixed top-20 right-4 sm:right-6 z-50 flex flex-col items-end gap-2 pointer-events-none">
           {status === 'capturing' && (
             <div className="px-4 py-2.5 rounded-2xl bg-rose-950/95 border-2 border-rose-400/70 text-rose-100 shadow-[0_0_28px_rgba(244,63,94,0.5)] flex items-center gap-2.5 animate-pulse">
               <Radio className="w-4 h-4 text-rose-400" />
@@ -76,14 +73,6 @@ export const ActionReplayOverlay: React.FC = () => {
               <div className="text-xs sm:text-sm font-black">
                 DEV TEST ARMED: Throw any dart to record 10s split-cam replay
               </div>
-              <button
-                type="button"
-                onClick={cancelDevNextDartCapture}
-                className="p-1 rounded-lg text-amber-300 hover:bg-white/10 transition-colors cursor-pointer"
-                title="Cancel Dev Test"
-              >
-                <X className="w-4 h-4" />
-              </button>
             </div>
           )}
         </div>
@@ -149,15 +138,10 @@ export const ActionReplayOverlay: React.FC = () => {
                   Saved to Disk
                 </Badge>
               ) : (
-                <button
-                  type="button"
-                  disabled={isSavingLastClip}
-                  onClick={() => void saveLastRecording()}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(16,185,129,0.5)] transition-colors cursor-pointer"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  {isSavingLastClip ? 'Saving...' : 'Save Clip (or Tap on iPad)'}
-                </button>
+                <Badge variant="amber" size="sm" dot className="animate-pulse">
+                  <Tablet className="w-3 h-3" />
+                  Unsaved • Tap Save on iPad
+                </Badge>
               )}
 
               {activeOverlayClip.isDevTest && (
@@ -165,15 +149,6 @@ export const ActionReplayOverlay: React.FC = () => {
                   DEV TEST
                 </Badge>
               )}
-
-              <button
-                type="button"
-                onClick={closeOverlayClip}
-                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
-                title="Close Replay"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
           </div>
 
@@ -185,7 +160,6 @@ export const ActionReplayOverlay: React.FC = () => {
               autoPlay
               loop
               playsInline
-              controls
               onLoadedMetadata={() => {
                 if (videoRef.current) {
                   videoRef.current.playbackRate = playbackRate;
@@ -195,65 +169,42 @@ export const ActionReplayOverlay: React.FC = () => {
             />
 
             {/* Floating Broadcast Score Bug */}
-            <div className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 flex items-center gap-3 px-5 py-2.5 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 shadow-2xl">
+            <div className="pointer-events-none absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-3 px-6 py-3 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 shadow-2xl">
               <Target className="w-5 h-5 text-emerald-400" />
-              <span className="font-mono text-lg sm:text-2xl font-black text-white">
+              <span className="font-mono text-xl sm:text-3xl font-black text-white">
                 {activeOverlayClip.segmentName}
               </span>
-              <span className="h-5 w-px bg-white/20" />
-              <span className="font-mono text-lg sm:text-2xl font-black text-amber-300 tabular-nums">
+              <span className="h-6 w-px bg-white/20" />
+              <span className="font-mono text-xl sm:text-3xl font-black text-amber-300 tabular-nums">
                 {activeOverlayClip.score} PTS
               </span>
             </div>
           </div>
 
-          {/* Slim Bottom Controls & Disk Path Strip */}
+          {/* Slim Broadcast Bottom Telemetry Strip */}
           <div className="shrink-0 px-4 py-3 sm:px-6 bg-[#0B0F17] border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-mono uppercase text-slate-400 flex items-center gap-1 mr-1">
+            <div className="flex items-center gap-2.5 text-xs font-mono text-slate-300">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 font-bold">
                 <Gauge className="w-3.5 h-3.5" />
-                Speed:
+                {playbackRate === 1 ? '1.0x Normal' : `${playbackRate}x Slow-Mo`}
               </span>
-              {([0.5, 0.75, 1] as const).map((rate) => (
-                <button
-                  key={rate}
-                  type="button"
-                  onClick={() => setPlaybackRate(rate)}
-                  className={cn(
-                    'px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-colors cursor-pointer',
-                    playbackRate === rate
-                      ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
-                      : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
-                  )}
+              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                <Tablet className="w-3.5 h-3.5 text-sky-400" />
+                Control speed, save or dismiss on iPad Oche Deck
+              </span>
+            </div>
+
+            {isSaved && activeOverlayClip.filePath && (
+              <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 max-w-full">
+                <FolderOpen className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span
+                  className="truncate max-w-[340px] sm:max-w-[560px]"
+                  title={activeOverlayClip.filePath}
                 >
-                  {rate === 1 ? '1.0x Normal' : `${rate}x Slow-Mo`}
-                </button>
-              ))}
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (videoRef.current) {
-                    videoRef.current.currentTime = 0;
-                    void videoRef.current.play();
-                  }
-                }}
-                className="ml-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/15 text-xs font-bold text-slate-200 cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Replay
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 max-w-full">
-              <FolderOpen className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-              <span
-                className="truncate max-w-[340px] sm:max-w-[560px]"
-                title={activeOverlayClip.filePath}
-              >
-                {activeOverlayClip.filePath}
-              </span>
-            </div>
+                  {activeOverlayClip.filePath}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

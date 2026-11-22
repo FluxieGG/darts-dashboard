@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Circle,
   Flame,
-  RefreshCw,
   ShieldCheck,
   Sparkles,
   Target,
@@ -95,7 +94,6 @@ export const ObjectivesWidget: React.FC = () => {
   const isPartyMode = usePlayerStore((s) => s.isPartyMode);
   const vaultMap = useCareerStore((s) => s.vault.players);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
-  const rerollObjectives = useCareerStore((s) => s.rerollObjectives);
 
   const playerVault = useMemo(
     () => getPlayerVault(activePlayer.id, activePlayer.name),
@@ -173,15 +171,6 @@ export const ObjectivesWidget: React.FC = () => {
                 <Sparkles className="w-3.5 h-3.5" />
                 Today&apos;s Objectives ({dailyDone}/{daily.length})
               </span>
-              <button
-                type="button"
-                onClick={() => rerollObjectives(activePlayer.id, 'daily')}
-                title="Roll a fresh set of Daily Objectives"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Refresh
-              </button>
             </div>
             <div className="space-y-2">
               {daily.map((item) => (
@@ -197,15 +186,6 @@ export const ObjectivesWidget: React.FC = () => {
                 <Trophy className="w-3.5 h-3.5" />
                 Weekly Milestones ({weeklyDone}/{weekly.length})
               </span>
-              <button
-                type="button"
-                onClick={() => rerollObjectives(activePlayer.id, 'weekly')}
-                title="Roll a fresh set of Weekly Objectives"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Refresh
-              </button>
             </div>
             <div className="space-y-2">
               {weekly.map((item) => (

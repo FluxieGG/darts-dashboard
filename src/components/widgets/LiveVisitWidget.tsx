@@ -1,9 +1,7 @@
 import React from 'react';
 import { useLiveBoardStore } from '../../store/useLiveBoardStore';
 import { usePlayerStore } from '../../store/usePlayerStore';
-import { useSettingsStore } from '../../store/useSettingsStore';
-import { generateSimulatedThrow } from '../../services/simulator';
-import { Play, RotateCcw, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export const LiveVisitWidget: React.FC = () => {
@@ -13,25 +11,14 @@ export const LiveVisitWidget: React.FC = () => {
     isBust,
     boardStatus,
     lastCompletedVisit,
-    addSimulatedDart,
-    clearCurrentVisit,
   } = useLiveBoardStore();
   const activePlayer = usePlayerStore((s) => s.getActivePlayer());
-  const dataMode = useSettingsStore((s) => s.dataMode);
-
-  const handleSimulateOneDart = () => {
-    const dartIndex = currentVisitThrows.length % 3;
-    const targetPool = ['T20', 'T20', 'T19', 'T18', 'D20', 'Bull'];
-    const chosen = targetPool[Math.floor(Math.random() * targetPool.length)];
-    const dart = generateSimulatedThrow(chosen, dartIndex, 0.045);
-    addSimulatedDart(dart);
-  };
 
   const slots = [0, 1, 2];
 
   const statusLabel =
     boardStatus === 'takeout'
-      ? 'Takeout'
+      ? 'Pull Darts'
       : boardStatus === 'throw'
       ? 'Throw'
       : 'Ready';
@@ -57,41 +44,17 @@ export const LiveVisitWidget: React.FC = () => {
           </span>
         </div>
 
-        {/* Right status / demo controls */}
-        <div className="flex items-center gap-2">
-          {dataMode === 'local' ? (
-            <span
-              className={cn(
-                'px-3.5 py-1 rounded-full text-xs sm:text-sm font-mono font-bold uppercase tracking-wider border',
-                boardStatus === 'takeout'
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-400/50'
-                  : 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
-              )}
-            >
-              {statusLabel}
-            </span>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={handleSimulateOneDart}
-                title="Simulate Dart Throw"
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-semibold rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition-colors"
-              >
-                <Play className="w-4 h-4 fill-emerald-300" />
-                <span>Sim Dart</span>
-              </button>
-              {currentVisitThrows.length > 0 && (
-                <button
-                  onClick={clearCurrentVisit}
-                  title="Clear Visit"
-                  className="p-2 text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+        {/* Pure Broadcast Status Pill */}
+        <span
+          className={cn(
+            'px-3.5 py-1 rounded-full text-xs sm:text-sm font-mono font-bold uppercase tracking-wider border',
+            boardStatus === 'takeout'
+              ? 'bg-amber-500/20 text-amber-300 border-amber-400/50 animate-pulse'
+              : 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
           )}
-        </div>
+        >
+          {statusLabel}
+        </span>
       </div>
 
       {/* Main Throw Badges & Broadcast-Scale Visit Score */}

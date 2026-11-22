@@ -10,9 +10,14 @@ import { useLiveBoardStore } from '../store/useLiveBoardStore';
 import { useGameStore } from '../store/useGameStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useReplayStore } from '../store/useReplayStore';
+import { useLayoutStore } from '../store/useLayoutStore';
+import { useCareerStore } from '../store/useCareerStore';
+import { computeStreaks } from '../lib/careerEngine';
 import { getDefaultConfigForGame, getGameDefinition } from '../games/gameRegistry';
 import { gameEventBus } from './gameEventBus';
-import { generateSimulatedThrow } from './simulator';
+import { generateSimulatedThrow, generateSimulatedVisit } from './simulator';
+import { ocheCamService } from './ocheCamService';
+import { devLogger } from './devLogger';
 
 export async function fetchRemoteInfo(): Promise<RemoteNetworkInfo | null> {
   try {
@@ -57,9 +62,13 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
   const gameState = useGameStore.getState();
   const settingsState = useSettingsStore.getState();
   const replayState = useReplayStore.getState();
+  const layoutState = useLayoutStore.getState();
+  const careerState = useCareerStore.getState();
 
   const activePlayer = playerState.getActivePlayer();
   const activeStats = playerState.getActiveStats();
+  const playerVault = careerState.getPlayerVault(activePlayer.id, activePlayer.name);
+  const streaks = computeStreaks(playerVault.dailyLogs);
 
   const gameDef = gameState.activeGameId ? getGameDefinition(gameState.activeGameId) : undefined;
 
@@ -102,7 +111,30 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       totalDartsThrown: activeStats.totalDartsThrown,
     },
     soundEnabled: gameState.soundEnabled,
+    heatmapMode: settingsState.heatmapMode,
+    isAutoSimulating: settingsState.isAutoSimulating,
+    layoutWidgets: [...layoutState.layout.widgets]
+      .sort((a, b) => a.order - b.order)
+      .map((w) => ({
+        id: w.id,
+        title: w.title,
+        enabled: w.enabled,
+        order: w.order,
+        colSpan: w.colSpan,
+      })),
+    careerSummary: {
+      currentStreak: streaks.currentStreak,
+      longestStreak: streaks.longestStreak,
+      bestDay3DA: playerVault.records.bestDay3DA?.value ?? 0,
+      totalCareerDarts: playerVault.records.totalCareerDarts,
+      isDiskSynced: careerState.isDiskSynced,
+    },
     replayStatus: replayState.status,
+    replayBoardCameraMode: replayState.boardCameraMode,
+    replayAutoStartCamera: replayState.autoStartCamera,
+    replayPlaybackRate: replayState.playbackRate,
+    replayTriggers: replayState.triggers,
+    replayDevArmed: replayState.devCaptureNextDartArmed,
     hasActiveReplayOverlay: Boolean(replayState.activeOverlayClip),
     replayClipCount: replayState.clips.length,
     isSavingReplay: replayState.isSavingLastClip,
@@ -116,6 +148,20 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
           isSaved: Boolean(replayState.lastRecordedClip.isSavedToDisk),
         }
       : null,
+    recentClips: replayState.clips.slice(0, 30).map((c) => ({
+      id: c.id,
+      filename: c.filename,
+      relativePath: c.relativePath,
+      subfolder: c.subfolder,
+      category: c.category,
+      playerName: c.playerName,
+      segmentName: c.segmentName,
+      score: c.score,
+      reason: c.reason,
+      durationSec: c.durationSec,
+      isDualCamera: c.isDualCamera,
+      createdAt: c.createdAt,
+    })),
     activeGame: gameDef
       ? {
           id: gameDef.id,
@@ -184,6 +230,10 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
     }
 
+    case 'update_player_color':
+      playerStore.updatePlayerProfile(cmd.playerId, { dartColor: cmd.dartColor });
+      break;
+
     case 'add_saved_to_roster': {
       const match = playerStore.players.find((p) => p.id === cmd.playerId);
       if (match) {
@@ -229,6 +279,118 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
 
     case 'dismiss_replay':
       useReplayStore.getState().closeOverlayClip();
+      break;
+
+    case 'set_heatmap_mode':
+      useSettingsStore.getState().setHeatmapMode(cmd.mode);
+      break;
+
+    case 'toggle_widget':
+      useLayoutStore.getState().toggleWidget(cmd.widgetId);
+      break;
+
+    case 'move_widget':
+      useLayoutStore.getState().moveWidget(cmd.widgetId, cmd.direction);
+      break;
+
+    case 'set_widget_span':
+      useLayoutStore.getState().setColSpan(cmd.widgetId, cmd.colSpan);
+      break;
+
+    case 'reset_layout':
+      useLayoutStore.getState().resetLayout();
+      break;
+
+    case 'reroll_objectives': {
+      const p = playerStore.getActivePlayer();
+      useCareerStore.getState().rerollObjectives(p.id, cmd.period);
+      break;
+    }
+
+    case 'set_data_mode':
+      useSettingsStore.getState().setDataMode(cmd.mode);
+      break;
+
+    case 'toggle_auto_sim':
+      useSettingsStore.getState().toggleAutoSimulating();
+      break;
+
+    case 'simulate_visit': {
+      const simVisit = generateSimulatedVisit(playerStore.getActivePlayer().id, Date.now());
+      simVisit.throws.forEach((t, i) => {
+        window.setTimeout(() => {
+          useLiveBoardStore.getState().addSimulatedDart(t);
+        }, i * 320);
+      });
+      break;
+    }
+
+    case 'start_cameras':
+      void useReplayStore.getState().startCamera();
+      break;
+
+    case 'stop_cameras':
+      useReplayStore.getState().stopCamera();
+      break;
+
+    case 'set_board_camera_mode': {
+      const rs = useReplayStore.getState();
+      rs.setBoardCameraMode(cmd.mode);
+      if (rs.status === 'buffering') {
+        void rs.startCamera({ boardCameraMode: cmd.mode });
+      }
+      break;
+    }
+
+    case 'set_auto_start_camera':
+      useReplayStore.getState().setAutoStartCamera(cmd.enabled);
+      break;
+
+    case 'update_replay_trigger':
+      useReplayStore.getState().updateTrigger(cmd.key, cmd.value);
+      break;
+
+    case 'set_replay_speed':
+      useReplayStore.getState().setPlaybackRate(cmd.rate);
+      break;
+
+    case 'play_saved_clip': {
+      const rs = useReplayStore.getState();
+      const clip = rs.clips.find((c) => c.id === cmd.clipId);
+      if (clip) {
+        rs.openOverlayClip(clip);
+      }
+      break;
+    }
+
+    case 'delete_saved_clip':
+      void useReplayStore.getState().deleteClip(cmd.path);
+      break;
+
+    case 'arm_dev_replay': {
+      const rs = useReplayStore.getState();
+      if (!ocheCamService.isRunning()) {
+        void rs.startCamera().then(() => {
+          if (ocheCamService.isRunning()) {
+            useReplayStore.getState().armDevNextDartCapture();
+          }
+        });
+      } else {
+        rs.armDevNextDartCapture();
+      }
+      break;
+    }
+
+    case 'cancel_dev_replay':
+      useReplayStore.getState().cancelDevNextDartCapture();
+      break;
+
+    case 'toggle_fullscreen':
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
       break;
 
     case 'start_match':
@@ -338,7 +500,16 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
       try {
         const data = JSON.parse((ev as MessageEvent).data) as RemotePresencePayload;
         const count = data.connectedRemotes || 0;
-        setConnectedRemotes(count);
+        setConnectedRemotes((prev) => {
+          if (prev !== count) {
+            devLogger.log(
+              'REMOTE',
+              count > 0 ? 'success' : 'info',
+              `iPad / Oche Remote count: ${count}`
+            );
+          }
+          return count;
+        });
         useReplayStore.getState().setConnectedRemotes(count);
         if (count > 0) {
           schedulePush();
@@ -351,6 +522,7 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
     es.addEventListener('command', (ev) => {
       try {
         const cmd = JSON.parse((ev as MessageEvent).data) as RemoteCommand;
+        devLogger.log('REMOTE', 'info', `Remote cmd: ${cmd.type}`, JSON.stringify(cmd));
         executeRemoteCommand(cmd);
         schedulePush();
       } catch (err) {
@@ -363,6 +535,8 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
     const unsubGame = useGameStore.subscribe(schedulePush);
     const unsubSettings = useSettingsStore.subscribe(schedulePush);
     const unsubReplay = useReplayStore.subscribe(schedulePush);
+    const unsubLayout = useLayoutStore.subscribe(schedulePush);
+    const unsubCareer = useCareerStore.subscribe(schedulePush);
 
     return () => {
       es.close();
@@ -371,6 +545,8 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
       unsubGame();
       unsubSettings();
       unsubReplay();
+      unsubLayout();
+      unsubCareer();
       if (pushTimer !== null) {
         clearTimeout(pushTimer);
       }

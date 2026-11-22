@@ -10,7 +10,7 @@ interface NetworkCandidate {
 
 interface RelayClient {
   id: string;
-  role: 'kiosk' | 'remote';
+  role: 'kiosk' | 'remote' | 'dev_kiosk' | 'dev';
   res: ServerResponse;
 }
 
@@ -97,15 +97,20 @@ function attachRemoteRelayMiddleware(
 ) {
   const clients = new Map<string, RelayClient>();
   let latestKioskState: unknown = null;
+  let latestDevHealth: unknown = null;
+  const devLogsBuffer: unknown[] = [];
+  const MAX_DEV_LOGS = 250;
 
   const getCounts = () => {
     let connectedRemotes = 0;
     let connectedKiosks = 0;
+    let connectedDevs = 0;
     for (const c of clients.values()) {
       if (c.role === 'remote') connectedRemotes++;
-      else connectedKiosks++;
+      else if (c.role === 'kiosk') connectedKiosks++;
+      else if (c.role === 'dev') connectedDevs++;
     }
-    return { connectedRemotes, connectedKiosks };
+    return { connectedRemotes, connectedKiosks, connectedDevs };
   };
 
   const broadcastPresence = () => {
@@ -128,13 +133,146 @@ function attachRemoteRelayMiddleware(
   heartbeat.unref?.();
 
   middlewares.use((req, res, next) => {
-    if (!req.url || !req.url.startsWith('/api/remote/')) {
+    if (!req.url || (!req.url.startsWith('/api/remote/') && !req.url.startsWith('/api/dev/'))) {
       next();
       return;
     }
 
     const url = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${defaultPort}`}`);
     const pathname = url.pathname;
+
+    // =========================================================================
+    // DEV CONSOLE RELAY ENDPOINTS (/api/dev/*)
+    // =========================================================================
+    if (pathname.startsWith('/api/dev/')) {
+      // GET /api/dev/snapshot — Instant hydration of live health + last 250 logs
+      if (req.method === 'GET' && pathname === '/api/dev/snapshot') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(
+          JSON.stringify({
+            ok: true,
+            health: latestDevHealth,
+            logs: devLogsBuffer,
+            ...getCounts(),
+          })
+        );
+        return;
+      }
+
+      // GET /api/dev/stream?role=kiosk|dev — Real-time SSE stream for Dev Console
+      if (req.method === 'GET' && pathname === '/api/dev/stream') {
+        const roleParam = url.searchParams.get('role');
+        const role: 'dev_kiosk' | 'dev' = roleParam === 'kiosk' ? 'dev_kiosk' : 'dev';
+        const clientId = `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+
+        clients.set(clientId, { id: clientId, role, res });
+
+        if (role === 'dev') {
+          if (latestDevHealth) {
+            sendSse(res, 'health', latestDevHealth);
+          }
+          sendSse(res, 'backlog', devLogsBuffer);
+        }
+        broadcastPresence();
+
+        req.on('close', () => {
+          clients.delete(clientId);
+          broadcastPresence();
+        });
+        return;
+      }
+
+      // POST /api/dev/log — Kiosk pushes one or an array of structured DevLogEntry items
+      if (req.method === 'POST' && pathname === '/api/dev/log') {
+        readJsonBody(req)
+          .then((body) => {
+            const entries = Array.isArray(body) ? body : [body];
+            for (const entry of entries) {
+              devLogsBuffer.push(entry);
+            }
+            while (devLogsBuffer.length > MAX_DEV_LOGS) {
+              devLogsBuffer.shift();
+            }
+            for (const c of clients.values()) {
+              if (c.role === 'dev') {
+                sendSse(c.res, 'logs', entries);
+              }
+            }
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true, count: devLogsBuffer.length }));
+          })
+          .catch(() => {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false }));
+          });
+        return;
+      }
+
+      // POST /api/dev/health — Kiosk pushes live listeners & subsystem health snapshot
+      if (req.method === 'POST' && pathname === '/api/dev/health') {
+        readJsonBody(req)
+          .then((body) => {
+            latestDevHealth = body;
+            for (const c of clients.values()) {
+              if (c.role === 'dev') {
+                sendSse(c.res, 'health', body);
+              }
+            }
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true }));
+          })
+          .catch(() => {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false }));
+          });
+        return;
+      }
+
+      // POST /api/dev/command — Dev Console phone sends diagnostic command to Kiosk
+      if (req.method === 'POST' && pathname === '/api/dev/command') {
+        readJsonBody(req)
+          .then((body) => {
+            const cmd = body as { type?: string };
+            if (cmd?.type === 'clear_logs') {
+              devLogsBuffer.length = 0;
+              for (const c of clients.values()) {
+                if (c.role === 'dev') {
+                  sendSse(c.res, 'cleared', { ok: true });
+                }
+              }
+            }
+            let delivered = 0;
+            for (const c of clients.values()) {
+              if (c.role === 'dev_kiosk') {
+                sendSse(c.res, 'dev_command', body);
+                delivered++;
+              }
+            }
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true, delivered }));
+          })
+          .catch(() => {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false }));
+          });
+        return;
+      }
+
+      next();
+      return;
+    }
 
     // 1. GET /api/remote/info — LAN IP candidates + paired counts
     if (req.method === 'GET' && pathname === '/api/remote/info') {
@@ -154,8 +292,10 @@ function attachRemoteRelayMiddleware(
             address: c.address,
             name: c.interfaceName,
             url: `http://${c.address}:${port}/?remote=1`,
+            devUrl: `http://${c.address}:${port}/?dev=1`,
           })),
           fallbackUrl: `http://127.0.0.1:${port}/?remote=1`,
+          fallbackDevUrl: `http://127.0.0.1:${port}/?dev=1`,
           ...counts,
         })
       );

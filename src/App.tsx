@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Header } from './components/layout/Header';
 import { BentoGrid } from './components/layout/BentoGrid';
-import { LayoutDrawer } from './components/layout/LayoutDrawer';
 import { SettingsModal } from './components/layout/SettingsModal';
 import { RemoteQrModal } from './components/remote/RemoteQrModal';
 import { MobileRemoteView } from './components/remote/MobileRemoteView';
+import { DevConsoleQrModal } from './components/dev/DevConsoleQrModal';
+import { MobileDevConsoleView } from './components/dev/MobileDevConsoleView';
 import { ActionReplayOverlay } from './components/replay/ActionReplayOverlay';
-import { ReplayGalleryModal } from './components/replay/ReplayGalleryModal';
 import { KioskBootScreen } from './components/layout/KioskBootScreen';
 import { GamesLobby } from './games/components/GamesLobby';
 import { GameHost } from './games/components/GameHost';
@@ -20,6 +20,7 @@ import { useReplayAutoTrigger } from './hooks/useReplayAutoTrigger';
 import { LocalBoardManagerService } from './services/localBoardManager';
 import { generateSimulatedThrow } from './services/simulator';
 import { useKioskRemoteBridge } from './services/remoteBridge';
+import { useKioskDevBridge } from './services/devLogger';
 import { DEFAULT_DART_COLOR, hexToRgbTriplet } from './lib/playerThemes';
 import { Trophy } from 'lucide-react';
 
@@ -41,13 +42,41 @@ const KioskApp: React.FC = () => {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteQrOpen, setIsRemoteQrOpen] = useState(false);
+  const [isDevQrOpen, setIsDevQrOpen] = useState(false);
   const [isLocalConnected, setIsLocalConnected] = useState(false);
   const [isBootingKiosk, setIsBootingKiosk] = useState(true);
 
   const { connectedRemotes } = useKioskRemoteBridge(isLocalConnected);
+  const { connectedDevs } = useKioskDevBridge(isLocalConnected, connectedRemotes);
   useReplayAutoTrigger();
 
   const boardServiceRef = useRef<LocalBoardManagerService | null>(null);
+
+  // Hidden Kiosk Keyboard Shortcuts:
+  // - Ctrl + Shift + D -> PIN 0161 Dev Console QR Modal
+  // - Ctrl + Shift + S -> Emergency Hardware Settings Modal (e.g. USB webcam dropdown)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        setIsDevQrOpen(true);
+      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        setIsSettingsOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Auto-dismiss live objective celebration banner after 6.5s (no touch needed on kiosk TV)
+  useEffect(() => {
+    if (!recentlyCompletedObjective) return;
+    const timer = window.setTimeout(() => {
+      dismissObjectiveToast();
+    }, 6500);
+    return () => window.clearTimeout(timer);
+  }, [recentlyCompletedObjective, dismissObjectiveToast]);
 
   // Fallback hydration if user skips KioskBootScreen early
   useEffect(() => {
@@ -57,7 +86,7 @@ const KioskApp: React.FC = () => {
     }
   }, [isBootingKiosk, hydrateVault, loadSavedClips]);
 
-  // Purge legacy v1 mock localStorage keys once so old mock data / Dave never linger
+  // Purge legacy v1 mock localStorage keys once so old mock data never lingers
   useEffect(() => {
     try {
       localStorage.removeItem('autodarts_dashboard_players_v1');
@@ -150,16 +179,16 @@ const KioskApp: React.FC = () => {
         />
       )}
 
-      {/* Pinned Top Header */}
+      {/* Pure Broadcast Kiosk Header (Secret 5-tap on AD crest opens PIN 0161 Dev QR) */}
       <Header
-        onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenRemoteQr={() => setIsRemoteQrOpen(true)}
+        onTriggerSecretDev={() => setIsDevQrOpen(true)}
         connectedRemotes={connectedRemotes}
         isLocalConnected={isLocalConnected}
       />
 
-      {/* Main Content View: Dashboard Bento Grid | Tech Darts Games Lobby | Active Game Socket */}
-      <div className="flex-1 pb-10">
+      {/* Main Content View: Dashboard Bento Grid | Tech Darts Games Showcase | Active Game Socket */}
+      <div className="flex-1 pb-8">
         {activeView === 'dashboard' && <BentoGrid />}
         {activeView === 'games-lobby' && (
           <GamesLobby isLocalConnected={isLocalConnected} />
@@ -169,42 +198,41 @@ const KioskApp: React.FC = () => {
         )}
       </div>
 
-      {/* Slide-out Layout Customizer Drawer */}
-      <LayoutDrawer />
-
-      {/* Settings & Connection Modal */}
+      {/* Emergency Keyboard-Only Settings Modal (Ctrl + Shift + S) */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         isLocalConnected={isLocalConnected}
       />
 
-      {/* Phone-at-the-Oche QR Remote Pairing Modal */}
+      {/* iPad Oche Deck QR Pairing Modal (accessible when no iPad is connected) */}
       <RemoteQrModal
         isOpen={isRemoteQrOpen}
         onClose={() => setIsRemoteQrOpen(false)}
         connectedRemotes={connectedRemotes}
       />
 
-      {/* Oche-Cam Action Replay Overlay & Saved Clips Gallery */}
-      <ActionReplayOverlay />
-      <ReplayGalleryModal onOpenSettings={() => setIsSettingsOpen(true)} />
+      {/* Hidden PIN-Protected Dev Console QR Modal (Code: 0161) */}
+      <DevConsoleQrModal
+        isOpen={isDevQrOpen}
+        onClose={() => setIsDevQrOpen(false)}
+        connectedDevs={connectedDevs}
+      />
 
-      {/* Live Objective Completed Toast Banner */}
+      {/* Full-Viewport Broadcast Side-by-Side Action Replay Overlay */}
+      <ActionReplayOverlay />
+
+      {/* Passive Objective Completed Toast Banner */}
       {recentlyCompletedObjective && (
-        <button
-          type="button"
-          onClick={dismissObjectiveToast}
-          className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl bg-emerald-950/95 border-2 border-emerald-400/70 text-emerald-100 shadow-[0_0_32px_rgba(16,185,129,0.5)] flex items-center gap-3 animate-in fade-in zoom-in-95 cursor-pointer"
-        >
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 px-6 py-3.5 rounded-2xl bg-emerald-950/95 border-2 border-emerald-400/70 text-emerald-100 shadow-[0_0_32px_rgba(16,185,129,0.5)] flex items-center gap-3 animate-in fade-in zoom-in-95 pointer-events-none">
           <Trophy className="w-5 h-5 text-amber-300 shrink-0" />
           <span className="text-sm sm:text-base font-black tracking-tight">
             {recentlyCompletedObjective}
           </span>
-        </button>
+        </div>
       )}
 
-      {/* Kiosk Footer Bar */}
+      {/* Calm Dark-Night Broadcast Footer */}
       <footer
         className={`border-t py-2 px-4 sm:px-6 text-center text-[11px] font-mono flex items-center justify-between transition-colors ${
           isPartyMode
@@ -216,7 +244,7 @@ const KioskApp: React.FC = () => {
           {isPartyMode ? (
             <span className="flex items-center gap-1.5 text-amber-300/90 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              Party Mode Active • Personal Stats Protected (Nothing Saved)
+              Party Mode Active • Personal Stats Protected
             </span>
           ) : (
             <>
@@ -232,8 +260,8 @@ const KioskApp: React.FC = () => {
         <div>
           <span>
             {isPartyMode
-              ? 'Vice Party Session • Click Stop Party to Resume Saved Stats'
-              : 'Autodarts Bento v1.0 • F11 for Kiosk Fullscreen'}
+              ? 'Vice Party Session • Controlled via iPad Oche Deck'
+              : 'Autodarts Broadcast Kiosk • Controlled via iPad Oche Deck'}
           </span>
         </div>
       </footer>
@@ -242,11 +270,14 @@ const KioskApp: React.FC = () => {
 };
 
 export const App: React.FC = () => {
-  const isRemoteMode =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('remote') === '1';
+  const params =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
 
-  if (isRemoteMode) {
+  if (params?.get('dev') === '1') {
+    return <MobileDevConsoleView />;
+  }
+
+  if (params?.get('remote') === '1') {
     return <MobileRemoteView />;
   }
 

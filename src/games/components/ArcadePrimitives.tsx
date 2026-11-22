@@ -1,7 +1,6 @@
 import React from 'react';
 import { DartThrow } from '../../types/darts';
 import { GameAccent } from '../../types/games';
-import { gameEventBus } from '../../services/gameEventBus';
 import { cn } from '../../lib/utils';
 import { ArrowRight } from 'lucide-react';
 
@@ -63,7 +62,8 @@ const PILL_TONES: Record<string, string> = {
 };
 
 /**
- * Unified 3-Dart Visit Strip + Takeout / Next Turn Prompt (8ft glanceable)
+ * Unified 3-Dart Visit Strip + Passive Broadcast Takeout Banner (8ft glanceable Kiosk Display).
+ * Next-turn override is triggered via the physical board takeout or the iPad Oche Deck.
  */
 export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
   darts,
@@ -71,17 +71,8 @@ export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
   dartTones,
   boardStatus,
   turnComplete = false,
-  onManualNextTurn,
 }) => {
   const showTakeoutPrompt = turnComplete || darts.length >= 3 || boardStatus === 'takeout';
-
-  const handleNext = () => {
-    if (onManualNextTurn) {
-      onManualNextTurn();
-    } else {
-      gameEventBus.injectManualTakeout();
-    }
-  };
 
   return (
     <div className="space-y-2.5">
@@ -122,14 +113,10 @@ export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
       </div>
 
       {showTakeoutPrompt && (
-        <button
-          type="button"
-          onClick={handleNext}
-          className="w-full py-2.5 px-4 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-amber-200 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-colors animate-pulse cursor-pointer"
-        >
+        <div className="w-full py-2.5 px-4 rounded-xl bg-amber-500/18 border border-amber-400/55 text-amber-200 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 animate-pulse">
           <span>Pull Darts for Next Turn</span>
           <ArrowRight className="w-4 h-4" />
-        </button>
+        </div>
       )}
     </div>
   );

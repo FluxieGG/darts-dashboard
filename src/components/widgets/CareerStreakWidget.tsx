@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useCareerStore } from '../../store/useCareerStore';
 import {
@@ -8,15 +8,12 @@ import {
   getBestDaysEver,
   getLocalDateKey,
 } from '../../lib/careerEngine';
-import { CareerVaultModal } from '../career/CareerVaultModal';
 import { Badge } from '../common/Badge';
 import {
   CalendarDays,
   Crown,
   Flame,
   HardDrive,
-  Trophy,
-  ChevronRight,
   Zap,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -36,8 +33,7 @@ export const CareerStreakWidget: React.FC = () => {
   const isDiskSynced = useCareerStore((s) => s.isDiskSynced);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
 
-  const [selectedDateKey, setSelectedDateKey] = useState<string>(() => getLocalDateKey());
-  const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
+  const todayKey = getLocalDateKey();
 
   const playerVault = useMemo(
     () => getPlayerVault(activePlayer.id, activePlayer.name),
@@ -52,7 +48,8 @@ export const CareerStreakWidget: React.FC = () => {
   const bestDays = useMemo(() => getBestDaysEver(playerVault.dailyLogs, 3), [playerVault.dailyLogs]);
   const bestDayDate = playerVault.records.bestDay3DA?.date;
 
-  const selectedLog = playerVault.dailyLogs[selectedDateKey] || null;
+  const selectedLog = playerVault.dailyLogs[todayKey] || bestDays[0] || null;
+  const shownDateKey = selectedLog?.date || todayKey;
   const topSegments = useMemo(() => {
     if (!selectedLog) return [];
     return Object.entries(selectedLog.segmentCounts)
@@ -63,7 +60,7 @@ export const CareerStreakWidget: React.FC = () => {
 
   return (
     <div className="card-matte rounded-2xl p-5 sm:p-6 space-y-5">
-      {/* Header */}
+      {/* Clean Broadcast Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-400/35 flex items-center justify-center text-emerald-400">
@@ -75,20 +72,14 @@ export const CareerStreakWidget: React.FC = () => {
             </h3>
             <p className="text-xs text-slate-400 flex items-center gap-1.5">
               <HardDrive className="w-3 h-3 text-emerald-400" />
-              {isDiskSynced ? 'Synced to data/career-vault.json' : 'Local browser vault active'}
+              {isDiskSynced ? 'Synced to Career Vault' : 'Local browser vault'}
             </p>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsVaultModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-xs font-bold transition-colors cursor-pointer"
-        >
-          <Trophy className="w-3.5 h-3.5" />
-          <span>Open Career Vault</span>
-          <ChevronRight className="w-3.5 h-3.5" />
-        </button>
+        <Badge variant="emerald" size="sm">
+          {playerVault.records.totalCareerDarts.toLocaleString()} Career Darts
+        </Badge>
       </div>
 
       {/* Hero Streak & Volume KPI Strip */}
@@ -179,28 +170,18 @@ export const CareerStreakWidget: React.FC = () => {
               {calendarWeeks.map((week, wIdx) => (
                 <div key={wIdx} className="grid grid-rows-7 gap-1.5">
                   {week.map((cell) => {
-                    const isSelected = cell.dateKey === selectedDateKey;
                     const isBestDay = Boolean(bestDayDate && cell.dateKey === bestDayDate);
 
                     return (
-                      <button
+                      <div
                         key={cell.dateKey}
-                        type="button"
-                        disabled={cell.isFuture}
-                        onClick={() => setSelectedDateKey(cell.dateKey)}
-                        title={
-                          cell.log
-                            ? `${formatReadableDate(cell.dateKey)} — ${cell.log.totalDarts} darts, ${cell.log.threeDartAvg.toFixed(1)} 3DA, High: ${cell.log.highestVisit}`
-                            : `${formatReadableDate(cell.dateKey)} — No throws logged`
-                        }
                         className={cn(
-                          'w-4 h-4 sm:w-5 sm:h-5 rounded-[4px] border transition-all cursor-pointer',
+                          'w-4 h-4 sm:w-5 sm:h-5 rounded-[4px] border transition-all',
                           cell.isFuture
-                            ? 'opacity-20 bg-slate-900 border-white/[0.03] cursor-default'
+                            ? 'opacity-20 bg-slate-900 border-white/[0.03]'
                             : INTENSITY_CLASSES[cell.intensity],
                           cell.isToday && 'ring-1 ring-sky-400',
-                          isBestDay && 'ring-1 ring-amber-400',
-                          isSelected && 'ring-2 ring-white scale-110 z-10'
+                          isBestDay && 'ring-1 ring-amber-400'
                         )}
                       />
                     );
@@ -212,14 +193,14 @@ export const CareerStreakWidget: React.FC = () => {
         </div>
       </div>
 
-      {/* Selected Day Inspector */}
+      {/* Today / Latest Highlight Recap */}
       <div className="rounded-xl p-3.5 bg-slate-900/75 border border-white/10 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="text-xs sm:text-sm font-black text-white">
-              {formatReadableDate(selectedDateKey)}
+              {formatReadableDate(shownDateKey)}
             </span>
-            {selectedDateKey === bestDayDate && (
+            {shownDateKey === bestDayDate && (
               <Badge variant="amber" size="sm">
                 Best Day Ever
               </Badge>
@@ -281,10 +262,9 @@ export const CareerStreakWidget: React.FC = () => {
           </div>
         ) : (
           <p className="text-xs text-slate-400">
-            No darts logged on this day.{' '}
             {isPartyMode
-              ? 'Exit Party Mode to log personal sessions to your Career Vault.'
-              : 'Click any glowing square above or throw a visit to light up today!'}
+              ? 'Party Mode active — personal Career Vault is paused.'
+              : 'Throw a visit to light up today on your streak calendar.'}
           </p>
         )}
       </div>
@@ -297,15 +277,13 @@ export const CareerStreakWidget: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {bestDays.map((day, idx) => (
-              <button
+              <div
                 key={day.date}
-                type="button"
-                onClick={() => setSelectedDateKey(day.date)}
                 className={cn(
-                  'flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer',
-                  selectedDateKey === day.date
-                    ? 'bg-amber-500/15 border-amber-400/50'
-                    : 'bg-slate-900/60 border-white/[0.08] hover:border-white/20'
+                  'flex items-center justify-between p-2.5 rounded-xl border',
+                  idx === 0
+                    ? 'bg-amber-500/12 border-amber-400/40'
+                    : 'bg-slate-900/60 border-white/[0.08]'
                 )}
               >
                 <div>
@@ -319,17 +297,11 @@ export const CareerStreakWidget: React.FC = () => {
                 <div className="text-lg font-black font-mono tabular-nums text-white">
                   {day.threeDartAvg.toFixed(1)}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* Full Career Vault Modal */}
-      <CareerVaultModal
-        isOpen={isVaultModalOpen}
-        onClose={() => setIsVaultModalOpen(false)}
-      />
     </div>
   );
 };

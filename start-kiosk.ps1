@@ -1,5 +1,7 @@
 ﻿param(
+  [switch]$Silent,
   [switch]$StrictKiosk,
+  [int]$BootDelaySec = 0,
   [int]$DashboardPort = 5173,
   [int]$BoardPort = 3180
 )
@@ -8,16 +10,20 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
 
-Write-Host ""
-Write-Host "======================================================" -ForegroundColor Cyan
-Write-Host "   AUTODARTS KIOSK & IPAD OCHE REMOTE LAUNCHER" -ForegroundColor White
-Write-Host "======================================================" -ForegroundColor Cyan
-Write-Host ""
+# Ensure ./data exists for boot log
+$DataDir = Join-Path $ProjectDir 'data'
+if (-not (Test-Path $DataDir)) {
+  New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+}
+$LogFile = Join-Path $DataDir 'kiosk-boot.log'
 
-# ----------------------------------------------------------------------------
-# STEP 1: Ensure Autodarts Desktop / Board Manager (Port 3180) is running
-# ----------------------------------------------------------------------------
-Write-Host "[1/4] Checking Autodarts Desktop (port $BoardPort)..." -ForegroundColor Yellow
+function Write-BootLog([string]$Message, [string]$Color = 'White') {
+  $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+  Add-Content -Path $LogFile -Value "[$stamp] $Message"
+  if (-not $Silent) {
+    Write-Host $Message -ForegroundColor $Color
+  }
+}
 
 function Test-LocalPort([int]$Port) {
   try {
@@ -34,10 +40,26 @@ function Test-LocalPort([int]$Port) {
   return $false
 }
 
+Write-BootLog "======================================================" 'Cyan'
+Write-BootLog "   AUTODARTS ZERO-TOUCH KIOSK BOOT SEQUENCE" 'White'
+Write-BootLog "======================================================" 'Cyan'
+
+# Optional cold-boot settle delay so USB cameras & Wi-Fi initialize cleanly
+if ($BootDelaySec -gt 0) {
+  Write-BootLog "[0/4] Waiting ${BootDelaySec}s for Windows USB cameras & Wi-Fi to settle..." 'DarkGray'
+  Start-Sleep -Seconds $BootDelaySec
+}
+
+# ----------------------------------------------------------------------------
+# STEP 1: Launch Autodarts Desktop & wait for Local Board Manager (Port 3180)
+# ----------------------------------------------------------------------------
+Write-BootLog "[1/4] Checking Autodarts Desktop (port $BoardPort)..." 'Yellow'
+
 if (Test-LocalPort $BoardPort) {
-  Write-Host "      Autodarts Board Manager is already live on port $BoardPort." -ForegroundColor Green
+  Write-BootLog "      Autodarts Board Manager is already live on port $BoardPort." 'Green'
 } else {
   $candidateExes = @(
+    "$env:LOCALAPPDATA\autodarts-desktop\current\autodarts-desktop.exe",
     "$env:LOCALAPPDATA\Programs\autodarts-desktop\Autodarts Desktop.exe",
     "$env:LOCALAPPDATA\Programs\Autodarts\Autodarts Desktop.exe",
     "$env:LOCALAPPDATA\Autodarts\Autodarts Desktop.exe",
@@ -46,38 +68,40 @@ if (Test-LocalPort $BoardPort) {
 
   $foundExe = $candidateExes | Where-Object { Test-Path $_ } | Select-Object -First 1
   if ($foundExe) {
-    Write-Host "      Launching Autodarts Desktop: $foundExe" -ForegroundColor Cyan
+    Write-BootLog "      Launching Autodarts Desktop: $foundExe" 'Cyan'
     Start-Process -FilePath $foundExe
-    Write-Host "      Waiting up to 15s for Board Manager API..." -ForegroundColor DarkGray
-    for ($i = 0; $i -lt 30; $i++) {
+    Write-BootLog "      Waiting up to 25s for Autodarts Board Manager API (port $BoardPort)..." 'DarkGray'
+    for ($i = 0; $i -lt 50; $i++) {
       if (Test-LocalPort $BoardPort) { break }
       Start-Sleep -Milliseconds 500
     }
     if (Test-LocalPort $BoardPort) {
-      Write-Host "      Autodarts Board Manager connected!" -ForegroundColor Green
+      Write-BootLog "      Autodarts Board Manager connected!" 'Green'
     } else {
-      Write-Host "      Autodarts Desktop still initializing (dashboard will auto-connect)." -ForegroundColor DarkYellow
+      Write-BootLog "      Autodarts Desktop still initializing (dashboard will auto-connect)." 'DarkYellow'
     }
   } else {
-    Write-Host "      Autodarts Desktop not found in default paths (continuing anyway — open manually if needed)." -ForegroundColor DarkYellow
+    Write-BootLog "      Autodarts Desktop executable not found in standard paths." 'DarkYellow'
   }
 }
 
 # ----------------------------------------------------------------------------
-# STEP 2: Start Dashboard + LAN Remote Relay + Career Vault + Replay Clipper
+# STEP 2: Start Dashboard + iPad LAN Relay + Career Vault + Replay Clipper
 # ----------------------------------------------------------------------------
-Write-Host "[2/4] Starting Autodarts Dashboard server (port $DashboardPort)..." -ForegroundColor Yellow
+Write-BootLog "[2/4] Starting Autodarts Dashboard server (port $DashboardPort)..." 'Yellow'
 
 if (Test-LocalPort $DashboardPort) {
-  Write-Host "      Dashboard server is already running on port $DashboardPort." -ForegroundColor Green
+  Write-BootLog "      Dashboard server is already running on port $DashboardPort." 'Green'
 } else {
+  $serverStyle = if ($Silent) { 'Hidden' } else { 'Minimized' }
+  $npmCmd = "Set-Location '$ProjectDir'; npm run dev -- --host --port $DashboardPort"
   Start-Process -FilePath "powershell.exe" `
-    -ArgumentList "-NoExit", "-Command", "Set-Location '$ProjectDir'; npm run dev -- --host --port $DashboardPort" `
-    -WindowStyle Minimized
+    -ArgumentList "-NoProfile", "-WindowStyle", $serverStyle, "-Command", $npmCmd `
+    -WindowStyle $serverStyle
 
-  Write-Host "      Waiting for Vite server to come online..." -ForegroundColor DarkGray
+  Write-BootLog "      Waiting for Vite server on port $DashboardPort..." 'DarkGray'
   $ready = $false
-  for ($i = 0; $i -lt 40; $i++) {
+  for ($i = 0; $i -lt 50; $i++) {
     if (Test-LocalPort $DashboardPort) {
       $ready = $true
       break
@@ -86,34 +110,39 @@ if (Test-LocalPort $DashboardPort) {
   }
 
   if ($ready) {
-    Write-Host "      Dashboard server live at http://localhost:$DashboardPort" -ForegroundColor Green
+    Write-BootLog "      Dashboard server live at http://localhost:$DashboardPort" 'Green'
   } else {
-    Write-Host "      Timed out waiting for port $DashboardPort — check the minimized server window." -ForegroundColor Red
+    Write-BootLog "      Timed out waiting for port $DashboardPort." 'Red'
   }
 }
 
 # ----------------------------------------------------------------------------
-# STEP 3: Print iPad Oche Remote LAN URL
+# STEP 3: Verify iPad Oche Deck LAN Relay is listening
 # ----------------------------------------------------------------------------
-Write-Host "[3/4] Detecting LAN URL for iPad Oche Remote..." -ForegroundColor Yellow
-$lanIp = $null
-try {
-  $info = Invoke-RestMethod -Uri "http://127.0.0.1:$DashboardPort/api/remote/info" -TimeoutSec 3
-  if ($info.interfaces -and $info.interfaces.Count -gt 0) {
-    $lanIp = $info.interfaces[0].url
+Write-BootLog "[3/4] Arming iPad Oche Deck LAN Relay..." 'Yellow'
+$lanUrl = $null
+for ($i = 0; $i -lt 8; $i++) {
+  try {
+    $info = Invoke-RestMethod -Uri "http://127.0.0.1:$DashboardPort/api/remote/info" -TimeoutSec 2
+    if ($info.interfaces -and $info.interfaces.Count -gt 0) {
+      $lanUrl = $info.interfaces[0].url
+      break
+    }
+  } catch {
+    Start-Sleep -Milliseconds 400
   }
-} catch {}
+}
 
-if ($lanIp) {
-  Write-Host "      iPad Oche Remote URL: $lanIp" -ForegroundColor Cyan
+if ($lanUrl) {
+  Write-BootLog "      iPad Oche Deck listening at: $lanUrl" 'Cyan'
 } else {
-  Write-Host "      Open the Phone/QR icon in the top header to pair your iPad." -ForegroundColor DarkGray
+  Write-BootLog "      iPad Oche Deck relay online (check QR icon in header)." 'DarkGray'
 }
 
 # ----------------------------------------------------------------------------
-# STEP 4: Launch Edge or Chrome in Kiosk Fullscreen Mode
+# STEP 4: Launch Microsoft Edge (or Chrome) Fullscreen Kiosk Display
 # ----------------------------------------------------------------------------
-Write-Host "[4/4] Launching Kiosk Display..." -ForegroundColor Yellow
+Write-BootLog "[4/4] Launching Fullscreen Kiosk Display..." 'Yellow'
 
 $kioskUrl = "http://localhost:$DashboardPort/?kiosk=1"
 $browserPaths = @(
@@ -130,6 +159,8 @@ if ($browser) {
       "--kiosk", $kioskUrl,
       "--edge-kiosk-type=fullscreen",
       "--autoplay-policy=no-user-gesture-required",
+      "--disable-session-crashed-bubble",
+      "--noerrdialogs",
       "--no-first-run"
     )
   } else {
@@ -137,15 +168,18 @@ if ($browser) {
       "--app=$kioskUrl",
       "--start-fullscreen",
       "--autoplay-policy=no-user-gesture-required",
+      "--disable-session-crashed-bubble",
+      "--noerrdialogs",
       "--no-first-run"
     )
   }
   Start-Process -FilePath $browser -ArgumentList $argsList
-  Write-Host "      Kiosk launched! Press F11 or Alt+F4 anytime to exit fullscreen." -ForegroundColor Green
+  Write-BootLog "      Kiosk launched cleanly! Boot sequence complete." 'Green'
 } else {
   Start-Process $kioskUrl
-  Write-Host "      Opened in default browser (press F11 for Kiosk Fullscreen)." -ForegroundColor Green
+  Write-BootLog "      Opened in default browser." 'Green'
 }
 
-Write-Host ""
-Start-Sleep -Seconds 2
+if (-not $Silent) {
+  Start-Sleep -Seconds 2
+}
