@@ -84,8 +84,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       void refreshCameras();
       setSaveDirInput(saveDir);
+      setWsUrlInput(localWsUrl);
+      setHttpUrlInput(localHttpUrl);
+      setClientIdInput(cloudClientId);
     }
-  }, [isOpen, refreshCameras, saveDir]);
+  }, [isOpen, refreshCameras, saveDir, localWsUrl, localHttpUrl, cloudClientId]);
 
   useEffect(() => {
     const videoEl = previewVideoRef.current;

@@ -3,6 +3,7 @@ import { useCareerStore } from '../../store/useCareerStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { fetchRemoteInfo } from '../../services/remoteBridge';
+import { hydrateDashboardStateFromDisk } from '../../services/dashboardPersistence';
 import {
   CheckCircle2,
   Circle,
@@ -42,8 +43,8 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
   const [stages, setStages] = useState<BootStage[]>([
     {
       id: 'vault',
-      label: '1. Career Vault & Saved Profiles',
-      detail: 'Loading data/career-vault.json & saved clips...',
+      label: '1. Saved Dashboard Layout & Career Vault',
+      detail: 'Loading saved layout, hidden modules, profiles & clips...',
       state: 'pending',
       icon: HardDrive,
     },
@@ -82,18 +83,19 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
     const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 
     const runOrderedBoot = async () => {
-      // STAGE 1: Career Vault & Saved Clips Archive
-      setStage('vault', 'running', 'Hydrating local disk vault & clip archive...');
-      await Promise.all([
+      // STAGE 1: Saved Dashboard Layout/Preferences, Career Vault & Saved Clips Archive
+      setStage('vault', 'running', 'Restoring saved layout, preferences & career vault...');
+      const [dashboardSynced] = await Promise.all([
+        hydrateDashboardStateFromDisk(),
         useCareerStore.getState().hydrateVault(),
         useReplayStore.getState().loadSavedClips(),
       ]);
       if (cancelled) return;
-      const synced = useCareerStore.getState().isDiskSynced;
+      const synced = useCareerStore.getState().isDiskSynced || dashboardSynced;
       setStage(
         'vault',
         'done',
-        synced ? 'Career Vault synced to disk' : 'Loaded local profile cache'
+        synced ? 'Layout, preferences & Career Vault synced to disk' : 'Loaded local profile cache'
       );
       await sleep(160);
 

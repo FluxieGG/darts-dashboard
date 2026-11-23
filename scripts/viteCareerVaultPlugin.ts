@@ -5,6 +5,7 @@ import type { Plugin } from 'vite';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const VAULT_FILE = path.join(DATA_DIR, 'career-vault.json');
+const DASHBOARD_STATE_FILE = path.join(DATA_DIR, 'dashboard-state.json');
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -12,26 +13,50 @@ function ensureDataDir(): void {
   }
 }
 
-function readVaultFromDisk(): string {
+function readJsonFileFromDisk(filePath: string, fallbackJson: string, label: string): string {
   try {
-    if (fs.existsSync(VAULT_FILE)) {
-      return fs.readFileSync(VAULT_FILE, 'utf-8');
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf-8');
     }
   } catch (err) {
-    console.error('[CareerVault] Failed reading vault:', err);
+    console.error(`[${label}] Failed reading file:`, err);
   }
-  return JSON.stringify({ version: 1, players: {}, updatedAt: 0 });
+  return fallbackJson;
 }
 
-function writeVaultAtomically(rawJson: string): { bytes: number; savedAt: number } {
+function writeJsonFileAtomically(filePath: string, rawJson: string): { bytes: number; savedAt: number } {
   ensureDataDir();
-  const tempPath = `${VAULT_FILE}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tempPath, rawJson, 'utf-8');
-  fs.renameSync(tempPath, VAULT_FILE);
+  fs.renameSync(tempPath, filePath);
   return {
     bytes: Buffer.byteLength(rawJson, 'utf-8'),
     savedAt: Date.now(),
   };
+}
+
+function readVaultFromDisk(): string {
+  return readJsonFileFromDisk(
+    VAULT_FILE,
+    JSON.stringify({ version: 1, players: {}, updatedAt: 0 }),
+    'CareerVault'
+  );
+}
+
+function writeVaultAtomically(rawJson: string): { bytes: number; savedAt: number } {
+  return writeJsonFileAtomically(VAULT_FILE, rawJson);
+}
+
+function readDashboardStateFromDisk(): string {
+  return readJsonFileFromDisk(
+    DASHBOARD_STATE_FILE,
+    JSON.stringify({ version: 1, updatedAt: 0 }),
+    'DashboardState'
+  );
+}
+
+function writeDashboardStateAtomically(rawJson: string): { bytes: number; savedAt: number } {
+  return writeJsonFileAtomically(DASHBOARD_STATE_FILE, rawJson);
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -52,12 +77,43 @@ function attachCareerVaultMiddleware(
   middlewares: { use: (handler: (req: IncomingMessage, res: ServerResponse, next: () => void) => void) => void }
 ) {
   middlewares.use((req, res, next) => {
-    if (!req.url || !req.url.startsWith('/api/career/')) {
+    if (!req.url || (!req.url.startsWith('/api/career/') && !req.url.startsWith('/api/dashboard/'))) {
       next();
       return;
     }
 
     const urlPath = req.url.split('?')[0];
+
+    // GET /api/dashboard/state — Load persisted layout, hidden widgets, settings, saved players & replay config
+    if (req.method === 'GET' && urlPath === '/api/dashboard/state') {
+      const content = readDashboardStateFromDisk();
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(content);
+      return;
+    }
+
+    // POST /api/dashboard/state — Atomically persist dashboard layout & preferences to ./data/dashboard-state.json
+    if (req.method === 'POST' && urlPath === '/api/dashboard/state') {
+      readBody(req)
+        .then((raw) => {
+          const parsed = JSON.parse(raw);
+          const pretty = JSON.stringify(parsed, null, 2);
+          const result = writeDashboardStateAtomically(pretty);
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true, ...result, path: 'data/dashboard-state.json' }));
+        })
+        .catch((err) => {
+          console.error('[DashboardState] Save failed:', err);
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: false, error: 'Invalid JSON payload' }));
+        });
+      return;
+    }
 
     // GET /api/career/vault — Load persisted career vault JSON from ./data/career-vault.json
     if (req.method === 'GET' && urlPath === '/api/career/vault') {

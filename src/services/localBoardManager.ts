@@ -143,6 +143,61 @@ export function parseAutodartsThrow(raw: BoardManagerRawThrow, idx: number): Dar
   };
 }
 
+/**
+ * Resolves Autodarts Board Manager HTTP URLs through the same-origin `/api/board` Vite proxy
+ * when targeting local port 3180 (or relative `/api/board/...` paths). This prevents Chromium/Edge
+ * Local Network Access ("Allow localhost") prompts on startup.
+ */
+export function resolveBoardHttpUrl(rawUrl?: string): string {
+  const input = (rawUrl || '/api/board/api/state').trim();
+  if (input.startsWith('/')) {
+    return input;
+  }
+  try {
+    const parsed = new URL(input);
+    if (
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      parsed.port === '3180'
+    ) {
+      return `/api/board${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    // Keep custom URL as-is
+  }
+  return input;
+}
+
+/**
+ * Resolves Autodarts Board Manager WebSocket URLs through the same-origin `/api/board` Vite proxy
+ * when targeting local port 3180 (or relative `/api/board/...` paths).
+ */
+export function resolveBoardWsUrl(rawUrl?: string): string {
+  const input = (rawUrl || '/api/board/api/events').trim();
+  const buildSameOriginWs = (pathWithQuery: string) => {
+    if (typeof window === 'undefined') {
+      return `ws://127.0.0.1:5173${pathWithQuery}`;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${pathWithQuery}`;
+  };
+
+  if (input.startsWith('/')) {
+    return buildSameOriginWs(input);
+  }
+  try {
+    const parsed = new URL(input);
+    if (
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      parsed.port === '3180'
+    ) {
+      return buildSameOriginWs(`/api/board${parsed.pathname}${parsed.search}`);
+    }
+  } catch {
+    // Keep custom URL as-is
+  }
+  return input;
+}
+
 export class LocalBoardManagerService {
   private ws: WebSocket | null = null;
   private wsUrl: string;
@@ -168,8 +223,8 @@ export class LocalBoardManagerService {
   private onConnectionChange?: (connected: boolean) => void;
 
   constructor(options: LocalBoardManagerOptions = {}) {
-    this.wsUrl = options.wsUrl || 'ws://127.0.0.1:3180/api/events';
-    this.httpUrl = options.httpUrl || 'http://127.0.0.1:3180/api/state';
+    this.wsUrl = resolveBoardWsUrl(options.wsUrl);
+    this.httpUrl = resolveBoardHttpUrl(options.httpUrl);
     this.pollIntervalMs = options.pollIntervalMs ?? 500;
     this.onStateUpdate = options.onStateUpdate;
     this.onVisitSync = options.onVisitSync;

@@ -97,20 +97,45 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
   ],
 };
 
+export function normalizeLayout(
+  raw: DashboardLayout | null | undefined
+): DashboardLayout {
+  if (!raw || !Array.isArray(raw.widgets)) {
+    return DEFAULT_LAYOUT;
+  }
+
+  const defaultMap = new Map(DEFAULT_LAYOUT.widgets.map((w) => [w.id, w]));
+  const seenIds = new Set<string>();
+  const validSaved = raw.widgets
+    .filter((w) => {
+      if (!w || !defaultMap.has(w.id) || seenIds.has(w.id)) return false;
+      seenIds.add(w.id);
+      return true;
+    })
+    .map((w) => {
+      const def = defaultMap.get(w.id)!;
+      return {
+        ...def,
+        enabled: typeof w.enabled === 'boolean' ? w.enabled : def.enabled,
+        order: typeof w.order === 'number' && Number.isFinite(w.order) ? w.order : def.order,
+        colSpan: (w.colSpan === 1 || w.colSpan === 2 ? w.colSpan : def.colSpan) as 1 | 2,
+      };
+    });
+
+  const missingWidgets = DEFAULT_LAYOUT.widgets.filter((w) => !seenIds.has(w.id));
+  const merged = [...validSaved, ...missingWidgets]
+    .sort((a, b) => a.order - b.order)
+    .map((w, idx) => ({ ...w, order: idx }));
+
+  return { widgets: merged };
+}
+
 export function loadSavedLayout(): DashboardLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.LAYOUT);
     if (!raw) return DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as DashboardLayout;
-    if (!parsed || !Array.isArray(parsed.widgets)) return DEFAULT_LAYOUT;
-
-    const existingIds = new Set(parsed.widgets.map((w) => w.id));
-    const missingWidgets = DEFAULT_LAYOUT.widgets.filter((w) => !existingIds.has(w.id));
-    const merged = [...parsed.widgets, ...missingWidgets]
-      .sort((a, b) => a.order - b.order)
-      .map((w, idx) => ({ ...w, order: idx }));
-
-    return { widgets: merged };
+    return normalizeLayout(parsed);
   } catch {
     return DEFAULT_LAYOUT;
   }

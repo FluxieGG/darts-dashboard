@@ -24,12 +24,17 @@ export default defineConfig({
     port: 5173,
     host: true,
     proxy: {
-      // Proxy local Autodarts Board Manager API (HTTP & WS)
+      // Proxy local Autodarts Board Manager API (HTTP & WS) same-origin so Edge/Chrome never prompt for local network access
       '/api/board': {
         target: 'http://127.0.0.1:3180',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/board/, ''),
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // Silently ignore transient ECONNREFUSED while Autodarts Desktop starts up
+          });
+        },
       },
       // Proxy Autodarts Cloud API
       '/api/autodarts': {
@@ -43,6 +48,14 @@ export default defineConfig({
   preview: {
     port: 4173,
     host: true,
+    proxy: {
+      '/api/board': {
+        target: 'http://127.0.0.1:3180',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/board/, ''),
+        ws: true,
+      },
+    },
   },
   build: {
     chunkSizeWarningLimit: 1000,

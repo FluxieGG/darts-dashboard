@@ -23,6 +23,10 @@ import { LocalBoardManagerService } from './services/localBoardManager';
 import { generateSimulatedThrow } from './services/simulator';
 import { useKioskRemoteBridge } from './services/remoteBridge';
 import { useKioskDevBridge } from './services/devLogger';
+import {
+  hydrateDashboardStateFromDisk,
+  startDashboardDiskSync,
+} from './services/dashboardPersistence';
 import { DEFAULT_DART_COLOR, hexToRgbTriplet } from './lib/playerThemes';
 import { Trophy } from 'lucide-react';
 
@@ -55,10 +59,22 @@ const KioskApp: React.FC = () => {
 
   const boardServiceRef = useRef<LocalBoardManagerService | null>(null);
 
-  // Hidden Kiosk Keyboard Shortcuts:
-  // - Ctrl + Shift + D -> PIN 0161 Dev Console QR Modal
-  // - Ctrl + Shift + S -> Emergency Hardware Settings Modal (e.g. USB webcam dropdown)
+  // Kiosk Keyboard Shortcuts:
+  // - F                 -> Instant Fullscreen Kiosk Mode toggle (ignores editable fields)
+  // - Ctrl + Shift + D  -> PIN 0161 Dev Console QR Modal
+  // - Ctrl + Shift + S  -> Emergency Hardware Settings Modal (e.g. USB webcam dropdown)
   useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName.toLowerCase();
+      return (
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        target.isContentEditable
+      );
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
@@ -66,6 +82,19 @@ const KioskApp: React.FC = () => {
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') {
         e.preventDefault();
         setIsSettingsOpen((prev) => !prev);
+      } else if (
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        e.key.toLowerCase() === 'f' &&
+        !isEditableTarget(e.target)
+      ) {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -81,15 +110,30 @@ const KioskApp: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [recentlyCompletedObjective, dismissObjectiveToast]);
 
-  // Hydrate Career Vault & Saved Clips immediately on startup so restarts never miss disk clips
+  // Hydrate Saved Dashboard Layout/Settings/Players, Career Vault & Saved Clips on startup
+  // and keep dashboard layout/data continuously persisted to ./data/dashboard-state.json
   useEffect(() => {
+    let stopSync: (() => void) | null = null;
+    let cancelled = false;
+
+    void hydrateDashboardStateFromDisk().then(() => {
+      if (!cancelled) {
+        stopSync = startDashboardDiskSync();
+      }
+    });
     void hydrateVault();
     void loadSavedClips();
+
+    return () => {
+      cancelled = true;
+      stopSync?.();
+    };
   }, [hydrateVault, loadSavedClips]);
 
   // Fallback hydration if user skips KioskBootScreen early
   useEffect(() => {
     if (!isBootingKiosk) {
+      void hydrateDashboardStateFromDisk();
       void hydrateVault();
       void loadSavedClips();
     }

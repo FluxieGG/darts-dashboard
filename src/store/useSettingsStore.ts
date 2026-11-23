@@ -24,12 +24,36 @@ interface SettingsState {
   setShowDevCoords: (show: boolean) => void;
 }
 
+function migrateLocalBoardUrl(rawUrl: string, fallbackPath: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return fallbackPath;
+  if (trimmed.startsWith('/')) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      parsed.port === '3180'
+    ) {
+      return `/api/board${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    // keep custom
+  }
+  return trimmed;
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       dataMode: (import.meta.env.VITE_DEFAULT_DATA_MODE as DataConnectionMode) || 'local',
-      localWsUrl: (import.meta.env.VITE_BOARD_MANAGER_WS as string) || 'ws://127.0.0.1:3180/api/events',
-      localHttpUrl: (import.meta.env.VITE_BOARD_MANAGER_HTTP as string) || 'http://127.0.0.1:3180/api/state',
+      localWsUrl: migrateLocalBoardUrl(
+        (import.meta.env.VITE_BOARD_MANAGER_WS as string) || '/api/board/api/events',
+        '/api/board/api/events'
+      ),
+      localHttpUrl: migrateLocalBoardUrl(
+        (import.meta.env.VITE_BOARD_MANAGER_HTTP as string) || '/api/board/api/state',
+        '/api/board/api/state'
+      ),
       cloudClientId: (import.meta.env.VITE_AUTODARTS_CLIENT_ID as string) || '',
       cloudRedirectUri:
         (import.meta.env.VITE_AUTODARTS_REDIRECT_URI as string) ||
@@ -50,6 +74,12 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'autodarts_dashboard_settings_v2',
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.localWsUrl = migrateLocalBoardUrl(state.localWsUrl, '/api/board/api/events');
+          state.localHttpUrl = migrateLocalBoardUrl(state.localHttpUrl, '/api/board/api/state');
+        }
+      },
     }
   )
 );

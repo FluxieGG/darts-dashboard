@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DashboardLayout, WidgetConfig, WidgetId } from '../types/config';
-import { DEFAULT_LAYOUT, loadSavedLayout, saveLayout } from '../lib/storage';
+import { DEFAULT_LAYOUT, loadSavedLayout, normalizeLayout, saveLayout } from '../lib/storage';
 
 interface LayoutState {
   layout: DashboardLayout;
@@ -13,6 +13,7 @@ interface LayoutState {
   setColSpan: (id: WidgetId, colSpan: 1 | 2) => void;
   resetLayout: () => void;
   setLayout: (newLayout: DashboardLayout) => void;
+  hydrateLayout: (newLayout: DashboardLayout) => void;
   openDrawer: () => void;
   closeDrawer: () => void;
   toggleDrawer: () => void;
@@ -81,8 +82,15 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   setLayout: (newLayout: DashboardLayout) => {
-    saveLayout(newLayout);
-    set({ layout: newLayout });
+    const normalized = normalizeLayout(newLayout);
+    saveLayout(normalized);
+    set({ layout: normalized });
+  },
+
+  hydrateLayout: (newLayout: DashboardLayout) => {
+    const normalized = normalizeLayout(newLayout);
+    saveLayout(normalized);
+    set({ layout: normalized });
   },
 
   openDrawer: () => set({ isDrawerOpen: true }),
