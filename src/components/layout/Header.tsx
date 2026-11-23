@@ -3,6 +3,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useGameStore } from '../../store/useGameStore';
 import { useReplayStore } from '../../store/useReplayStore';
+import { getGameDefinition } from '../../games/gameRegistry';
 import { Badge } from '../common/Badge';
 import { DEFAULT_DART_COLOR, hexToRgbTriplet } from '../../lib/playerThemes';
 import {
@@ -36,8 +37,15 @@ export const Header: React.FC<HeaderProps> = ({
   const activePlayer = usePlayerStore((s) => s.getActivePlayer());
   const dataMode = useSettingsStore((s) => s.dataMode);
   const activeView = useGameStore((s) => s.activeView);
+  const activeGameId = useGameStore((s) => s.activeGameId);
   const replayStatus = useReplayStore((s) => s.status);
-  const isGamesView = activeView !== 'dashboard';
+  const activeGameDef = activeGameId ? getGameDefinition(activeGameId) : undefined;
+  const isPracticeView =
+    activeView === 'practice-lobby' ||
+    (activeView === 'game-active' && activeGameDef?.mode === 'practice');
+  const isArcadeView =
+    activeView === 'games-lobby' ||
+    (activeView === 'game-active' && activeGameDef?.mode !== 'practice');
 
   // Secret 5-tap on the AD crest opens PIN (0161) Dev Console QR Modal
   const tapCountRef = useRef(0);
@@ -94,10 +102,12 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 {isPartyMode
-                  ? isGamesView
+                  ? isArcadeView
                     ? 'Vice Party Arcade'
                     : 'Vice Party Mode'
-                  : isGamesView
+                  : isPracticeView
+                  ? 'Solo Training Mode'
+                  : isArcadeView
                   ? 'Tech Darts Arcade'
                   : 'Live Broadcast'}
               </span>
@@ -110,9 +120,11 @@ export const Header: React.FC<HeaderProps> = ({
           {isPartyMode ? (
             <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-purple-950/70 border border-amber-400/35 text-sm sm:text-base font-bold text-amber-200 shadow-[0_0_16px_-4px_rgba(250,204,21,0.25)]">
               <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
-              <span className="truncate">Party Session</span>
+              <span className="truncate max-w-[180px] sm:max-w-[240px]">
+                {activePlayer.name}
+              </span>
               <span className="hidden md:inline text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-200 border border-purple-400/30">
-                Unsaved
+                Party • Unsaved
               </span>
             </div>
           ) : (

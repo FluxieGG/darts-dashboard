@@ -57,9 +57,27 @@ export interface PlayerCareerVault {
   completedObjectiveIds: string[];
 }
 
+export interface GameLeaderboardEntry {
+  gameId: string;
+  gameTitle: string;
+  mode: 'arcade' | 'practice' | 'online';
+  playerId: string;
+  playerName: string;
+  colorHex: string;
+  wins: number;
+  gamesPlayed: number;
+  bestStatValue: number;
+  bestStatDisplay: string;
+  bestStatLabel: string;
+  lowerIsBetter?: boolean;
+  lastPlayedAt: number;
+}
+
 export interface CareerVaultData {
   version: number;
   players: Record<string, PlayerCareerVault>;
+  /** Persistent per-game & per-drill leaderboards keyed by gameId */
+  gameLeaderboards?: Record<string, GameLeaderboardEntry[]>;
   updatedAt: number;
 }
 

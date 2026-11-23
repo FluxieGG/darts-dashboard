@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { RemoteCommand, RemoteKioskState, RemotePresencePayload } from '../../types/remote';
 import { ReplayClipCategory, ReplayTriggerSettings } from '../../types/replay';
 import { sendRemoteCommand } from '../../services/remoteBridge';
-import { GAME_REGISTRY, getGameDefinition } from '../../games/gameRegistry';
+import { getArcadeGames, getPracticeDrills, getGameDefinition } from '../../games/gameRegistry';
 import { DART_COLOR_OPTIONS, DEFAULT_DART_COLOR, hexToRgbTriplet } from '../../lib/playerThemes';
 import { DevConsoleQrModal } from '../dev/DevConsoleQrModal';
 import { Badge } from '../common/Badge';
@@ -48,8 +48,9 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-type MobileTab = 'control' | 'games' | 'players' | 'replays' | 'display';
-type TabletRightPanel = 'games' | 'players' | 'replays' | 'display';
+type MobileTab = 'control' | 'mode' | 'players' | 'replays' | 'display';
+type TabletRightPanel = 'mode' | 'players' | 'replays' | 'display';
+type AppMode = 'dashboard' | 'arcade' | 'practice';
 type ClipFilter = 'all' | ReplayClipCategory;
 
 const QUICK_TARGETS = ['T20', 'S20', 'T19', 'T18', 'D20', 'D16', 'Bull', '25', 'Miss'] as const;
@@ -75,7 +76,7 @@ export const MobileRemoteView: React.FC = () => {
   const [connected, setConnected] = useState(false);
   const [kioskOnline, setKioskOnline] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>('control');
-  const [tabletRightPanel, setTabletRightPanel] = useState<TabletRightPanel>('games');
+  const [tabletRightPanel, setTabletRightPanel] = useState<TabletRightPanel>('mode');
   const [toast, setToast] = useState<string | null>(null);
 
   const [newPlayerName, setNewPlayerName] = useState('');
@@ -86,8 +87,17 @@ export const MobileRemoteView: React.FC = () => {
   const [throwMult, setThrowMult] = useState<'S' | 'D' | 'T'>('S');
   const [showMobileThrowPad, setShowMobileThrowPad] = useState(false);
   const [clipFilter, setClipFilter] = useState<ClipFilter>('all');
+  const [diskClips, setDiskClips] = useState<RemoteKioskState['recentClips']>([]);
+  const [loadingClips, setLoadingClips] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [isDevQrOpen, setIsDevQrOpen] = useState(false);
+
+  // Online Match Co-Pilot setup inputs
+  const [onlineStartScore, setOnlineStartScore] = useState<501 | 301 | 701>(501);
+  const [onlineOutRule, setOnlineOutRule] = useState<'double' | 'straight'>('double');
+  const [onlineLegsToWin, setOnlineLegsToWin] = useState<number>(3);
+  const [onlineOpponent, setOnlineOpponent] = useState<string>('');
+  const [manualScoreInput, setManualScoreInput] = useState<string>('');
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const lastEventAtRef = useRef<number>(0);
@@ -109,6 +119,37 @@ export const MobileRemoteView: React.FC = () => {
       devTapCountRef.current = 0;
     }, 2500);
   };
+
+  const pullSavedClipsFromServer = useCallback(async () => {
+    setLoadingClips(true);
+    try {
+      const res = await fetch('/api/replays/list', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.ok && Array.isArray(data.clips)) {
+        setDiskClips(
+          data.clips.map((c: Record<string, unknown>) => ({
+            id: String(c.id || c.relativePath || c.filename || ''),
+            filename: String(c.filename || ''),
+            relativePath: c.relativePath ? String(c.relativePath) : undefined,
+            subfolder: c.subfolder ? String(c.subfolder) : undefined,
+            category: (c.category as ReplayClipCategory | undefined) || 'game',
+            playerName: String(c.playerName || 'Player'),
+            segmentName: String(c.segmentName || 'CLIP'),
+            score: Number(c.score || 0),
+            reason: String(c.reason || c.filename || 'Saved Clip'),
+            durationSec: Number(c.durationSec || 10),
+            isDualCamera: Boolean(c.isDualCamera),
+            createdAt: Number(c.createdAt || Date.now()),
+          }))
+        );
+      }
+    } catch {
+      // ignore offline error
+    } finally {
+      setLoadingClips(false);
+    }
+  }, []);
 
   const pullLatestState = useCallback(async () => {
     try {
@@ -172,12 +213,14 @@ export const MobileRemoteView: React.FC = () => {
 
   useEffect(() => {
     void pullLatestState();
+    void pullSavedClipsFromServer();
     connectStream();
 
     // iPadOS Safari sleep/wake recovery: immediately refresh state & reopen SSE stream
     const handleWake = () => {
       if (document.visibilityState === 'visible') {
         void pullLatestState();
+        void pullSavedClipsFromServer();
         if (!eventSourceRef.current || eventSourceRef.current.readyState === EventSource.CLOSED) {
           connectStream();
         }
@@ -228,12 +271,25 @@ export const MobileRemoteView: React.FC = () => {
     }, 120);
   };
 
+  // Refresh saved clips from disk whenever the user opens the Replays tab
+  useEffect(() => {
+    if (tabletRightPanel === 'replays' || mobileTab === 'replays') {
+      void pullSavedClipsFromServer();
+    }
+  }, [tabletRightPanel, mobileTab, pullSavedClipsFromServer]);
+
   const handleManualResync = async () => {
     setSyncing(true);
+    flashToast('Recalibrating Autodarts cameras & resyncing...');
+    await sendRemoteCommand({ type: 'resync_and_recalibrate' });
     connectStream();
-    await pullLatestState();
-    setSyncing(false);
-    flashToast('Synced with Kiosk');
+    await Promise.all([pullLatestState(), pullSavedClipsFromServer()]);
+    window.setTimeout(() => {
+      void pullLatestState();
+      void pullSavedClipsFromServer();
+      setSyncing(false);
+      flashToast('Cameras Recalibrated & Kiosk Synced!');
+    }, 1800);
   };
 
   const handleAddPlayerSubmit = (e: React.FormEvent) => {
@@ -261,6 +317,38 @@ export const MobileRemoteView: React.FC = () => {
   const isPartyMode = Boolean(state?.isPartyMode);
   const activeGame = state?.activeGame ?? null;
   const activeGameDef = activeGame ? getGameDefinition(activeGame.id) : undefined;
+  const currentMode: AppMode =
+    state?.activeView === 'practice-lobby' || activeGame?.mode === 'practice'
+      ? 'practice'
+      : state?.activeView === 'games-lobby' || activeGame?.mode === 'arcade'
+      ? 'arcade'
+      : 'dashboard';
+
+  const handleSwitchMode = (mode: AppMode) => {
+    const view =
+      mode === 'dashboard'
+        ? 'dashboard'
+        : mode === 'practice'
+        ? 'practice-lobby'
+        : 'games-lobby';
+    const label =
+      mode === 'dashboard'
+        ? 'Stats Dashboard'
+        : mode === 'practice'
+        ? 'Solo Training Mode'
+        : 'Tech Darts Arcade';
+    setTabletRightPanel('mode');
+    setMobileTab('mode');
+    void dispatch({ type: 'navigate', view }, label);
+  };
+
+  const modeTabMeta =
+    currentMode === 'dashboard'
+      ? { label: 'Goals', icon: Trophy }
+      : currentMode === 'practice'
+      ? { label: 'Drills', icon: Crosshair }
+      : { label: 'Games', icon: Gamepad2 };
+
   const activeTintHex = state?.activeTintHex ?? null;
   const isTurnTint = Boolean(activeGame && activeTintHex);
   const canUndoNow = Boolean(activeGame && activeGame.phase === 'playing' && activeGame.canUndo);
@@ -291,6 +379,8 @@ export const MobileRemoteView: React.FC = () => {
           <span className="text-xs sm:text-sm font-mono uppercase tracking-wider text-slate-200 font-black truncate">
             {activeGame
               ? `${activeGame.title} • ${activeGame.phase.toUpperCase()}`
+              : state?.activeView === 'practice-lobby'
+              ? 'Solo Training Mode'
               : state?.activeView === 'games-lobby'
               ? 'Tech Darts Arcade Showcase'
               : `${state?.activePlayer.name || 'Player'} • Stats Dashboard`}
@@ -493,7 +583,10 @@ export const MobileRemoteView: React.FC = () => {
           type="button"
           disabled={!camBuffering || camCapturing}
           onClick={() =>
-            void dispatch({ type: 'trigger_manual_replay' }, 'Recording 10s Split-Cam Clip!')
+            void dispatch(
+              { type: 'trigger_manual_replay' },
+              'Recording 20s Clip (15s back + 5s)!'
+            )
           }
           className={cn(
             'p-3.5 rounded-2xl border flex items-center justify-center gap-2 text-xs sm:text-sm font-black transition-all active:scale-[0.97]',
@@ -505,7 +598,7 @@ export const MobileRemoteView: React.FC = () => {
           )}
         >
           <Clapperboard className="w-4 h-4" />
-          <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (10s)'}</span>
+          <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (20s)'}</span>
         </button>
 
         <button
@@ -649,12 +742,530 @@ export const MobileRemoteView: React.FC = () => {
   );
 
   // =========================================================================
-  // RIGHT PANEL 1: GAMES & SETUP
+  // RIGHT PANEL 1 (CONTEXT-AWARE BY MODE):
+  //   - Dashboard -> Daily & Weekly Objectives
+  //   - Arcade    -> 8 Arcade Games & Match Setup
+  //   - Practice  -> Solo Training Drills & Drill Setup
   // =========================================================================
-  const renderGamesPanel = () => (
-    <div className="space-y-4">
-      {/* ACTIVE GAME SETUP */}
-      {activeGame && activeGame.phase === 'setup' && (
+  const renderObjectivesPanel = () => {
+    const daily = state?.dailyObjectives || [];
+    const weekly = state?.weeklyObjectives || [];
+    const om = state?.onlineMatch;
+
+    const renderOnlineMatchCard = () => (
+      <section
+        className={cn(
+          'card-matte rounded-2xl p-4 space-y-3',
+          om?.isActive ? 'border-sky-400/55' : 'border-white/10'
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs font-mono uppercase tracking-wider font-black text-sky-300 flex items-center gap-1.5">
+            <Target className="w-3.5 h-3.5" />
+            Online Match &amp; Checkout Co-Pilot
+          </div>
+          {om?.isActive && (
+            <Badge variant="emerald" size="sm" dot>
+              Live {om.startScore}
+            </Badge>
+          )}
+        </div>
+
+        {om?.isActive ? (
+          <div className="space-y-3">
+            {/* Live Score & Legs */}
+            <div className="p-3 rounded-xl bg-slate-900/90 border border-white/10 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-mono uppercase text-slate-400">
+                  Remaining ({om.outRule === 'double' ? 'Double Out' : 'Straight'})
+                </div>
+                <div className="text-3xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
+                  {om.remaining}
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 mt-1">
+                  3DA {om.legThreeDartAvg.toFixed(1)} • {om.dartsInLeg} darts
+                </div>
+              </div>
+
+              <div className="text-right space-y-1">
+                <div className="text-xs font-mono font-black text-emerald-300 tabular-nums">
+                  Legs {om.playerLegs} — {om.opponentLegs}
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 truncate max-w-[130px]">
+                  vs {om.opponentName}
+                </div>
+                {om.checkoutRoute && (
+                  <div className="flex items-center justify-end gap-1 pt-0.5">
+                    {om.checkoutRoute.map((step, i) => (
+                      <span
+                        key={`${step}-${i}`}
+                        className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/50 text-[11px] font-mono font-black text-emerald-200"
+                      >
+                        {step}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Controls */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={!om.canUndo}
+                onClick={() => void dispatch({ type: 'online_match_undo' }, 'Undid Dart')}
+                className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-white/10 disabled:opacity-40 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
+              >
+                Undo Dart
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void dispatch({ type: 'online_match_opp_leg' }, 'Opponent Leg Logged')
+                }
+                className="py-2 px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-xs font-bold text-amber-200 cursor-pointer"
+              >
+                Opp Won Leg
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void dispatch({ type: 'online_match_reset_leg' }, 'Reset Current Leg')
+                }
+                className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
+              >
+                Reset Leg
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void dispatch({ type: 'online_match_stop' }, 'Ended Online Match')
+                }
+                className="py-2 px-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-xs font-bold text-rose-200 cursor-pointer"
+              >
+                End Match
+              </button>
+            </div>
+
+            {/* Mid-Leg Manual Score Sync */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const val = parseInt(manualScoreInput, 10);
+                if (!Number.isNaN(val) && val >= 2 && val <= om.startScore) {
+                  void dispatch(
+                    { type: 'online_match_set_score', remaining: val },
+                    `Synced Remaining -> ${val}`
+                  );
+                  setManualScoreInput('');
+                }
+              }}
+              className="flex gap-1.5"
+            >
+              <input
+                type="number"
+                min={2}
+                max={om.startScore}
+                value={manualScoreInput}
+                onChange={(e) => setManualScoreInput(e.target.value)}
+                placeholder="Sync exact score (e.g. 141)..."
+                className="flex-1 rounded-lg bg-slate-950/80 border border-white/10 px-2.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-sky-400"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-sky-200 text-xs font-bold cursor-pointer"
+              >
+                Sync
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-3 gap-1.5">
+              {([501, 301, 701] as const).map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => setOnlineStartScore(sc)}
+                  className={cn(
+                    'py-1.5 rounded-lg text-xs font-mono font-black border cursor-pointer',
+                    onlineStartScore === sc
+                      ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
+                      : 'bg-slate-900 border-white/10 text-slate-400'
+                  )}
+                >
+                  {sc}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              {(
+                [
+                  { id: 'double', label: 'Double Out' },
+                  { id: 'straight', label: 'Straight Out' },
+                ] as const
+              ).map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setOnlineOutRule(r.id)}
+                  className={cn(
+                    'py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer',
+                    onlineOutRule === r.id
+                      ? 'bg-emerald-500/20 border-emerald-400/55 text-emerald-200'
+                      : 'bg-slate-900 border-white/10 text-slate-400'
+                  )}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={onlineOpponent}
+                onChange={(e) => setOnlineOpponent(e.target.value)}
+                placeholder="Opponent name (optional)..."
+                maxLength={24}
+                className="flex-1 rounded-lg bg-slate-900 border border-white/10 px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-400"
+              />
+              <select
+                value={onlineLegsToWin}
+                onChange={(e) => setOnlineLegsToWin(Number(e.target.value))}
+                className="rounded-lg bg-slate-900 border border-white/10 px-2 py-1.5 text-xs font-mono text-slate-200"
+              >
+                <option value={1}>1 Leg</option>
+                <option value={3}>FT3</option>
+                <option value={5}>FT5</option>
+                <option value={7}>FT7</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch(
+                  {
+                    type: 'online_match_start',
+                    startScore: onlineStartScore,
+                    outRule: onlineOutRule,
+                    legsToWin: onlineLegsToWin,
+                    opponentName: onlineOpponent.trim() || 'Online Opponent',
+                  },
+                  `Started Online ${onlineStartScore} Co-Pilot!`
+                )
+              }
+              className="w-full py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              Start Live {onlineStartScore} Tracker
+            </button>
+          </div>
+        )}
+      </section>
+    );
+
+    const renderObjectiveCard = (
+      title: string,
+      period: 'daily' | 'weekly',
+      items: RemoteKioskState['dailyObjectives'],
+      accentText: string
+    ) => (
+      <section className="card-matte rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className={cn('text-xs font-mono uppercase tracking-wider font-black flex items-center gap-1.5', accentText)}>
+            <Trophy className="w-3.5 h-3.5" />
+            {title}
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              void dispatch(
+                { type: 'reroll_objectives', period },
+                period === 'daily' ? 'Rerolled Daily Goals' : 'Rerolled Weekly Goals'
+              )
+            }
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/10 text-[11px] font-bold text-slate-300 cursor-pointer"
+          >
+            <Dices className="w-3 h-3" />
+            Reroll
+          </button>
+        </div>
+
+        {items.length === 0 ? (
+          <div className="py-4 text-center text-xs font-mono text-slate-500">
+            Loading objectives from Career Vault...
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {items.map((obj) => (
+              <div
+                key={obj.id}
+                className={cn(
+                  'p-3 rounded-xl border space-y-1.5 transition-colors',
+                  obj.completed
+                    ? 'bg-emerald-500/12 border-emerald-400/45'
+                    : 'bg-slate-900/80 border-white/[0.08]'
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-black text-white flex items-center gap-1.5">
+                      {obj.completed && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                      <span className="truncate">{obj.title}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                      {obj.description}
+                    </div>
+                  </div>
+                  <span className="shrink-0 px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/10 text-[10px] font-mono uppercase text-slate-300">
+                    {obj.flavor}
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="h-2 rounded-full bg-slate-950 overflow-hidden border border-white/[0.07]">
+                    <div
+                      className={cn(
+                        'h-full transition-all duration-300',
+                        obj.completed
+                          ? 'bg-emerald-400'
+                          : period === 'daily'
+                          ? 'bg-gradient-to-r from-emerald-500 to-sky-400'
+                          : 'bg-gradient-to-r from-purple-500 to-amber-400'
+                      )}
+                      style={{ width: `${Math.min(100, Math.round(obj.pct))}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 tabular-nums">
+                    <span>
+                      {obj.current} / {obj.target} {obj.unitLabel}
+                    </span>
+                    <span className={obj.completed ? 'text-emerald-300 font-bold' : ''}>
+                      {obj.completed ? 'COMPLETE' : `${Math.round(obj.pct)}%`}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+
+    return (
+      <div className="space-y-4">
+        {isPartyMode && (
+          <div className="card-matte rounded-2xl p-3.5 border-amber-400/40 flex items-center gap-3">
+            <ShieldCheck className="w-5 h-5 text-amber-300 shrink-0" />
+            <div className="text-xs text-slate-200 leading-relaxed">
+              <strong>Party Mode (Temp User):</strong> Full goals, stats &amp; games work live —
+              nothing is saved except action replay clips!
+            </div>
+          </div>
+        )}
+
+        {renderObjectiveCard('Daily Objectives', 'daily', daily, 'text-emerald-300')}
+        {renderObjectiveCard('Weekly Objectives', 'weekly', weekly, 'text-amber-300')}
+        {renderOnlineMatchCard()}
+      </div>
+    );
+  };
+
+  const renderPracticeDrillsPanel = () => {
+    const drills = getPracticeDrills();
+    const isPracticeGame = activeGame?.mode === 'practice';
+
+    return (
+      <div className="space-y-4">
+        {/* ACTIVE SOLO DRILL SETUP */}
+        {isPracticeGame && activeGame && activeGame.phase === 'setup' && (
+          <section className="card-matte rounded-2xl p-4 sm:p-5 border-sky-400/50 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base sm:text-lg font-black text-white">
+                  {activeGame.title} — Drill Setup
+                </h2>
+                <p className="text-xs text-slate-400 font-mono">
+                  Solo Training • {activeGame.roster[0]?.name || state?.activePlayer.name || 'Player'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Solo Drills')}
+                className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 cursor-pointer"
+              >
+                All Drills
+              </button>
+            </div>
+
+            {activeGameDef && (
+              <p className="text-xs text-slate-300/90 leading-relaxed">
+                {activeGameDef.description}
+              </p>
+            )}
+
+            {/* Dynamic Drill Config Options */}
+            {activeGameDef && activeGameDef.configOptions.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-white/10">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                  Drill Settings
+                </div>
+                {activeGameDef.configOptions.map((opt) => {
+                  const currentVal = activeGame.matchConfig?.[opt.key] ?? opt.defaultValue;
+                  return (
+                    <div
+                      key={opt.key}
+                      className="p-2.5 rounded-xl bg-slate-900/70 border border-white/[0.07] space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-white">{opt.label}</span>
+                        {opt.type === 'toggle' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void dispatch({
+                                type: 'set_match_config',
+                                key: opt.key,
+                                value: !currentVal,
+                              })
+                            }
+                            className={cn(
+                              'w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer',
+                              currentVal ? 'bg-sky-500' : 'bg-slate-700'
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                'w-5 h-5 rounded-full bg-white transition-transform',
+                                currentVal ? 'translate-x-5' : 'translate-x-0'
+                              )}
+                            />
+                          </button>
+                        )}
+                      </div>
+                      {opt.type === 'select' && opt.options && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {opt.options.map((choice) => (
+                            <button
+                              key={String(choice.value)}
+                              type="button"
+                              onClick={() =>
+                                void dispatch({
+                                  type: 'set_match_config',
+                                  key: opt.key,
+                                  value: choice.value,
+                                })
+                              }
+                              className={cn(
+                                'px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
+                                currentVal === choice.value
+                                  ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
+                                  : 'bg-slate-950/60 border-white/10 text-slate-400 hover:text-white'
+                              )}
+                            >
+                              {choice.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'start_match' }, `Started ${activeGame.title}!`)}
+              className="w-full py-4 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-[0_0_24px_rgba(56,189,248,0.35)]"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              Start {activeGame.title}
+            </button>
+          </section>
+        )}
+
+        {/* SOLO DRILL COMPLETE CARD */}
+        {isPracticeGame && activeGame && activeGame.phase === 'finished' && (
+          <section className="card-matte rounded-2xl p-5 border-sky-400/50 text-center space-y-3">
+            <Trophy className="w-9 h-9 text-sky-400 mx-auto" />
+            <div className="text-lg font-black text-white">
+              {activeGame.winnerHeadline || `${activeGame.title} Complete`}
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => void dispatch({ type: 'rematch' }, 'Restarted Drill!')}
+                className="py-3 rounded-xl bg-sky-400 text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
+              >
+                Run Again
+              </button>
+              <button
+                type="button"
+                onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Solo Drills')}
+                className="py-3 rounded-xl bg-slate-900 border border-white/15 text-white font-bold text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
+              >
+                All Drills
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* ALL SOLO TRAINING DRILLS GRID */}
+        <div className="space-y-2.5">
+          <div className="text-[11px] font-mono uppercase tracking-wider text-sky-300 font-bold flex items-center gap-1.5 px-1">
+            <Crosshair className="w-3.5 h-3.5" />
+            Solo Training Drills ({drills.length})
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {drills.map((d) => {
+              const Icon = d.icon;
+              const isActive = activeGame?.id === d.id;
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => void dispatch({ type: 'launch_game', gameId: d.id }, `Loaded ${d.title}`)}
+                  className={cn(
+                    'card-matte p-4 rounded-2xl text-left flex flex-col justify-between gap-2.5 active:scale-[0.97] transition-all cursor-pointer',
+                    isActive
+                      ? 'border-sky-400/70 bg-sky-500/15'
+                      : 'hover:border-sky-400/40'
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <Icon className="w-5 h-5 text-sky-400" />
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {d.estimatedMinutes}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-white leading-tight">{d.title}</div>
+                    <div className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-snug">
+                      {d.tagline}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderGamesPanel = () => {
+    const arcadeGames = getArcadeGames();
+    const isArcadeGame = activeGame?.mode !== 'practice';
+
+    return (
+      <div className="space-y-4">
+        {/* ACTIVE ARCADE GAME SETUP */}
+        {isArcadeGame && activeGame && activeGame.phase === 'setup' && (
         <section className="card-matte rounded-2xl p-4 sm:p-5 border-emerald-400/45 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div>
@@ -864,7 +1475,7 @@ export const MobileRemoteView: React.FC = () => {
       )}
 
       {/* VICTORY REMATCH CARD */}
-      {activeGame && activeGame.phase === 'finished' && (
+      {isArcadeGame && activeGame && activeGame.phase === 'finished' && (
         <section className="card-matte rounded-2xl p-5 border-amber-400/50 text-center space-y-3">
           <Trophy className="w-9 h-9 text-amber-400 mx-auto" />
           <div className="text-lg font-black text-white">
@@ -889,9 +1500,9 @@ export const MobileRemoteView: React.FC = () => {
         </section>
       )}
 
-      {/* ALL 8 GAMES LAUNCHER GRID */}
+      {/* ALL 8 ARCADE GAMES LAUNCHER GRID */}
       <div className="grid grid-cols-2 gap-2.5">
-        {GAME_REGISTRY.map((g) => {
+        {arcadeGames.map((g) => {
           const Icon = g.icon;
           const isActive = activeGame?.id === g.id;
           return (
@@ -919,7 +1530,14 @@ export const MobileRemoteView: React.FC = () => {
         })}
       </div>
     </div>
-  );
+    );
+  };
+
+  const renderModePanel = () => {
+    if (currentMode === 'dashboard') return renderObjectivesPanel();
+    if (currentMode === 'practice') return renderPracticeDrillsPanel();
+    return renderGamesPanel();
+  };
 
   // =========================================================================
   // RIGHT PANEL 2: PLAYERS & DARTS COLOURS
@@ -930,18 +1548,18 @@ export const MobileRemoteView: React.FC = () => {
         <div className="card-matte rounded-2xl p-4 border-amber-400/40 flex items-center gap-3">
           <ShieldCheck className="w-6 h-6 text-amber-300 shrink-0" />
           <div className="text-xs text-slate-200 leading-relaxed">
-            <strong>Party Mode is active.</strong> Personal profiles are locked so guest darts
-            never affect your saved 3-Dart Average.
+            <strong>Party Mode (Temp Profiles):</strong> Switch or add temporary guests below with
+            full stats &amp; games — zero data is saved except clips!
           </div>
         </div>
       )}
 
       <section className="card-matte rounded-2xl p-4 space-y-2.5">
         <div className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-          Saved Profiles &amp; Theme Colours
+          {isPartyMode ? 'Temp Party Players (Unsaved)' : 'Saved Profiles & Theme Colours'}
         </div>
         {(state?.players || []).map((p) => {
-          const isCurrent = !isPartyMode && state?.activePlayer.id === p.id;
+          const isCurrent = state?.activePlayer.id === p.id;
           const inGameSetup = activeGame?.phase === 'setup';
           const alreadyInRoster = activeGame?.roster.some((r) => r.id === p.id);
           const isEditingColor = editingColorPlayerId === p.id;
@@ -959,18 +1577,17 @@ export const MobileRemoteView: React.FC = () => {
               <div className="flex items-center justify-between p-2.5 gap-2">
                 <button
                   type="button"
-                  disabled={isPartyMode && !inGameSetup}
                   onClick={() => {
                     if (inGameSetup && !alreadyInRoster) {
                       void dispatch(
                         { type: 'add_saved_to_roster', playerId: p.id },
                         `Added ${p.name} to lineup`
                       );
-                    } else if (!isPartyMode) {
+                    } else {
                       void dispatch({ type: 'switch_player', playerId: p.id }, `Switched to ${p.name}`);
                     }
                   }}
-                  className="flex-1 flex items-center justify-between text-left cursor-pointer disabled:cursor-not-allowed min-w-0"
+                  className="flex-1 flex items-center justify-between text-left cursor-pointer min-w-0"
                 >
                   <span className="font-bold text-sm text-white flex items-center gap-2 truncate">
                     <span
@@ -1076,15 +1693,21 @@ export const MobileRemoteView: React.FC = () => {
               />
             ))}
           </div>
-          <label className="inline-flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={saveNewPlayer}
-              onChange={(e) => setSaveNewPlayer(e.target.checked)}
-              className="w-3.5 h-3.5 rounded accent-emerald-500"
-            />
-            Save account
-          </label>
+          {isPartyMode ? (
+            <span className="text-[11px] font-mono text-amber-300 font-bold">
+              Temp Guest (Unsaved)
+            </span>
+          ) : (
+            <label className="inline-flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={saveNewPlayer}
+                onChange={(e) => setSaveNewPlayer(e.target.checked)}
+                className="w-3.5 h-3.5 rounded accent-emerald-500"
+              />
+              Save account
+            </label>
+          )}
         </div>
       </form>
     </div>
@@ -1093,7 +1716,22 @@ export const MobileRemoteView: React.FC = () => {
   // =========================================================================
   // RIGHT PANEL 3: REPLAYS, SPLIT-CAM & SAVED CLIPS GALLERY
   // =========================================================================
-  const filteredClips = (state?.recentClips || []).filter((c) =>
+  // Prefer live Kiosk synced clips when populated, falling back / merging with direct
+  // `/api/replays/list` disk reads so saved clips ALWAYS appear right after an app restart!
+  const allSavedClips = React.useMemo(() => {
+    const map = new Map<string, RemoteKioskState['recentClips'][number]>();
+    for (const c of diskClips) {
+      const key = (c.relativePath || c.filename || c.id).toLowerCase();
+      map.set(key, c);
+    }
+    for (const c of state?.recentClips || []) {
+      const key = (c.relativePath || c.filename || c.id).toLowerCase();
+      map.set(key, c);
+    }
+    return Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [diskClips, state?.recentClips]);
+
+  const filteredClips = allSavedClips.filter((c) =>
     clipFilter === 'all' ? true : (c.category || 'game') === clipFilter
   );
 
@@ -1162,39 +1800,19 @@ export const MobileRemoteView: React.FC = () => {
           )}
         </div>
 
-        {/* Board Cam Mode */}
-        <div className="space-y-1.5">
-          <div className="text-[10px] font-mono uppercase text-slate-400 font-bold">
-            Board Camera Source
+        {/* Locked Board Cam Source Indicator */}
+        <div className="p-2.5 rounded-xl bg-slate-900/75 border border-emerald-400/25 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[10px] font-mono uppercase text-emerald-300 font-bold">
+              Board Cam (Locked)
+            </div>
+            <div className="text-xs font-bold text-slate-200 truncate">
+              Autodarts 3-Camera Live Stack (Port 3180)
+            </div>
           </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {(
-              [
-                { id: 'usb', label: '2nd USB' },
-                { id: 'autodarts', label: 'Autodarts' },
-                { id: 'none', label: 'Single Cam' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() =>
-                  void dispatch(
-                    { type: 'set_board_camera_mode', mode: opt.id },
-                    `Board cam -> ${opt.label}`
-                  )
-                }
-                className={cn(
-                  'py-2 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
-                  state?.replayBoardCameraMode === opt.id
-                    ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
-                    : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-white'
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <Badge variant="emerald" size="sm">
+            3 Cams
+          </Badge>
         </div>
 
         {/* Auto-Start on Boot */}
@@ -1259,9 +1877,19 @@ export const MobileRemoteView: React.FC = () => {
       {/* Saved Replays Gallery */}
       <section className="card-matte rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
-            Saved Clips ({state?.replayClipCount ?? 0})
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
+              Saved Clips ({allSavedClips.length})
+            </span>
+            <button
+              type="button"
+              onClick={() => void pullSavedClipsFromServer()}
+              title="Refresh Saved Clips from Disk"
+              className="p-1 rounded-md bg-slate-900 border border-white/10 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <RefreshCw className={cn('w-3 h-3', loadingClips && 'animate-spin')} />
+            </button>
+          </div>
           <div className="flex items-center gap-1">
             {(
               [
@@ -1320,7 +1948,10 @@ export const MobileRemoteView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() =>
-                      void dispatch({ type: 'play_saved_clip', clipId: clip.id }, 'Playing on TV')
+                      void dispatch(
+                        { type: 'play_saved_clip', clipId: clip.relativePath || clip.id },
+                        'Playing on TV'
+                      )
                     }
                     className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/45 text-emerald-200 text-[11px] font-black flex items-center gap-1 cursor-pointer"
                   >
@@ -1329,12 +1960,19 @@ export const MobileRemoteView: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      void dispatch(
-                        { type: 'delete_saved_clip', path: clip.relativePath || clip.filename },
-                        'Deleted Clip'
-                      )
-                    }
+                    onClick={() => {
+                      const targetPath = clip.relativePath || clip.filename;
+                      void dispatch({ type: 'delete_saved_clip', path: targetPath }, 'Deleted Clip').then(
+                        () => {
+                          setDiskClips((prev) =>
+                            prev.filter(
+                              (c) => c.relativePath !== targetPath && c.filename !== targetPath
+                            )
+                          );
+                          window.setTimeout(() => void pullSavedClipsFromServer(), 350);
+                        }
+                      );
+                    }}
                     title="Delete Clip"
                     className="p-1.5 rounded-lg bg-slate-950/70 hover:bg-rose-500/20 border border-white/10 text-slate-400 hover:text-rose-300 cursor-pointer"
                   >
@@ -1625,122 +2263,154 @@ export const MobileRemoteView: React.FC = () => {
       style={remoteStyle}
       className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans select-none antialiased pb-24 md:pb-8"
     >
-      {/* iPad & Mobile Top Command Header */}
+      {/* Responsive iPad & Mobile Top Command Header (safe-area aware for iOS/iPadOS Home Screen Web App) */}
       <header
         className={cn(
-          'sticky top-0 z-30 backdrop-blur-md border-b px-4 py-3 sm:px-6 transition-colors',
+          'sticky top-0 z-30 backdrop-blur-md border-b px-3.5 pb-2.5 sm:px-6 sm:pb-3 transition-colors',
           isPartyMode
             ? 'bg-[#120A20]/95 border-purple-400/25'
             : 'bg-[#0B0F17]/95 border-white/10'
         )}
+        style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}
       >
-        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          {/* Left: Brand (Secret 5-tap on AD crest opens PIN 0161 Dev Console QR Modal) */}
-          <div className="flex items-center gap-2.5">
-            <div
-              onClick={handleSecretCrestTap}
-              className={cn(
-                'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-slate-950 text-sm select-none cursor-default',
-                isPartyMode
-                  ? 'bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-amber-300'
-                  : 'bg-gradient-to-tr from-emerald-500 to-emerald-300'
-              )}
-            >
-              AD
+        <div className="max-w-6xl mx-auto space-y-2.5">
+          {/* Row 1: Brand | Desktop 3-Mode Switcher | Party + Resync + Pairing */}
+          <div className="flex items-center justify-between gap-2">
+            {/* Left: Brand (Secret 5-tap on AD crest opens PIN 0161 Dev Console QR Modal) */}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div
+                onClick={handleSecretCrestTap}
+                className={cn(
+                  'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-slate-950 text-sm select-none cursor-default shrink-0',
+                  isPartyMode
+                    ? 'bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-amber-300'
+                    : 'bg-gradient-to-tr from-emerald-500 to-emerald-300'
+                )}
+              >
+                AD
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-sm sm:text-base font-black tracking-tight text-white leading-none truncate">
+                  OCHE DECK
+                </h1>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block truncate">
+                  {isPartyMode ? 'Vice Party Mode' : state?.activePlayer.name || 'Connecting...'}
+                </span>
+              </div>
             </div>
-            <div>
-              <h1 className="text-sm sm:text-base font-black tracking-tight text-white leading-none">
-                OCHE DECK
-              </h1>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                {isPartyMode ? 'Vice Party Mode' : state?.activePlayer.name || 'Connecting...'}
-              </span>
+
+            {/* Center (Wide iPad Landscape / Desktop lg+): Inline 3-Mode Switcher */}
+            <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
+              {(
+                [
+                  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300' },
+                  { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300' },
+                  { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300' },
+                ] as const
+              ).map((m) => {
+                const Icon = m.icon;
+                const active = currentMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => handleSwitchMode(m.id)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
+                      active ? m.tone : 'text-slate-400 hover:text-white'
+                    )}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Right: Party Mode Toggle + Resync + Pairing Badge */}
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  void dispatch(
+                    { type: 'toggle_party_mode' },
+                    isPartyMode
+                      ? 'Party Mode Off — Personal Tracking Resumed'
+                      : 'Vice Party Mode Live!'
+                  )
+                }
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer',
+                  isPartyMode
+                    ? 'bg-gradient-to-r from-purple-600/35 via-fuchsia-600/30 to-amber-500/25 text-amber-200 border-amber-400/60'
+                    : 'bg-slate-900/80 text-purple-200 border-purple-400/25 hover:border-amber-400/40'
+                )}
+              >
+                {isPartyMode ? (
+                  <>
+                    <Square className="w-3.5 h-3.5 fill-amber-300 text-amber-300 shrink-0" />
+                    <span className="hidden xs:inline sm:inline">Stop Party</span>
+                  </>
+                ) : (
+                  <>
+                    <PartyPopper className="w-3.5 h-3.5 text-purple-300 shrink-0" />
+                    <span>Party</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                disabled={syncing}
+                onClick={() => void handleManualResync()}
+                title="Resync Kiosk & Recalibrate Autodarts Cameras"
+                className="p-2 rounded-xl bg-slate-900/80 border border-white/10 text-slate-300 hover:text-white disabled:opacity-60 cursor-pointer"
+              >
+                <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin text-emerald-400')} />
+              </button>
+
+              <Badge variant={connected && kioskOnline ? 'emerald' : 'rose'} size="sm" dot>
+                <Wifi className="w-3 h-3" />
+                <span className="hidden sm:inline">
+                  {connected && kioskOnline ? 'Paired' : connected ? 'No Kiosk' : 'Offline'}
+                </span>
+              </Badge>
             </div>
           </div>
 
-          {/* Center/Right: View Switcher + Party Mode + Resync + Pairing Badge */}
-          <div className="flex items-center gap-2">
-            <div className="hidden md:flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch({ type: 'navigate', view: 'dashboard' }, 'Stats Dashboard')
-                }
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
-                  state?.activeView === 'dashboard'
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'text-slate-400 hover:text-white'
-                )}
-              >
-                <LayoutDashboard className="w-3.5 h-3.5" />
-                Dashboard
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch({ type: 'navigate', view: 'games-lobby' }, 'Games Arcade')
-                }
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
-                  state?.activeView !== 'dashboard'
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'text-slate-400 hover:text-white'
-                )}
-              >
-                <Gamepad2 className="w-3.5 h-3.5" />
-                Arcade
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                void dispatch(
-                  { type: 'toggle_party_mode' },
-                  isPartyMode ? 'Party Mode Stopped' : 'Vice Party Mode Live!'
-                )
-              }
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer',
-                isPartyMode
-                  ? 'bg-gradient-to-r from-purple-600/35 via-fuchsia-600/30 to-amber-500/25 text-amber-200 border-amber-400/60'
-                  : 'bg-slate-900/80 text-purple-200 border-purple-400/25 hover:border-amber-400/40'
-              )}
-            >
-              {isPartyMode ? (
-                <>
-                  <Square className="w-3.5 h-3.5 fill-amber-300 text-amber-300" />
-                  <span>Stop Party</span>
-                </>
-              ) : (
-                <>
-                  <PartyPopper className="w-3.5 h-3.5 text-purple-300" />
-                  <span>Party Mode</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void handleManualResync()}
-              title="Force Resync with Kiosk"
-              className="p-2 rounded-xl bg-slate-900/80 border border-white/10 text-slate-300 hover:text-white cursor-pointer"
-            >
-              <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin')} />
-            </button>
-
-            <Badge variant={connected && kioskOnline ? 'emerald' : 'rose'} size="sm" dot>
-              <Wifi className="w-3 h-3" />
-              {connected && kioskOnline ? 'Paired' : connected ? 'No Kiosk' : 'Offline'}
-            </Badge>
+          {/* Row 2 (iPad Portrait & Phone < lg): Crisp Full-Width 3-Mode Toggle Strip */}
+          <div className="lg:hidden grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
+            {(
+              [
+                { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' },
+                { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' },
+                { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300 border-sky-400/40' },
+              ] as const
+            ).map((m) => {
+              const Icon = m.icon;
+              const active = currentMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => handleSwitchMode(m.id)}
+                  className={cn(
+                    'inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold border transition-colors cursor-pointer',
+                    active ? m.tone : 'border-transparent text-slate-400 hover:text-white'
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span>{m.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </header>
 
       {/* Instant Feedback Toast */}
       {toast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-slate-950/95 border border-emerald-400/50 text-emerald-300 text-xs font-bold shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-slate-950/95 border border-emerald-400/50 text-emerald-300 text-xs font-bold shadow-2xl animate-in fade-in zoom-in-95">
           {toast}
         </div>
       )}
@@ -1756,12 +2426,12 @@ export const MobileRemoteView: React.FC = () => {
           {renderThrowPad()}
         </div>
 
-        {/* RIGHT COLUMN (5 cols): 4 Full Control Panels (Games, Players, Replays, Display) */}
+        {/* RIGHT COLUMN (5 cols): Context-Aware 1st Tab (Goals / Games / Drills) + Players + Replays + Display */}
         <div className="col-span-5 space-y-4">
           <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
             {(
               [
-                { id: 'games', label: 'Games', icon: Gamepad2 },
+                { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
                 { id: 'players', label: 'Players', icon: Users },
                 { id: 'replays', label: 'Replays', icon: Clapperboard },
                 { id: 'display', label: 'Display', icon: Monitor },
@@ -1777,7 +2447,9 @@ export const MobileRemoteView: React.FC = () => {
                   className={cn(
                     'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
                     active
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                      ? currentMode === 'practice' && tab.id === 'mode'
+                        ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
                       : 'text-slate-400 hover:text-white'
                   )}
                 >
@@ -1788,7 +2460,7 @@ export const MobileRemoteView: React.FC = () => {
             })}
           </div>
 
-          {tabletRightPanel === 'games' && renderGamesPanel()}
+          {tabletRightPanel === 'mode' && renderModePanel()}
           {tabletRightPanel === 'players' && renderPlayersPanel()}
           {tabletRightPanel === 'replays' && renderReplaysPanel()}
           {tabletRightPanel === 'display' && renderDisplayPanel()}
@@ -1805,63 +2477,38 @@ export const MobileRemoteView: React.FC = () => {
           <div className="space-y-3">
             {renderPrimaryActions()}
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch(
-                    {
-                      type: 'navigate',
-                      view: state?.activeView === 'dashboard' ? 'games-lobby' : 'dashboard',
-                    },
-                    state?.activeView === 'dashboard' ? 'Opened Arcade Showcase' : 'Stats Dashboard'
-                  )
-                }
-                className="card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold text-emerald-300 cursor-pointer"
-              >
-                {state?.activeView === 'dashboard' ? (
-                  <>
-                    <Gamepad2 className="w-4 h-4" />
-                    Games Arcade
-                  </>
-                ) : (
-                  <>
-                    <LayoutDashboard className="w-4 h-4" />
-                    Dashboard
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowMobileThrowPad((v) => !v)}
-                className={cn(
-                  'card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold cursor-pointer',
-                  showMobileThrowPad ? 'border-emerald-400/50 text-emerald-200' : 'text-slate-200'
-                )}
-              >
-                <Crosshair className="w-4 h-4 text-emerald-400" />
-                {showMobileThrowPad ? 'Hide Throw Pad' : 'Throw Pad'}
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setShowMobileThrowPad((v) => !v)}
+              className={cn(
+                'w-full card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold cursor-pointer',
+                showMobileThrowPad ? 'border-emerald-400/50 text-emerald-200' : 'text-slate-200'
+              )}
+            >
+              <Crosshair className="w-4 h-4 text-emerald-400" />
+              {showMobileThrowPad ? 'Hide Quick Throw Pad' : 'Open Quick Throw / Correction Pad'}
+            </button>
 
             {showMobileThrowPad && renderThrowPad()}
           </div>
         )}
 
-        {mobileTab === 'games' && renderGamesPanel()}
+        {mobileTab === 'mode' && renderModePanel()}
         {mobileTab === 'players' && renderPlayersPanel()}
         {mobileTab === 'replays' && renderReplaysPanel()}
         {mobileTab === 'display' && renderDisplayPanel()}
       </main>
 
       {/* Phone-Only Fixed Bottom Thumb Bar (< md) */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 py-2">
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 pt-2"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}
+      >
         <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
           {(
             [
               { id: 'control', label: 'Control', icon: Sliders },
-              { id: 'games', label: 'Games', icon: Gamepad2 },
+              { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
               { id: 'players', label: 'Players', icon: Users },
               { id: 'replays', label: 'Replays', icon: Clapperboard },
               { id: 'display', label: 'Display', icon: Monitor },

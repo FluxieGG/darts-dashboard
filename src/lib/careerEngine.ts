@@ -441,8 +441,8 @@ export function evaluateObjectives(
   // --- DAILY OBJECTIVE 2: Specific Target Double or Treble (Easy/Achievable) ---
   const targetTrebles = ['T20', 'T19', 'T18'];
   const targetDoubles = ['D20', 'D16', 'D8', 'D10'];
-  const pickedTreble = targetTrebles[dailySeed % targetTrebles.length];
-  const pickedDouble = targetDoubles[(dailySeed >> 2) % targetDoubles.length];
+  const pickedTreble = targetTrebles[(dailySeed >>> 0) % targetTrebles.length];
+  const pickedDouble = targetDoubles[(dailySeed >>> 2) % targetDoubles.length];
 
   const dailyTargets = [
     () =>
@@ -529,9 +529,9 @@ export function evaluateObjectives(
   ];
 
   const daily: ObjectiveProgress[] = [
-    dailyWarmups[dailySeed % dailyWarmups.length](),
-    dailyTargets[(dailySeed >> 3) % dailyTargets.length](),
-    dailySparks[(dailySeed >> 5) % dailySparks.length](),
+    dailyWarmups[(dailySeed >>> 0) % dailyWarmups.length](),
+    dailyTargets[(dailySeed >>> 3) % dailyTargets.length](),
+    dailySparks[(dailySeed >>> 5) % dailySparks.length](),
   ];
 
   // --- WEEKLY AGGREGATES ---
@@ -629,9 +629,9 @@ export function evaluateObjectives(
   ];
 
   const weekly: ObjectiveProgress[] = [
-    weeklyTonOptions[weeklySeed % weeklyTonOptions.length](),
+    weeklyTonOptions[(weeklySeed >>> 0) % weeklyTonOptions.length](),
     weeklyStreakObj,
-    weeklyChallenges[(weeklySeed >> 3) % weeklyChallenges.length](),
+    weeklyChallenges[(weeklySeed >>> 3) % weeklyChallenges.length](),
   ];
 
   return { daily, weekly };

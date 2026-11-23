@@ -17,6 +17,7 @@ interface RollingSlot {
 export interface StartOcheCamOptions {
   ocheDeviceId?: string;
   includeAudio?: boolean;
+  /** Kept for interface compatibility — Board Cam is always locked to Autodarts' 3 board cameras */
   boardCameraMode?: BoardCameraMode;
   boardDeviceId?: string;
   autodartsCamIndex?: number;
@@ -24,40 +25,42 @@ export interface StartOcheCamOptions {
 }
 
 /**
- * Draws a video or image element into a target rectangle using `object-fit: cover` math
- * so neither camera is ever stretched or letterboxed awkwardly.
+ * Draws a video or ImageBitmap into a target rectangle using `object-fit: cover` math
+ * so cameras are never stretched awkwardly.
  */
 function drawCover(
   ctx: CanvasRenderingContext2D,
-  source: HTMLVideoElement | HTMLImageElement,
+  source: HTMLVideoElement | ImageBitmap,
   dx: number,
   dy: number,
   dw: number,
-  dh: number
+  dh: number,
+  srcRect?: { sx: number; sy: number; sw: number; sh: number }
 ): boolean {
-  const sw =
-    source instanceof HTMLVideoElement ? source.videoWidth : source.naturalWidth;
-  const sh =
-    source instanceof HTMLVideoElement ? source.videoHeight : source.naturalHeight;
+  const fullW = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+  const fullH = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+  if (!fullW || !fullH) return false;
 
+  const baseX = srcRect ? srcRect.sx : 0;
+  const baseY = srcRect ? srcRect.sy : 0;
+  const sw = srcRect ? srcRect.sw : fullW;
+  const sh = srcRect ? srcRect.sh : fullH;
   if (!sw || !sh) return false;
 
   const targetRatio = dw / dh;
   const sourceRatio = sw / sh;
 
-  let sx = 0;
-  let sy = 0;
+  let sx = baseX;
+  let sy = baseY;
   let sWidth = sw;
   let sHeight = sh;
 
   if (sourceRatio > targetRatio) {
-    // Source is wider than slot -> crop left/right
     sWidth = sh * targetRatio;
-    sx = (sw - sWidth) / 2;
+    sx = baseX + (sw - sWidth) / 2;
   } else {
-    // Source is taller than slot -> crop top/bottom
     sHeight = sw / targetRatio;
-    sy = (sh - sHeight) / 2;
+    sy = baseY + (sh - sHeight) / 2;
   }
 
   ctx.drawImage(source, sx, sy, sWidth, sHeight, dx, dy, dw, dh);
@@ -69,20 +72,23 @@ function drawCornerLabel(
   text: string,
   x: number,
   y: number,
-  dotColor: string
+  dotColor: string,
+  compact = false
 ): void {
   ctx.save();
-  ctx.font = '800 18px "JetBrains Mono", monospace';
+  ctx.font = compact
+    ? '800 13px "JetBrains Mono", monospace'
+    : '800 18px "JetBrains Mono", monospace';
   const metrics = ctx.measureText(text);
-  const padX = 14;
-  const boxW = metrics.width + padX * 2 + 16;
-  const boxH = 34;
+  const padX = compact ? 10 : 14;
+  const boxW = metrics.width + padX * 2 + (compact ? 12 : 16);
+  const boxH = compact ? 24 : 34;
 
-  ctx.fillStyle = 'rgba(11, 15, 23, 0.78)';
+  ctx.fillStyle = 'rgba(11, 15, 23, 0.8)';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
   ctx.lineWidth = 1.5;
 
-  const r = 10;
+  const r = compact ? 7 : 10;
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.lineTo(x + boxW - r, y);
@@ -97,40 +103,53 @@ function drawCornerLabel(
   ctx.fill();
   ctx.stroke();
 
-  // Status dot
   ctx.fillStyle = dotColor;
   ctx.beginPath();
-  ctx.arc(x + padX + 4, y + boxH / 2, 5, 0, Math.PI * 2);
+  ctx.arc(x + padX + (compact ? 3 : 4), y + boxH / 2, compact ? 3.5 : 5, 0, Math.PI * 2);
   ctx.fill();
 
-  // Label text
   ctx.fillStyle = '#F8FAFC';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, x + padX + 16, y + boxH / 2 + 1);
+  ctx.fillText(text, x + padX + (compact ? 11 : 16), y + boxH / 2 + 0.5);
   ctx.restore();
 }
 
 /**
- * Flight Club-style Dual-Camera Side-by-Side Compositor & 10-Second Ring Buffer.
+ * Finds the index of a 2-byte JPEG marker (`a`, `b`) inside a Uint8Array starting at `from`.
+ */
+function findMarker(buf: Uint8Array, a: number, b: number, from = 0): number {
+  for (let i = from; i < buf.length - 1; i++) {
+    if (buf[i] === a && buf[i + 1] === b) return i;
+  }
+  return -1;
+}
+
+/**
+ * Flight Club-style Broadcast Compositor & 10-Second Ring Buffer.
  *
- * Stitches:
- *   LEFT  (800×720): Oche / Player Reaction Camera
- *   RIGHT (800×720): Dartboard Close-Up Camera (USB webcam OR Autodarts port 3180 proxy stream)
- * into a single real-time 1600×720 broadcast split-screen stream recorded into
- * staggered overlapping MediaRecorder slots (~5s pre-roll + ~5s reaction = ~10s valid WebM).
+ * Layout (1600×900 16:9 broadcast frame):
+ *   LEFT  (1066×900): Oche / Throwing Camera (unchanged USB webcam via getUserMedia)
+ *   RIGHT  (534×900): ALL 3 Autodarts Desktop Board Cameras stacked vertically
+ *                     (each 534×300 = exact 16:9 slice from Autodarts' live 3840×720 MJPEG stream!)
+ *
+ * Uses a direct fetch() + ReadableStream + createImageBitmap() MJPEG decoder over
+ * `/api/replays/board-stream` so it is 100% immune to Chromium detached-<img> MJPEG stalls
+ * and auto-reconnects if Autodarts Desktop restarts.
  */
 class OcheCamService {
   private ocheStream: MediaStream | null = null;
-  private boardStream: MediaStream | null = null;
   private compositeStream: MediaStream | null = null;
 
   private ocheVideoEl: HTMLVideoElement | null = null;
-  private boardVideoEl: HTMLVideoElement | null = null;
-  private boardImgEl: HTMLImageElement | null = null;
+  private boardFrameBitmap: ImageBitmap | null = null;
+  private boardStreamAbort: AbortController | null = null;
+  private boardReconnectTimer: number | null = null;
+  private boardFrameCount = 0;
+
   private canvasEl: HTMLCanvasElement | null = null;
   private renderInterval: number | null = null;
 
-  private isDualMode = false;
+  private isDualMode = true;
   private boardFeedActive = false;
   private boardFeedError: string | null = null;
 
@@ -139,12 +158,15 @@ class OcheCamService {
   private slotCounter = 0;
   private mimeType = 'video/webm';
   private isCapturing = false;
+  private activeCaptureMeta: CaptureClipMetadata | null = null;
   private captureListeners = new Set<(capturing: boolean, countdownSec?: number) => void>();
+  private boardStatusListeners = new Set<(status: { active: boolean; error: string | null }) => void>();
 
-  private readonly PRE_TARGET_SEC = 5;
-  private readonly POST_TARGET_SEC = 5;
-  private readonly SLOT_SPAWN_INTERVAL_MS = 2500;
-  private readonly SLOT_MAX_AGE_MS = 10500;
+  private readonly DEFAULT_PRE_TARGET_SEC = 5;
+  private readonly MANUAL_PRE_TARGET_SEC = 15;
+  private readonly DEFAULT_POST_TARGET_SEC = 5;
+  private readonly SLOT_SPAWN_INTERVAL_MS = 3000;
+  private readonly SLOT_MAX_AGE_MS = 20000;
 
   private pickSupportedMimeType(): string {
     const candidates = [
@@ -173,7 +195,6 @@ class OcheCamService {
       }));
   }
 
-  /** Returns the live stream for Settings Preview (composited side-by-side when dual-cam is on!) */
   public getStream(): MediaStream | null {
     return this.compositeStream || this.ocheStream;
   }
@@ -199,8 +220,24 @@ class OcheCamService {
     return () => this.captureListeners.delete(cb);
   }
 
+  public onBoardFeedStatusChange(
+    cb: (status: { active: boolean; error: string | null }) => void
+  ): () => void {
+    this.boardStatusListeners.add(cb);
+    return () => this.boardStatusListeners.delete(cb);
+  }
+
   private emitCaptureState(capturing: boolean, countdownSec?: number): void {
     this.captureListeners.forEach((cb) => cb(capturing, countdownSec));
+  }
+
+  private setBoardFeedStatus(active: boolean, error: string | null): void {
+    const changed = this.boardFeedActive !== active || this.boardFeedError !== error;
+    this.boardFeedActive = active;
+    this.boardFeedError = error;
+    if (changed) {
+      this.boardStatusListeners.forEach((cb) => cb({ active, error }));
+    }
   }
 
   private createHiddenVideo(stream: MediaStream): HTMLVideoElement {
@@ -213,6 +250,139 @@ class OcheCamService {
     return video;
   }
 
+  /**
+   * Opens a direct streaming MJPEG reader against `/api/replays/board-stream`
+   * (Autodarts Desktop's live 3-camera `3840×720` feed) and decodes each frame
+   * into an off-thread `ImageBitmap` for silky 30fps canvas compositing.
+   */
+  private startAutodartsThreeCamReader(): void {
+    this.stopAutodartsThreeCamReader();
+
+    const abort = new AbortController();
+    this.boardStreamAbort = abort;
+
+    const connectLoop = async () => {
+      if (abort.signal.aborted) return;
+
+      try {
+        const res = await fetch('/api/replays/board-stream', {
+          cache: 'no-store',
+          signal: abort.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          throw new Error(`Autodarts 3-cam stream unavailable (HTTP ${res.status})`);
+        }
+
+        const reader = res.body.getReader();
+        let acc = new Uint8Array(0);
+        let decoding = false;
+
+        while (!abort.signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.length === 0) continue;
+
+          // Append incoming bytes (cap accumulator at 4MB so memory never grows if stream glitches)
+          if (acc.length > 4 * 1024 * 1024) {
+            acc = new Uint8Array(value);
+          } else {
+            const next = new Uint8Array(acc.length + value.length);
+            next.set(acc, 0);
+            next.set(value, acc.length);
+            acc = next;
+          }
+
+          // Extract the latest complete JPEG frame (FF D8 ... FF D9) in buffer
+          let latestJpeg: Uint8Array | null = null;
+          let searchOffset = 0;
+
+          while (true) {
+            const soi = findMarker(acc, 0xff, 0xd8, searchOffset);
+            if (soi === -1) {
+              // Keep last 2 bytes in case FF D8 split across chunks
+              if (acc.length > 2) {
+                acc = acc.slice(acc.length - 2);
+              }
+              break;
+            }
+            const eoi = findMarker(acc, 0xff, 0xd9, soi + 2);
+            if (eoi === -1) {
+              // Incomplete frame — drop bytes before SOI and wait for more chunks
+              if (soi > 0) {
+                acc = acc.slice(soi);
+              }
+              break;
+            }
+            const frameEnd = eoi + 2;
+            latestJpeg = acc.slice(soi, frameEnd);
+            searchOffset = frameEnd;
+          }
+
+          if (searchOffset > 0 && searchOffset <= acc.length) {
+            acc = acc.slice(searchOffset);
+          }
+
+          if (latestJpeg && !decoding) {
+            decoding = true;
+            const blob = new Blob([latestJpeg as BlobPart], { type: 'image/jpeg' });
+            createImageBitmap(blob)
+              .then((bitmap) => {
+                if (abort.signal.aborted) {
+                  bitmap.close();
+                  return;
+                }
+                const prev = this.boardFrameBitmap;
+                this.boardFrameBitmap = bitmap;
+                if (prev) prev.close();
+                this.boardFrameCount += 1;
+                this.setBoardFeedStatus(true, null);
+              })
+              .catch(() => {
+                // Skip malformed partial frame and continue
+              })
+              .finally(() => {
+                decoding = false;
+              });
+          }
+        }
+
+        if (!abort.signal.aborted) {
+          throw new Error('Autodarts 3-cam stream ended');
+        }
+      } catch (err) {
+        if (abort.signal.aborted) return;
+        this.setBoardFeedStatus(
+          false,
+          (err as Error).message || 'Waiting for Autodarts Desktop 3-camera stream on port 3180...'
+        );
+        // Auto-retry every 2 seconds while running
+        this.boardReconnectTimer = window.setTimeout(() => {
+          this.boardReconnectTimer = null;
+          void connectLoop();
+        }, 2000);
+      }
+    };
+
+    void connectLoop();
+  }
+
+  private stopAutodartsThreeCamReader(): void {
+    if (this.boardReconnectTimer !== null) {
+      window.clearTimeout(this.boardReconnectTimer);
+      this.boardReconnectTimer = null;
+    }
+    if (this.boardStreamAbort) {
+      this.boardStreamAbort.abort();
+      this.boardStreamAbort = null;
+    }
+    if (this.boardFrameBitmap) {
+      this.boardFrameBitmap.close();
+      this.boardFrameBitmap = null;
+    }
+    this.boardFrameCount = 0;
+  }
+
   public async start(options: StartOcheCamOptions = {}): Promise<MediaStream> {
     this.stop();
 
@@ -220,16 +390,9 @@ class OcheCamService {
       throw new Error('Camera API (getUserMedia) is not available in this browser context.');
     }
 
-    const {
-      ocheDeviceId,
-      includeAudio = false,
-      boardCameraMode = 'none',
-      boardDeviceId,
-      autodartsCamIndex = 0,
-      autodartsCamCustomUrl,
-    } = options;
+    const { ocheDeviceId, includeAudio = false } = options;
 
-    // 1. Open primary Oche / Player Reaction camera
+    // 1. Open Throwing / Oche Reaction camera (unchanged from user's working setup)
     const ocheVideoConstraints: MediaTrackConstraints = {
       width: { ideal: 1280 },
       height: { ideal: 720 },
@@ -246,67 +409,17 @@ class OcheCamService {
     this.ocheStream = ocheStream;
     this.ocheVideoEl = this.createHiddenVideo(ocheStream);
 
-    // 2. Open secondary Dartboard camera (USB webcam OR Autodarts local stream proxy)
-    this.isDualMode = boardCameraMode !== 'none';
-    this.boardFeedActive = false;
-    this.boardFeedError = null;
+    // 2. Always lock Board Cam to Autodarts Desktop's 3-camera live stream (port 3180)
+    this.isDualMode = true;
+    this.setBoardFeedStatus(false, null);
+    this.startAutodartsThreeCamReader();
 
-    if (boardCameraMode === 'usb') {
-      if (boardDeviceId && boardDeviceId !== ocheDeviceId) {
-        try {
-          const boardStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              deviceId: { exact: boardDeviceId },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              frameRate: { ideal: 30 },
-            },
-            audio: false,
-          });
-          this.boardStream = boardStream;
-          this.boardVideoEl = this.createHiddenVideo(boardStream);
-          this.boardFeedActive = true;
-        } catch (err) {
-          this.boardFeedError =
-            (err as Error).message ||
-            'Board USB camera busy (if Autodarts Desktop owns it, switch Board Cam Source to Autodarts Local Stream).';
-        }
-      } else {
-        this.boardFeedError = 'Select a different USB camera for the Dartboard feed.';
-      }
-    } else if (boardCameraMode === 'autodarts') {
-      // Load via same-origin Vite proxy `/api/board/...` so canvas drawing is 100% CORS-safe!
-      const rawUrl = autodartsCamCustomUrl?.trim();
-      const streamUrl = rawUrl
-        ? rawUrl.startsWith('http://127.0.0.1:3180')
-          ? `/api/board${rawUrl.slice('http://127.0.0.1:3180'.length)}`
-          : rawUrl
-        : `/api/board/api/streams/live?cam=${autodartsCamIndex}&warp=true`;
-
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        this.boardFeedActive = true;
-        this.boardFeedError = null;
-      };
-      img.onerror = () => {
-        this.boardFeedActive = false;
-        this.boardFeedError = `Could not reach Autodarts camera stream (${streamUrl}). Verify Autodarts Desktop is running.`;
-      };
-      img.src = streamUrl;
-      this.boardImgEl = img;
-    }
-
-    // 3. Create real-time Broadcast Canvas Compositor
+    // 3. Create 1600×900 16:9 Broadcast Canvas Compositor
+    //    LEFT  (1066×900): Oche / Throwing Camera
+    //    RIGHT  (534×900): All 3 Autodarts Board Cameras stacked vertically (534×300 each = 16:9!)
     const canvas = document.createElement('canvas');
-    if (this.isDualMode) {
-      // Side-by-side wide split screen: 800×720 Left (Oche) + 800×720 Right (Dartboard)
-      canvas.width = 1600;
-      canvas.height = 720;
-    } else {
-      canvas.width = 1280;
-      canvas.height = 720;
-    }
+    canvas.width = 1600;
+    canvas.height = 900;
     this.canvasEl = canvas;
     const ctx = canvas.getContext('2d');
 
@@ -314,69 +427,79 @@ class OcheCamService {
       if (!ctx || !this.canvasEl) return;
       const W = this.canvasEl.width;
       const H = this.canvasEl.height;
+      const leftW = 1066;
+      const rightX = leftW;
+      const rightW = W - leftW; // 534
+      const camH = H / 3; // 300
 
       ctx.fillStyle = '#0B0F17';
       ctx.fillRect(0, 0, W, H);
 
-      if (this.isDualMode) {
-        const halfW = W / 2;
-
-        // LEFT HALF: Oche / Player Reaction Camera
-        if (this.ocheVideoEl) {
-          drawCover(ctx, this.ocheVideoEl, 0, 0, halfW, H);
-        }
-        drawCornerLabel(ctx, 'OCHE CAM', 18, 18, '#F43F5E');
-
-        // RIGHT HALF: Dartboard Camera (USB video OR Autodarts MJPEG img)
-        let drewBoard = false;
-        if (this.boardVideoEl) {
-          drewBoard = drawCover(ctx, this.boardVideoEl, halfW, 0, halfW, H);
-        } else if (this.boardImgEl && this.boardImgEl.complete && this.boardImgEl.naturalWidth > 0) {
-          try {
-            drewBoard = drawCover(ctx, this.boardImgEl, halfW, 0, halfW, H);
-            this.boardFeedActive = true;
-          } catch {
-            // Ignore cross-origin taint if a custom external URL lacks CORS headers
-            this.boardFeedActive = false;
-          }
-        }
-
-        if (!drewBoard) {
-          ctx.fillStyle = '#111827';
-          ctx.fillRect(halfW, 0, halfW, H);
-          ctx.fillStyle = '#94A3B8';
-          ctx.font = '700 24px "Plus Jakarta Sans", sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('BOARD CAM WAITING...', halfW + halfW / 2, H / 2 - 14);
-          ctx.font = '500 15px "JetBrains Mono", monospace';
-          ctx.fillStyle = '#64748B';
-          ctx.fillText(
-            this.boardFeedError ? 'Check camera source in Settings' : 'Connecting feed...',
-            halfW + halfW / 2,
-            H / 2 + 20
-          );
-          ctx.textAlign = 'left';
-        }
-        drawCornerLabel(ctx, 'BOARD CAM', halfW + 18, 18, drewBoard ? '#10B981' : '#F59E0B');
-
-        // Crisp glowing vertical center divider
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-        ctx.fillRect(halfW - 2, 0, 4, H);
-      } else {
-        // Single-camera full-frame mode
-        if (this.ocheVideoEl) {
-          drawCover(ctx, this.ocheVideoEl, 0, 0, W, H);
-        }
-        drawCornerLabel(ctx, 'OCHE CAM', 18, 18, '#F43F5E');
+      // LEFT: Oche / Throwing Camera (full tall reaction view)
+      if (this.ocheVideoEl) {
+        drawCover(ctx, this.ocheVideoEl, 0, 0, leftW, H);
       }
+      drawCornerLabel(ctx, 'OCHE CAM', 18, 18, '#F43F5E');
+
+      // RIGHT: All 3 Autodarts Board Cameras stacked cleanly top-to-bottom
+      const bmp = this.boardFrameBitmap;
+      if (bmp && bmp.width > 0 && bmp.height > 0) {
+        if (bmp.width >= bmp.height * 2.4) {
+          // Autodarts combined 3-camera wide strip (e.g. 3840×720 = 3 × 1280×720)
+          const sliceW = Math.floor(bmp.width / 3);
+          for (let i = 0; i < 3; i++) {
+            const dy = Math.round(i * camH);
+            const dh = i === 2 ? H - dy : Math.round(camH);
+            drawCover(ctx, bmp, rightX, dy, rightW, dh, {
+              sx: i * sliceW,
+              sy: 0,
+              sw: sliceW,
+              sh: bmp.height,
+            });
+            drawCornerLabel(ctx, `BOARD CAM ${i + 1}`, rightX + 12, dy + 12, '#10B981', true);
+          }
+
+          // Subtle horizontal dividers between Cam 1 / Cam 2 / Cam 3
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.24)';
+          ctx.fillRect(rightX, Math.round(camH) - 1, rightW, 2);
+          ctx.fillRect(rightX, Math.round(camH * 2) - 1, rightW, 2);
+        } else {
+          // Fallback if Autodarts ever returns a single camera frame
+          drawCover(ctx, bmp, rightX, 0, rightW, H);
+          drawCornerLabel(ctx, 'BOARD CAM', rightX + 14, 18, '#10B981');
+        }
+      } else {
+        // Waiting placeholder for the 3 board cameras
+        ctx.fillStyle = '#111827';
+        ctx.fillRect(rightX, 0, rightW, H);
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '700 22px "Plus Jakarta Sans", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('3 BOARD CAMS CONNECTING...', rightX + rightW / 2, H / 2 - 14);
+        ctx.font = '500 13px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#64748B';
+        ctx.fillText(
+          this.boardFeedError
+            ? 'Start Autodarts Desktop (port 3180)'
+            : 'Linking Autodarts 3-cam stream...',
+          rightX + rightW / 2,
+          H / 2 + 18
+        );
+        ctx.textAlign = 'left';
+        drawCornerLabel(ctx, 'BOARD CAMS (3)', rightX + 14, 18, '#F59E0B', true);
+      }
+
+      // Crisp vertical divider separating Oche Cam & 3-Cam Board Stack
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+      ctx.fillRect(leftW - 2, 0, 4, H);
     };
 
-    // Initial paint + steady 30fps compositor loop (setInterval keeps running even if unfocused)
+    // Steady 30fps compositor loop
     drawFrame();
     this.renderInterval = window.setInterval(drawFrame, 33);
 
-    // 4. Capture composited video stream (+ mic audio tracks if requested)
+    // 4. Capture composited broadcast stream
     const canvasStream = canvas.captureStream(30);
     if (includeAudio) {
       for (const audioTrack of ocheStream.getAudioTracks()) {
@@ -386,7 +509,7 @@ class OcheCamService {
     this.compositeStream = canvasStream;
     this.mimeType = this.pickSupportedMimeType();
 
-    // 5. Start overlapping MediaRecorder ring buffer on the composited stream
+    // 5. Start overlapping MediaRecorder ring buffer
     this.spawnSlot();
     this.rotationTimer = window.setInterval(() => {
       if (!this.ocheStream || !this.ocheStream.active) {
@@ -410,6 +533,8 @@ class OcheCamService {
       this.renderInterval = null;
     }
 
+    this.stopAutodartsThreeCamReader();
+
     for (const slot of this.slots) {
       try {
         if (slot.recorder.state !== 'inactive') {
@@ -425,31 +550,18 @@ class OcheCamService {
       this.ocheVideoEl.srcObject = null;
       this.ocheVideoEl = null;
     }
-    if (this.boardVideoEl) {
-      this.boardVideoEl.srcObject = null;
-      this.boardVideoEl = null;
-    }
-    if (this.boardImgEl) {
-      this.boardImgEl.src = '';
-      this.boardImgEl = null;
-    }
     this.canvasEl = null;
 
     if (this.ocheStream) {
       this.ocheStream.getTracks().forEach((t) => t.stop());
       this.ocheStream = null;
     }
-    if (this.boardStream) {
-      this.boardStream.getTracks().forEach((t) => t.stop());
-      this.boardStream = null;
-    }
     if (this.compositeStream) {
       this.compositeStream.getTracks().forEach((t) => t.stop());
       this.compositeStream = null;
     }
 
-    this.boardFeedActive = false;
-    this.boardFeedError = null;
+    this.setBoardFeedStatus(false, null);
     this.isCapturing = false;
     this.emitCaptureState(false);
   }
@@ -458,7 +570,7 @@ class OcheCamService {
     if (!this.compositeStream || !this.compositeStream.active) return;
 
     try {
-      const bitrate = this.isDualMode ? 3_800_000 : 2_500_000;
+      const bitrate = 4_200_000;
       const options: MediaRecorderOptions = this.mimeType
         ? { mimeType: this.mimeType, videoBitsPerSecond: bitrate }
         : { videoBitsPerSecond: bitrate };
@@ -507,10 +619,6 @@ class OcheCamService {
     this.slots = keep;
   }
 
-  /**
-   * Captures a ~10-second WebM Blob from the rolling ring buffer (~5s pre-roll + ~5s reaction)
-   * without writing to disk yet so callers can either auto-save or hold for iPad Save confirmation.
-   */
   public async recordTenSecondClip(meta: CaptureClipMetadata): Promise<RecordedClipBundle | null> {
     if (!this.compositeStream || !this.compositeStream.active) return null;
     if (this.isCapturing) return null;
@@ -521,7 +629,12 @@ class OcheCamService {
     );
     if (activeSlots.length === 0) return null;
 
-    const idealStart = now - this.PRE_TARGET_SEC * 1000;
+    const preTargetSec =
+      meta.preSeconds ??
+      (meta.category === 'user' ? this.MANUAL_PRE_TARGET_SEC : this.DEFAULT_PRE_TARGET_SEC);
+    const postSec = meta.postSeconds ?? this.DEFAULT_POST_TARGET_SEC;
+
+    const idealStart = now - preTargetSec * 1000;
     let bestSlot = activeSlots[0];
     let bestDiff = Math.abs(bestSlot.startedAt - idealStart);
 
@@ -535,9 +648,9 @@ class OcheCamService {
 
     bestSlot.pinned = true;
     this.isCapturing = true;
+    this.activeCaptureMeta = meta;
 
     const actualPreSec = Math.max(0.5, Number(((now - bestSlot.startedAt) / 1000).toFixed(1)));
-    const postSec = this.POST_TARGET_SEC;
     this.emitCaptureState(true, postSec);
 
     await new Promise<void>((resolve) => {
@@ -570,6 +683,8 @@ class OcheCamService {
       }
     });
 
+    const finalMeta = this.activeCaptureMeta || meta;
+    this.activeCaptureMeta = null;
     this.slots = this.slots.filter((s) => s.id !== bestSlot.id);
     this.isCapturing = false;
     this.emitCaptureState(false);
@@ -579,18 +694,28 @@ class OcheCamService {
     const totalDuration = Number((actualPreSec + postSec).toFixed(1));
     return {
       blob,
-      meta,
+      meta: finalMeta,
       preSeconds: actualPreSec,
       postSeconds: postSec,
       durationSec: totalDuration,
-      isDualCamera: this.isDualMode,
+      isDualCamera: true,
       createdAt: Date.now(),
     };
   }
 
   /**
-   * Uploads a previously recorded 10-second WebM bundle to disk via `/api/replays/clip`.
+   * Upgrades metadata on an already-in-flight capture (e.g. if a Bullseye or Ton+
+   * triggered capture milliseconds before the game detected the winning checkout).
    */
+  public upgradeActiveCaptureMeta(meta: CaptureClipMetadata): boolean {
+    if (!this.isCapturing) return false;
+    this.activeCaptureMeta = {
+      ...(this.activeCaptureMeta || {}),
+      ...meta,
+    };
+    return true;
+  }
+
   public async uploadRecordedClip(
     bundle: RecordedClipBundle,
     saveDir: string
@@ -611,6 +736,10 @@ class OcheCamService {
       ext: 'webm',
       dir: saveDir,
     });
+
+    if (meta.customFileName) {
+      params.set('customName', meta.customFileName);
+    }
 
     if (meta.coords) {
       params.set('cx', meta.coords.x.toFixed(4));
@@ -636,6 +765,10 @@ class OcheCamService {
       ...(data.clip as ReplayClipRecord),
       isSavedToDisk: true,
     };
+  }
+
+  public getBoardFrameCount(): number {
+    return this.boardFrameCount;
   }
 }
 

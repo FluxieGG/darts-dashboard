@@ -12,8 +12,10 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useReplayStore } from '../store/useReplayStore';
 import { useLayoutStore } from '../store/useLayoutStore';
 import { useCareerStore } from '../store/useCareerStore';
-import { computeStreaks } from '../lib/careerEngine';
+import { useOnlineMatchStore } from '../store/useOnlineMatchStore';
+import { computeStreaks, evaluateObjectives } from '../lib/careerEngine';
 import { getDefaultConfigForGame, getGameDefinition } from '../games/gameRegistry';
+import { getCheckoutRoute } from '../games/utils/dartHelpers';
 import { gameEventBus } from './gameEventBus';
 import { generateSimulatedThrow, generateSimulatedVisit } from './simulator';
 import { ocheCamService } from './ocheCamService';
@@ -64,11 +66,25 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
   const replayState = useReplayStore.getState();
   const layoutState = useLayoutStore.getState();
   const careerState = useCareerStore.getState();
+  const onlineMatchState = useOnlineMatchStore.getState();
+
+  const dartsLeftInVisit = Math.max(1, 3 - liveState.currentVisitThrows.length);
+  const onlineCheckout =
+    onlineMatchState.isActive &&
+    onlineMatchState.remaining > 0 &&
+    onlineMatchState.remaining <= 170
+      ? (() => {
+          const r = getCheckoutRoute(onlineMatchState.remaining, onlineMatchState.outRule);
+          return r && r.length <= dartsLeftInVisit ? r : null;
+        })()
+      : null;
 
   const activePlayer = playerState.getActivePlayer();
   const activeStats = playerState.getActiveStats();
+  const visiblePlayers = playerState.getVisiblePlayers();
   const playerVault = careerState.getPlayerVault(activePlayer.id, activePlayer.name);
   const streaks = computeStreaks(playerVault.dailyLogs);
+  const evaluatedObjectives = evaluateObjectives(playerVault);
 
   const gameDef = gameState.activeGameId ? getGameDefinition(gameState.activeGameId) : undefined;
 
@@ -98,7 +114,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       name: activePlayer.name,
       dartColor: activePlayer.dartColor,
     },
-    players: playerState.players.map((p) => ({
+    players: visiblePlayers.map((p) => ({
       id: p.id,
       name: p.name,
       isPrimary: p.isPrimary,
@@ -129,6 +145,27 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       totalCareerDarts: playerVault.records.totalCareerDarts,
       isDiskSynced: careerState.isDiskSynced,
     },
+    dailyObjectives: evaluatedObjectives.daily,
+    weeklyObjectives: evaluatedObjectives.weekly,
+    onlineMatch: {
+      isActive: onlineMatchState.isActive,
+      startScore: onlineMatchState.startScore,
+      outRule: onlineMatchState.outRule,
+      legsToWin: onlineMatchState.legsToWin,
+      opponentName: onlineMatchState.opponentName,
+      playerLegs: onlineMatchState.playerLegs,
+      opponentLegs: onlineMatchState.opponentLegs,
+      remaining: onlineMatchState.remaining,
+      dartsInLeg: onlineMatchState.dartsInLeg,
+      legThreeDartAvg:
+        onlineMatchState.dartsInLeg > 0
+          ? (onlineMatchState.legPointsScored / onlineMatchState.dartsInLeg) * 3
+          : 0,
+      checkoutRoute: onlineCheckout,
+      isBust: onlineMatchState.isBust,
+      canUndo: onlineMatchState.history.length > 0,
+      matchWinner: onlineMatchState.matchWinner,
+    },
     replayStatus: replayState.status,
     replayBoardCameraMode: replayState.boardCameraMode,
     replayAutoStartCamera: replayState.autoStartCamera,
@@ -148,7 +185,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
           isSaved: Boolean(replayState.lastRecordedClip.isSavedToDisk),
         }
       : null,
-    recentClips: replayState.clips.slice(0, 30).map((c) => ({
+    recentClips: replayState.clips.slice(0, 100).map((c) => ({
       id: c.id,
       filename: c.filename,
       relativePath: c.relativePath,
@@ -166,6 +203,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       ? {
           id: gameDef.id,
           title: gameDef.title,
+          mode: gameDef.mode === 'practice' ? 'practice' : 'arcade',
           phase: gameState.matchPhase,
           minPlayers: gameDef.minPlayers,
           maxPlayers: gameDef.maxPlayers,
@@ -191,8 +229,13 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
   switch (cmd.type) {
     case 'toggle_party_mode':
       liveStore.resetBoardForModeSwitch();
+      useCareerStore.getState().resetPartyCareerData();
+      useOnlineMatchStore.getState().stopMatch();
       if (playerStore.isPartyMode) {
         playerStore.stopPartyMode();
+        if (gameStore.activeView !== 'game-active') {
+          gameStore.setActiveTurnPlayerColor(null);
+        }
       } else {
         playerStore.startPartyMode();
       }
@@ -201,25 +244,25 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
     case 'navigate':
       if (cmd.view === 'dashboard') {
         gameStore.returnToDashboard();
+      } else if (cmd.view === 'practice-lobby') {
+        gameStore.openPracticeLobby();
       } else {
         gameStore.openGamesLobby();
       }
       break;
 
     case 'switch_player':
-      if (!playerStore.isPartyMode) {
-        playerStore.setActivePlayer(cmd.playerId);
-      }
+      playerStore.setActivePlayer(cmd.playerId);
       break;
 
     case 'add_player': {
       const trimmed = cmd.name.trim();
       if (!trimmed) break;
-      const shouldSave = cmd.isSaved ?? true;
+      const shouldSave = playerStore.isPartyMode ? false : (cmd.isSaved ?? true);
       const dartColor = cmd.dartColor;
       if (cmd.addToRoster || (gameStore.activeView === 'game-active' && gameStore.matchPhase === 'setup')) {
-        if (shouldSave) {
-          const newId = playerStore.addPlayer(trimmed, { dartColor, isSaved: true });
+        if (shouldSave || playerStore.isPartyMode) {
+          const newId = playerStore.addPlayer(trimmed, { dartColor, isSaved: shouldSave });
           gameStore.addRosterPlayer(trimmed, newId, undefined, dartColor);
         } else {
           gameStore.addRosterPlayer(trimmed, undefined, undefined, dartColor);
@@ -235,7 +278,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'add_saved_to_roster': {
-      const match = playerStore.players.find((p) => p.id === cmd.playerId);
+      const match = playerStore.getVisiblePlayers().find((p) => p.id === cmd.playerId);
       if (match) {
         gameStore.addRosterPlayer(match.name, match.id, match.nickname, match.dartColor);
       }
@@ -249,7 +292,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
     case 'launch_game': {
       const def = getGameDefinition(cmd.gameId);
       if (def && def.status !== 'coming_soon' && def.component) {
-        gameStore.launchGame(def.id, getDefaultConfigForGame(def));
+        gameStore.launchGame(def.id, getDefaultConfigForGame(def), def.mode === 'practice');
       }
       break;
     }
@@ -269,6 +312,8 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
         reason: 'User Triggered Clip',
         coords: lastDart?.coords,
         category: 'user',
+        preSeconds: 15,
+        postSeconds: 5,
       });
       break;
     }
@@ -302,8 +347,8 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'reroll_objectives': {
-      const p = playerStore.getActivePlayer();
-      useCareerStore.getState().rerollObjectives(p.id, cmd.period);
+      const active = playerStore.getActivePlayer();
+      useCareerStore.getState().rerollObjectives(active.id, cmd.period);
       break;
     }
 
@@ -356,9 +401,23 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
 
     case 'play_saved_clip': {
       const rs = useReplayStore.getState();
-      const clip = rs.clips.find((c) => c.id === cmd.clipId);
-      if (clip) {
-        rs.openOverlayClip(clip);
+      const findClip = (list: typeof rs.clips) =>
+        list.find(
+          (c) =>
+            c.id === cmd.clipId ||
+            c.relativePath === cmd.clipId ||
+            c.filename === cmd.clipId
+        );
+      const existing = findClip(rs.clips);
+      if (existing) {
+        rs.openOverlayClip(existing);
+      } else {
+        void rs.loadSavedClips().then(() => {
+          const fresh = findClip(useReplayStore.getState().clips);
+          if (fresh) {
+            useReplayStore.getState().openOverlayClip(fresh);
+          }
+        });
       }
       break;
     }
@@ -392,6 +451,78 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
         document.exitFullscreen().catch(() => {});
       }
       break;
+
+    case 'online_match_start':
+      useOnlineMatchStore.getState().startMatch({
+        startScore: cmd.startScore,
+        outRule: cmd.outRule,
+        legsToWin: cmd.legsToWin,
+        opponentName: cmd.opponentName,
+      });
+      gameStore.returnToDashboard();
+      break;
+
+    case 'online_match_stop':
+      useOnlineMatchStore.getState().stopMatch();
+      break;
+
+    case 'online_match_opp_leg':
+      useOnlineMatchStore.getState().recordOpponentWonLeg();
+      break;
+
+    case 'online_match_reset_leg':
+      useOnlineMatchStore.getState().resetCurrentLeg();
+      break;
+
+    case 'online_match_undo':
+      useOnlineMatchStore.getState().undoLastDart();
+      break;
+
+    case 'online_match_set_score':
+      useOnlineMatchStore.getState().setRemainingManual(cmd.remaining);
+      break;
+
+    case 'resync_and_recalibrate': {
+      devLogger.log('BOARD', 'info', 'iPad requested full Resync & Autodarts Camera Recalibration...');
+      void (async () => {
+        try {
+          // 1. Trigger Autodarts Desktop 3-camera auto-calibration + board reset (port 3180)
+          const calRes = await fetch('/api/board/api/config/calibration/auto', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+          if (calRes.ok) {
+            devLogger.log('BOARD', 'success', 'Autodarts 3-camera auto-calibration complete');
+          } else {
+            devLogger.log('BOARD', 'warn', `Autodarts calibration returned HTTP ${calRes.status}`);
+          }
+
+          await fetch('/api/board/api/reset', { method: 'POST' }).catch(() => {});
+          liveStore.clearCurrentVisit();
+        } catch (err) {
+          devLogger.log(
+            'BOARD',
+            'warn',
+            'Autodarts calibration unreachable (is Autodarts Desktop running?)',
+            (err as Error).message
+          );
+        }
+
+        // 2. Refresh Career Vault & Saved Clips archive from disk
+        await Promise.all([
+          useCareerStore.getState().hydrateVault(),
+          useReplayStore.getState().loadSavedClips(),
+        ]);
+
+        // 3. Re-arm Split-Cam + 3-cam board stream cleanly (unless actively recording a clip)
+        const rs = useReplayStore.getState();
+        if (rs.status !== 'capturing' && (rs.cameraEnabled || rs.autoStartCamera)) {
+          await rs.startCamera();
+        }
+      })();
+      break;
+    }
 
     case 'start_match':
       if (gameStore.activeView === 'game-active' && gameStore.matchPhase === 'setup') {
@@ -512,6 +643,7 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
         });
         useReplayStore.getState().setConnectedRemotes(count);
         if (count > 0) {
+          void useReplayStore.getState().loadSavedClips().then(() => schedulePush());
           schedulePush();
         }
       } catch {
@@ -537,6 +669,7 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
     const unsubReplay = useReplayStore.subscribe(schedulePush);
     const unsubLayout = useLayoutStore.subscribe(schedulePush);
     const unsubCareer = useCareerStore.subscribe(schedulePush);
+    const unsubOnline = useOnlineMatchStore.subscribe(schedulePush);
 
     return () => {
       es.close();
@@ -547,6 +680,7 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
       unsubReplay();
       unsubLayout();
       unsubCareer();
+      unsubOnline();
       if (pushTimer !== null) {
         clearTimeout(pushTimer);
       }

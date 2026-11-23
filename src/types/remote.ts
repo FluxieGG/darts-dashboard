@@ -1,5 +1,6 @@
 import { AppView, GameMatchConfig, GameMatchPhase } from './games';
 import { DataConnectionMode, WidgetId } from './config';
+import { ObjectiveProgress } from './career';
 import {
   BoardCameraMode,
   OcheCamStatus,
@@ -32,6 +33,7 @@ export interface RemotePresencePayload {
 export interface RemoteActiveGameSnapshot {
   id: string;
   title: string;
+  mode: 'arcade' | 'practice';
   phase: GameMatchPhase;
   minPlayers: number;
   maxPlayers: number;
@@ -96,6 +98,24 @@ export interface RemoteKioskState {
     totalCareerDarts: number;
     isDiskSynced: boolean;
   };
+  dailyObjectives: ObjectiveProgress[];
+  weeklyObjectives: ObjectiveProgress[];
+  onlineMatch: {
+    isActive: boolean;
+    startScore: 501 | 301 | 701;
+    outRule: 'double' | 'straight';
+    legsToWin: number;
+    opponentName: string;
+    playerLegs: number;
+    opponentLegs: number;
+    remaining: number;
+    dartsInLeg: number;
+    legThreeDartAvg: number;
+    checkoutRoute: string[] | null;
+    isBust: boolean;
+    canUndo: boolean;
+    matchWinner: 'player' | 'opponent' | null;
+  };
   replayStatus: OcheCamStatus;
   replayBoardCameraMode: BoardCameraMode;
   replayAutoStartCamera: boolean;
@@ -136,7 +156,7 @@ export interface RemoteKioskState {
  */
 export type RemoteCommand =
   | { type: 'toggle_party_mode' }
-  | { type: 'navigate'; view: 'dashboard' | 'games-lobby' }
+  | { type: 'navigate'; view: 'dashboard' | 'games-lobby' | 'practice-lobby' }
   | { type: 'switch_player'; playerId: string }
   | { type: 'add_player'; name: string; addToRoster?: boolean; dartColor?: string; isSaved?: boolean }
   | { type: 'update_player_color'; playerId: string; dartColor: string }
@@ -176,4 +196,17 @@ export type RemoteCommand =
   | { type: 'delete_saved_clip'; path: string }
   | { type: 'arm_dev_replay' }
   | { type: 'cancel_dev_replay' }
-  | { type: 'toggle_fullscreen' };
+  | { type: 'toggle_fullscreen' }
+  | {
+      type: 'online_match_start';
+      startScore: 501 | 301 | 701;
+      outRule: 'double' | 'straight';
+      legsToWin: number;
+      opponentName?: string;
+    }
+  | { type: 'online_match_stop' }
+  | { type: 'online_match_opp_leg' }
+  | { type: 'online_match_reset_leg' }
+  | { type: 'online_match_undo' }
+  | { type: 'online_match_set_score'; remaining: number }
+  | { type: 'resync_and_recalibrate' };

@@ -9,6 +9,7 @@ import { MobileDevConsoleView } from './components/dev/MobileDevConsoleView';
 import { ActionReplayOverlay } from './components/replay/ActionReplayOverlay';
 import { KioskBootScreen } from './components/layout/KioskBootScreen';
 import { GamesLobby } from './games/components/GamesLobby';
+import { PracticeLobby } from './games/components/PracticeLobby';
 import { GameHost } from './games/components/GameHost';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useLiveBoardStore } from './store/useLiveBoardStore';
@@ -17,6 +18,7 @@ import { useGameStore } from './store/useGameStore';
 import { useCareerStore } from './store/useCareerStore';
 import { useReplayStore } from './store/useReplayStore';
 import { useReplayAutoTrigger } from './hooks/useReplayAutoTrigger';
+import { useOnlineMatchSync } from './hooks/useOnlineMatchSync';
 import { LocalBoardManagerService } from './services/localBoardManager';
 import { generateSimulatedThrow } from './services/simulator';
 import { useKioskRemoteBridge } from './services/remoteBridge';
@@ -49,6 +51,7 @@ const KioskApp: React.FC = () => {
   const { connectedRemotes } = useKioskRemoteBridge(isLocalConnected);
   const { connectedDevs } = useKioskDevBridge(isLocalConnected, connectedRemotes);
   useReplayAutoTrigger();
+  useOnlineMatchSync();
 
   const boardServiceRef = useRef<LocalBoardManagerService | null>(null);
 
@@ -77,6 +80,12 @@ const KioskApp: React.FC = () => {
     }, 6500);
     return () => window.clearTimeout(timer);
   }, [recentlyCompletedObjective, dismissObjectiveToast]);
+
+  // Hydrate Career Vault & Saved Clips immediately on startup so restarts never miss disk clips
+  useEffect(() => {
+    void hydrateVault();
+    void loadSavedClips();
+  }, [hydrateVault, loadSavedClips]);
 
   // Fallback hydration if user skips KioskBootScreen early
   useEffect(() => {
@@ -187,11 +196,14 @@ const KioskApp: React.FC = () => {
         isLocalConnected={isLocalConnected}
       />
 
-      {/* Main Content View: Dashboard Bento Grid | Tech Darts Games Showcase | Active Game Socket */}
+      {/* Main Content View: Dashboard Bento Grid | Tech Darts Arcade | Solo Training | Active Game */}
       <div className="flex-1 pb-8">
         {activeView === 'dashboard' && <BentoGrid />}
         {activeView === 'games-lobby' && (
           <GamesLobby isLocalConnected={isLocalConnected} />
+        )}
+        {activeView === 'practice-lobby' && (
+          <PracticeLobby isLocalConnected={isLocalConnected} />
         )}
         {activeView === 'game-active' && (
           <GameHost isLocalConnected={isLocalConnected} />

@@ -17,6 +17,9 @@ interface PlayerState {
 
   // Ephemeral RAM-only Party Mode state (NEVER persisted to localStorage)
   isPartyMode: boolean;
+  activePartyPlayerId: string;
+  partyPlayers: PlayerProfile[];
+  partyPlayerStats: Record<string, PlayerStats>;
   partyStats: PlayerStats;
 
   // Actions
@@ -27,6 +30,7 @@ interface PlayerState {
     updates: Partial<Pick<PlayerProfile, 'name' | 'nickname' | 'dartColor' | 'dartColorName' | 'isSaved'>>
   ) => void;
   removePlayer: (playerId: string) => void;
+  getVisiblePlayers: () => PlayerProfile[];
   getActivePlayer: () => PlayerProfile;
   getActiveStats: () => PlayerStats;
   updateActiveStats: (updater: (prev: PlayerStats) => PlayerStats) => void;
@@ -46,12 +50,27 @@ const PRIMARY_PLAYER: PlayerProfile = {
   dartColorName: 'Emerald',
 };
 
-const PARTY_PLAYER: PlayerProfile = {
+const PARTY_DEFAULT_PLAYER: PlayerProfile = {
   id: 'party-session',
-  name: 'Party Session',
-  nickname: 'Unsaved Guest Mode',
+  name: 'Party Guest',
+  nickname: 'Temp Party Profile',
   isPrimary: false,
+  isSaved: false,
+  dartColor: '#C084FC',
+  dartColorName: 'Purple',
 };
+
+function createFreshPartyState() {
+  const freshStats = createEmptyPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name);
+  return {
+    activePartyPlayerId: PARTY_DEFAULT_PLAYER.id,
+    partyPlayers: [{ ...PARTY_DEFAULT_PLAYER }],
+    partyPlayerStats: {
+      [PARTY_DEFAULT_PLAYER.id]: freshStats,
+    },
+    partyStats: freshStats,
+  };
+}
 
 export const usePlayerStore = create<PlayerState>()(
   persist(
@@ -63,24 +82,35 @@ export const usePlayerStore = create<PlayerState>()(
       },
 
       isPartyMode: false,
-      partyStats: createEmptyPlayerStats(PARTY_PLAYER.id, PARTY_PLAYER.name),
+      ...createFreshPartyState(),
 
       startPartyMode: () => {
         set({
           isPartyMode: true,
-          partyStats: createEmptyPlayerStats(PARTY_PLAYER.id, PARTY_PLAYER.name),
+          ...createFreshPartyState(),
         });
       },
 
       stopPartyMode: () => {
         set({
           isPartyMode: false,
-          partyStats: createEmptyPlayerStats(PARTY_PLAYER.id, PARTY_PLAYER.name),
+          ...createFreshPartyState(),
         });
       },
 
       setActivePlayer: (playerId: string) => {
-        const exists = get().players.some((p) => p.id === playerId);
+        const state = get();
+        if (state.isPartyMode) {
+          const exists = state.partyPlayers.some((p) => p.id === playerId);
+          if (exists) {
+            const nextStats =
+              state.partyPlayerStats[playerId] ||
+              createEmptyPlayerStats(playerId, PARTY_DEFAULT_PLAYER.name);
+            set({ activePartyPlayerId: playerId, partyStats: nextStats });
+          }
+          return;
+        }
+        const exists = state.players.some((p) => p.id === playerId);
         if (exists) {
           set({ activePlayerId: playerId });
         }
@@ -92,8 +122,35 @@ export const usePlayerStore = create<PlayerState>()(
             ? { nickname: optionsOrNickname }
             : optionsOrNickname || {};
 
+        const state = get();
+        const dartColor = opts.dartColor || (state.isPartyMode ? '#C084FC' : DEFAULT_DART_COLOR);
+
+        // In Party Mode, EVERY newly added player is strictly temporary (RAM-only, never saved!)
+        if (state.isPartyMode) {
+          const id = `party-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+          const tempProfile: PlayerProfile = {
+            id,
+            name,
+            nickname: opts.nickname || 'Temp Party Guest',
+            isPrimary: false,
+            dartColor,
+            dartColorName: getDartColorLabel(dartColor),
+            isSaved: false,
+          };
+          const newStats = createEmptyPlayerStats(id, name);
+          set((s) => ({
+            partyPlayers: [...s.partyPlayers, tempProfile],
+            partyPlayerStats: {
+              ...s.partyPlayerStats,
+              [id]: newStats,
+            },
+            activePartyPlayerId: id,
+            partyStats: newStats,
+          }));
+          return id;
+        }
+
         const id = `player-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-        const dartColor = opts.dartColor || DEFAULT_DART_COLOR;
         const isSaved = opts.isSaved ?? true;
 
         const newProfile: PlayerProfile = {
@@ -107,10 +164,10 @@ export const usePlayerStore = create<PlayerState>()(
         };
         const newStats = createEmptyPlayerStats(id, name);
 
-        set((state) => ({
-          players: [...state.players, newProfile],
+        set((s) => ({
+          players: [...s.players, newProfile],
           playerStats: {
-            ...state.playerStats,
+            ...s.playerStats,
             [id]: newStats,
           },
           activePlayerId: id,
@@ -120,24 +177,68 @@ export const usePlayerStore = create<PlayerState>()(
       },
 
       updatePlayerProfile: (playerId, updates) => {
-        set((state) => ({
-          players: state.players.map((p) => {
-            if (p.id !== playerId) return p;
-            const nextColor = updates.dartColor ?? p.dartColor ?? DEFAULT_DART_COLOR;
+        set((state) => {
+          if (state.isPartyMode) {
             return {
-              ...p,
-              ...updates,
-              dartColor: nextColor,
-              dartColorName:
-                updates.dartColorName ??
-                (updates.dartColor ? getDartColorLabel(nextColor) : p.dartColorName ?? getDartColorLabel(nextColor)),
+              partyPlayers: state.partyPlayers.map((p) => {
+                if (p.id !== playerId) return p;
+                const nextColor = updates.dartColor ?? p.dartColor ?? '#C084FC';
+                return {
+                  ...p,
+                  ...updates,
+                  isSaved: false,
+                  dartColor: nextColor,
+                  dartColorName:
+                    updates.dartColorName ??
+                    (updates.dartColor
+                      ? getDartColorLabel(nextColor)
+                      : p.dartColorName ?? getDartColorLabel(nextColor)),
+                };
+              }),
             };
-          }),
-        }));
+          }
+
+          return {
+            players: state.players.map((p) => {
+              if (p.id !== playerId) return p;
+              const nextColor = updates.dartColor ?? p.dartColor ?? DEFAULT_DART_COLOR;
+              return {
+                ...p,
+                ...updates,
+                dartColor: nextColor,
+                dartColorName:
+                  updates.dartColorName ??
+                  (updates.dartColor
+                    ? getDartColorLabel(nextColor)
+                    : p.dartColorName ?? getDartColorLabel(nextColor)),
+              };
+            }),
+          };
+        });
       },
 
       removePlayer: (playerId: string) => {
         const state = get();
+        if (state.isPartyMode) {
+          if (playerId === PARTY_DEFAULT_PLAYER.id) return;
+          const remaining = state.partyPlayers.filter((p) => p.id !== playerId);
+          const remainingStats = { ...state.partyPlayerStats };
+          delete remainingStats[playerId];
+          const nextActiveId =
+            state.activePartyPlayerId === playerId
+              ? remaining[0]?.id || PARTY_DEFAULT_PLAYER.id
+              : state.activePartyPlayerId;
+          set({
+            partyPlayers: remaining,
+            partyPlayerStats: remainingStats,
+            activePartyPlayerId: nextActiveId,
+            partyStats:
+              remainingStats[nextActiveId] ||
+              createEmptyPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name),
+          });
+          return;
+        }
+
         const target = state.players.find((p) => p.id === playerId);
         if (!target || target.isPrimary) return;
 
@@ -153,10 +254,19 @@ export const usePlayerStore = create<PlayerState>()(
         });
       },
 
+      getVisiblePlayers: () => {
+        const state = get();
+        return state.isPartyMode ? state.partyPlayers : state.players;
+      },
+
       getActivePlayer: () => {
         const state = get();
         if (state.isPartyMode) {
-          return PARTY_PLAYER;
+          return (
+            state.partyPlayers.find((p) => p.id === state.activePartyPlayerId) ||
+            state.partyPlayers[0] ||
+            PARTY_DEFAULT_PLAYER
+          );
         }
         return (
           state.players.find((p) => p.id === state.activePlayerId) || state.players[0]
@@ -166,7 +276,10 @@ export const usePlayerStore = create<PlayerState>()(
       getActiveStats: () => {
         const state = get();
         if (state.isPartyMode) {
-          return state.partyStats;
+          return (
+            state.partyPlayerStats[state.activePartyPlayerId] ||
+            state.partyStats
+          );
         }
         const stats = state.playerStats[state.activePlayerId];
         if (stats) return stats;
@@ -175,10 +288,21 @@ export const usePlayerStore = create<PlayerState>()(
 
       updateActiveStats: (updater) => {
         set((state) => {
-          // In Party Mode, mutate ONLY the ephemeral RAM-only partyStats object
+          // In Party Mode, mutate ONLY the ephemeral RAM-only partyPlayerStats object
           if (state.isPartyMode) {
+            const partyId = state.activePartyPlayerId;
+            const partyProfile =
+              state.partyPlayers.find((p) => p.id === partyId) || PARTY_DEFAULT_PLAYER;
+            const current =
+              state.partyPlayerStats[partyId] ||
+              createEmptyPlayerStats(partyProfile.id, partyProfile.name);
+            const updated = updater(current);
             return {
-              partyStats: updater(state.partyStats),
+              partyStats: updated,
+              partyPlayerStats: {
+                ...state.partyPlayerStats,
+                [partyId]: updated,
+              },
             };
           }
           const activeId = state.activePlayerId;
@@ -196,10 +320,18 @@ export const usePlayerStore = create<PlayerState>()(
 
       resetSessionStats: (playerId) => {
         set((state) => {
-          // If Party Mode is active and no explicit playerId was passed, reset ONLY partyStats
-          if (state.isPartyMode && !playerId) {
+          // In Party Mode, reset ONLY the ephemeral RAM-only party player's stats
+          if (state.isPartyMode) {
+            const targetId = playerId || state.activePartyPlayerId;
+            const profile =
+              state.partyPlayers.find((p) => p.id === targetId) || PARTY_DEFAULT_PLAYER;
+            const fresh = createEmptyPlayerStats(profile.id, profile.name);
             return {
-              partyStats: createEmptyPlayerStats(PARTY_PLAYER.id, PARTY_PLAYER.name),
+              partyStats: targetId === state.activePartyPlayerId ? fresh : state.partyStats,
+              partyPlayerStats: {
+                ...state.partyPlayerStats,
+                [targetId]: fresh,
+              },
             };
           }
 

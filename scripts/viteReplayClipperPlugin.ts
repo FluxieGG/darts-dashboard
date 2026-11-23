@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
@@ -77,6 +78,14 @@ function inferCategory(item: {
 
 function sanitizeFilenamePart(str: string): string {
   return str.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'clip';
+}
+
+function sanitizeDisplayFilename(str: string): string {
+  return str
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 96);
 }
 
 /**
@@ -201,11 +210,88 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
       const dest = path.join(rootDir, subfolder, entry.name);
       if (!fs.existsSync(dest)) {
         fs.renameSync(src, dest);
+        dirty = true;
       }
     }
   } catch {
     // ignore
   }
+
+  // Scan ALL 3 category subfolders on disk and auto-discover any clip files not yet in clips-index.json
+  // so saved clips ALWAYS survive restarts, folder edits, or empty/corrupt index files!
+  const knownPaths = new Set(organized.map((c) => (c.relativePath || '').toLowerCase()));
+
+  for (const [catKey, subfolder] of Object.entries(CATEGORY_FOLDERS) as Array<[ClipCategory, string]>) {
+    const folderFull = path.join(rootDir, subfolder);
+    try {
+      const entries = fs.readdirSync(folderFull, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !/\.(webm|mp4)$/i.test(entry.name)) continue;
+        const targetRel = `${subfolder}/${entry.name}`;
+        if (knownPaths.has(targetRel.toLowerCase())) continue;
+
+        const targetFull = path.join(folderFull, entry.name);
+        const stat = fs.statSync(targetFull);
+        if (stat.size === 0) continue;
+
+        // Parse clean human-readable metadata from filename
+        const baseNoExt = entry.name.replace(/\.(webm|mp4)$/i, '');
+        const cleanTitle = baseNoExt.replace(/\s*\(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\)$/, '').trim();
+        let playerName = 'Player';
+        let segmentName = 'CLIP';
+        let reason = cleanTitle || entry.name;
+
+        const winMatch = cleanTitle.match(/^(.+?)\s*-\s*Game Winning Shot\s*-\s*(.+)$/i);
+        if (winMatch) {
+          playerName = winMatch[2].trim();
+          segmentName = 'WIN';
+          reason = cleanTitle;
+        } else {
+          // Legacy timestamp format: YYYY-MM-DD_HH-MM-SS_Player_Segment_Tag...
+          const parts = baseNoExt.split('_');
+          if (parts.length >= 5 && /^\d{4}-\d{2}-\d{2}$/.test(parts[0])) {
+            playerName = parts[2] || 'Player';
+            segmentName = parts[3] || 'CLIP';
+            reason =
+              catKey === 'dev'
+                ? `Dev Test (${segmentName})`
+                : catKey === 'user'
+                ? 'Manual Oche Clip'
+                : parts[4] || 'Game Highlight';
+          }
+        }
+
+        organized.push({
+          id: `disk-${Math.round(stat.mtimeMs)}-${sanitizeFilenamePart(entry.name).slice(-8)}`,
+          filename: entry.name,
+          relativePath: targetRel,
+          subfolder,
+          category: catKey,
+          filePath: targetFull,
+          url: `/api/replays/file/${encodeUrlPath(targetRel)}`,
+          playerName,
+          segmentName,
+          score: 0,
+          reason,
+          preSeconds: 5,
+          postSeconds: 5,
+          durationSec: 10,
+          sizeBytes: stat.size,
+          isDevTest: catKey === 'dev',
+          isDualCamera: true,
+          isSavedToDisk: true,
+          createdAt: Math.round(stat.mtimeMs),
+        });
+        knownPaths.add(targetRel.toLowerCase());
+        dirty = true;
+      }
+    } catch {
+      // ignore folder read error
+    }
+  }
+
+  // Keep newest clips first
+  organized.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   if (dirty) {
     writeIndex(rootDir, organized);
@@ -250,6 +336,54 @@ function attachReplayMiddleware(
     const requestedDir = url.searchParams.get('dir');
     if (requestedDir && requestedDir.trim().length > 2) {
       activeClipsDir = path.resolve(requestedDir.trim());
+    }
+
+    // 0. GET /api/replays/board-stream — Unbuffered live MJPEG relay from Autodarts Desktop (all 3 board cameras)
+    if (req.method === 'GET' && pathname === '/api/replays/board-stream') {
+      const upstreamQuery = url.searchParams.get('warp') === '1' ? '?warp=true' : '';
+      const upstreamUrl = `http://127.0.0.1:3180/api/streams/live${upstreamQuery}`;
+
+      const upstreamReq = http.get(upstreamUrl, (upstreamRes) => {
+        if ((upstreamRes.statusCode || 500) >= 400) {
+          res.statusCode = upstreamRes.statusCode || 502;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: false, error: `Autodarts stream HTTP ${upstreamRes.statusCode}` }));
+          upstreamRes.resume();
+          return;
+        }
+
+        res.statusCode = 200;
+        res.setHeader(
+          'Content-Type',
+          upstreamRes.headers['content-type'] || 'multipart/x-mixed-replace; boundary=advisionmjpg'
+        );
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+
+        upstreamRes.pipe(res);
+
+        upstreamRes.on('error', () => {
+          if (!res.writableEnded) res.end();
+        });
+      });
+
+      upstreamReq.on('error', (err) => {
+        if (!res.headersSent) {
+          res.statusCode = 502;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        } else if (!res.writableEnded) {
+          res.end();
+        }
+      });
+
+      req.on('close', () => {
+        upstreamReq.destroy();
+      });
+      return;
     }
 
     // 1. GET /api/replays/list — Organize subfolders & return saved clips
@@ -324,6 +458,8 @@ function attachReplayMiddleware(
               String(now.getSeconds()).padStart(2, '0'),
             ].join('-');
 
+          const customNameRaw = url.searchParams.get('customName') || '';
+          const customNameClean = sanitizeDisplayFilename(customNameRaw);
           const tag =
             category === 'dev'
               ? 'DEVTEST'
@@ -331,7 +467,9 @@ function attachReplayMiddleware(
               ? 'USER'
               : sanitizeFilenamePart(reason);
           const layoutTag = isDualCamera ? '_SPLIT' : '';
-          const filename = `${stamp}_${sanitizeFilenamePart(playerName)}_${sanitizeFilenamePart(segmentName)}_${tag}${layoutTag}.${ext}`;
+          const filename = customNameClean
+            ? `${customNameClean} (${stamp}).${ext}`
+            : `${stamp}_${sanitizeFilenamePart(playerName)}_${sanitizeFilenamePart(segmentName)}_${tag}${layoutTag}.${ext}`;
           const relativePath = `${subfolder}/${filename}`;
           const filePath = path.join(activeClipsDir, subfolder, filename);
 

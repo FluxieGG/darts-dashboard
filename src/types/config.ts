@@ -1,4 +1,5 @@
 export type WidgetId =
+  | 'live-match'
   | 'hero-kpis'
   | 'live-visit'
   | 'dartboard-heatmap'
@@ -7,7 +8,8 @@ export type WidgetId =
   | 'doubles-trebles'
   | 'recent-matches'
   | 'objectives-tracker'
-  | 'career-streak';
+  | 'career-streak'
+  | 'game-leaderboards';
 
 export interface WidgetConfig {
   id: WidgetId;

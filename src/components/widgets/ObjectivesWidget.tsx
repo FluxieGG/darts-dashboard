@@ -93,11 +93,12 @@ export const ObjectivesWidget: React.FC = () => {
   const activePlayer = usePlayerStore((s) => s.getActivePlayer());
   const isPartyMode = usePlayerStore((s) => s.isPartyMode);
   const vaultMap = useCareerStore((s) => s.vault.players);
+  const partyVaultMap = useCareerStore((s) => s.partyVaults);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
 
   const playerVault = useMemo(
     () => getPlayerVault(activePlayer.id, activePlayer.name),
-    [vaultMap, activePlayer.id, activePlayer.name, getPlayerVault]
+    [vaultMap, partyVaultMap, isPartyMode, activePlayer.id, activePlayer.name, getPlayerVault]
   );
 
   const { daily, weekly } = useMemo(() => evaluateObjectives(playerVault), [playerVault]);
@@ -121,21 +122,28 @@ export const ObjectivesWidget: React.FC = () => {
             </h3>
             <p className="text-xs text-slate-400">
               {isPartyMode
-                ? 'Paused during Party Mode'
+                ? `${activePlayer.name} • Temp Party Session (Unsaved)`
                 : `${activePlayer.name}'s live challenges • tied to Career Vault`}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {!isPartyMode && !isTempGuest && (
-            <Badge
-              variant={streaks.currentStreak > 0 ? 'amber' : 'slate'}
-              size="sm"
-            >
-              <Flame className="w-3.5 h-3.5 text-amber-400" />
-              {streaks.currentStreak} Day Streak
+          {isPartyMode ? (
+            <Badge variant="amber" size="sm">
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-300" />
+              Temp Session
             </Badge>
+          ) : (
+            !isTempGuest && (
+              <Badge
+                variant={streaks.currentStreak > 0 ? 'amber' : 'slate'}
+                size="sm"
+              >
+                <Flame className="w-3.5 h-3.5 text-amber-400" />
+                {streaks.currentStreak} Day Streak
+              </Badge>
+            )
           )}
           <Badge variant={dailyDone === daily.length ? 'emerald' : 'sky'} size="sm">
             <Trophy className="w-3 h-3" />
@@ -144,22 +152,13 @@ export const ObjectivesWidget: React.FC = () => {
         </div>
       </div>
 
-      {/* Party Mode or Temporary Guest Guard Notice */}
-      {isPartyMode || isTempGuest ? (
+      {/* Session-Only Guest Notice (Party Mode runs full live RAM objectives!) */}
+      {isTempGuest ? (
         <div className="rounded-xl p-4 bg-purple-950/40 border border-purple-400/25 flex items-center gap-3">
           <ShieldCheck className="w-6 h-6 text-amber-300 shrink-0" />
           <div className="text-xs sm:text-sm text-slate-200 leading-snug">
-            {isPartyMode ? (
-              <>
-                <strong className="text-amber-200">Party Mode Active:</strong> Your personal
-                objectives and Career Vault are paused so guest throws stay isolated.
-              </>
-            ) : (
-              <>
-                <strong className="text-white">Session-Only Guest:</strong> Save this player&apos;s
-                account to unlock persistent Daily &amp; Weekly Objectives and Career Vault tracking.
-              </>
-            )}
+            <strong className="text-white">Session-Only Guest:</strong> Save this player&apos;s
+            account to unlock persistent Daily &amp; Weekly Objectives and Career Vault tracking.
           </div>
         </div>
       ) : (

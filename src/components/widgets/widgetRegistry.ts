@@ -9,6 +9,8 @@ import { TrendSparklineWidget } from './TrendSparklineWidget';
 import { RecentMatchesWidget } from './RecentMatchesWidget';
 import { ObjectivesWidget } from './ObjectivesWidget';
 import { CareerStreakWidget } from './CareerStreakWidget';
+import { LiveMatchWidget } from './LiveMatchWidget';
+import { LeaderboardsWidget } from './LeaderboardsWidget';
 import {
   Activity,
   Flame,
@@ -19,6 +21,8 @@ import {
   Target,
   CalendarDays,
   Trophy,
+  Crown,
+  Radio,
 } from 'lucide-react';
 
 export interface WidgetRegistryItem {
@@ -31,6 +35,14 @@ export interface WidgetRegistryItem {
 }
 
 export const WIDGET_REGISTRY: Record<WidgetId, WidgetRegistryItem> = {
+  'live-match': {
+    id: 'live-match',
+    title: 'Online Match & Checkout Co-Pilot',
+    category: 'Live',
+    defaultColSpan: 2,
+    icon: Radio,
+    component: LiveMatchWidget,
+  },
   'hero-kpis': {
     id: 'hero-kpis',
     title: 'Performance Snapshot',
@@ -102,6 +114,14 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetRegistryItem> = {
     defaultColSpan: 2,
     icon: CalendarDays,
     component: CareerStreakWidget,
+  },
+  'game-leaderboards': {
+    id: 'game-leaderboards',
+    title: 'Hall of Fame & Game Leaderboards',
+    category: 'History',
+    defaultColSpan: 2,
+    icon: Crown,
+    component: LeaderboardsWidget,
   },
 };
 

@@ -7,6 +7,10 @@ import {
   Dices,
   Scissors,
   Flag,
+  Crosshair,
+  TrendingUp,
+  Award,
+  Zap,
 } from 'lucide-react';
 import { GameDefinition, GameMatchConfig } from '../types/games';
 import { BoardIsLavaGame } from './board-is-lava';
@@ -17,6 +21,10 @@ import { ShanghaiGame } from './shanghai';
 import { SnakesAndLaddersGame } from './snakes-and-ladders';
 import { HalveItGame } from './halve-it';
 import { DonkeyDerbyGame } from './donkey-derby';
+import { Bobs27Game } from './bobs-27';
+import { Checkout121Game } from './checkout-121';
+import { JdcChallengeGame } from './jdc-challenge';
+import { ScoringGauntletGame } from './scoring-gauntlet';
 
 /**
  * Central Plug-In Registry for Modular Tech Darts Games.
@@ -488,10 +496,220 @@ export const GAME_REGISTRY: GameDefinition[] = [
       },
     ],
   },
+  // =========================================================================
+  // SOLO TRAINING MODE — PRO PRACTICE DRILLS
+  // =========================================================================
+  {
+    id: 'bobs-27',
+    title: "Bob's 27",
+    tagline: 'Start on 27. Hit every double D1 → Bull or lose points.',
+    description:
+      'The gold-standard PDC doubles drill. Throw 3 darts at every double from D1 through D20 and Bullseye. Each hit adds the double value; missing all 3 deducts it. Stay above zero to conquer the board!',
+    category: 'Practice',
+    mode: 'practice',
+    status: 'playable',
+    component: Bobs27Game,
+    accent: 'emerald',
+    icon: Crosshair,
+    minPlayers: 1,
+    maxPlayers: 1,
+    estimatedMinutes: '6–10 min',
+    difficulty: 'Skill',
+    tags: ['Solo Drill', 'Doubles', 'PDC Classic'],
+    rules: [
+      {
+        title: '1. Start on 27 Points',
+        description: 'Throw 3 darts at Double 1, then Double 2, all the way up to D20 and Bull.',
+      },
+      {
+        title: '2. Hit to Add, Miss All 3 to Deduct',
+        description:
+          'Every hit adds the double value (+2 on D1 up to +50 on Bull). Missing all 3 subtracts that double from your score.',
+      },
+      {
+        title: '3. Stay Above Zero',
+        description: 'Drop below 0 in Standard mode and the drill ends. Beat your personal high score!',
+      },
+    ],
+    configOptions: [
+      {
+        key: 'includeBull',
+        label: 'Include Bullseye Finale',
+        description: 'Finish with 3 darts at Inner Bull (+50 / -50)',
+        type: 'toggle',
+        defaultValue: true,
+      },
+      {
+        key: 'failOnNegative',
+        label: 'Knockout Below Zero',
+        description: 'End drill immediately if score drops below 0 (off = Survival Practice)',
+        type: 'toggle',
+        defaultValue: true,
+      },
+    ],
+  },
+  {
+    id: 'checkout-121',
+    title: '121 Checkout Ladder',
+    tagline: '9 darts to check out. Succeed to climb +1 up the ladder.',
+    description:
+      'Build real match-finishing nerve. You get 9 darts (3 visits) to check out 121 on a Double or Bull with live PDC checkout highlights. Finish it to climb to 122, 123, 124+ — fail and step back 1.',
+    category: 'Practice',
+    mode: 'practice',
+    status: 'playable',
+    component: Checkout121Game,
+    accent: 'sky',
+    icon: TrendingUp,
+    minPlayers: 1,
+    maxPlayers: 1,
+    estimatedMinutes: '8–12 min',
+    difficulty: 'Skill',
+    tags: ['Solo Drill', 'Checkouts', 'Clutch'],
+    rules: [
+      {
+        title: '1. 9 Darts Per Finish',
+        description: 'You have 3 visits to check out the active target using standard Double-Out rules.',
+      },
+      {
+        title: '2. Climb on Checkout',
+        description: 'Hit the winning double and immediately move up +1 (121 → 122 → 123...).',
+      },
+      {
+        title: '3. Live Board Routes',
+        description: 'Optimal PDC checkout beds pulse right on the dartboard after every dart.',
+      },
+    ],
+    configOptions: [
+      {
+        key: 'startTarget',
+        label: 'Starting Checkout',
+        type: 'select',
+        defaultValue: 121,
+        options: [
+          { label: '121 (Pro Standard)', value: 121 },
+          { label: '101 (Intermediate)', value: 101 },
+          { label: '81 (Warm-Up)', value: 81 },
+          { label: '61 (2-Dart Finishes)', value: 61 },
+        ],
+      },
+      {
+        key: 'maxTargets',
+        label: 'Session Length',
+        type: 'select',
+        defaultValue: 10,
+        options: [
+          { label: '5 Targets (Quick)', value: 5 },
+          { label: '10 Targets (Standard)', value: 10 },
+          { label: '15 Targets (Deep Grind)', value: 15 },
+        ],
+      },
+      {
+        key: 'safeFloor',
+        label: 'Safe Starting Floor',
+        description: 'Never drop below your starting target on misses',
+        type: 'toggle',
+        defaultValue: true,
+      },
+    ],
+  },
+  {
+    id: 'jdc-challenge',
+    title: 'JDC Challenge',
+    tagline: 'Official 3-stage scored routine. Earn your JDC Belt rank.',
+    description:
+      'The official Junior Darts Corporation training benchmark: Shanghai 10–15, Around-the-World Doubles (D1–D20 + Bull), and Shanghai 15–20. Earn +100 Shanghai bonuses and climb from White Belt to Black Belt!',
+    category: 'Practice',
+    mode: 'practice',
+    status: 'playable',
+    component: JdcChallengeGame,
+    accent: 'purple',
+    icon: Award,
+    minPlayers: 1,
+    maxPlayers: 1,
+    estimatedMinutes: '10–14 min',
+    difficulty: 'Balanced',
+    tags: ['Solo Drill', 'Belt Rating', 'All-Round'],
+    rules: [
+      {
+        title: '1. Stage 1 — Shanghai 10 to 15',
+        description: '3 darts per number (10→15). S/D/T count; hitting all three in one visit adds +100!',
+      },
+      {
+        title: '2. Stage 2 — Doubles Gauntlet',
+        description: '1 dart at every double from D1 to D20 (+50 each) plus Bullseye (+100).',
+      },
+      {
+        title: '3. Stage 3 — Shanghai 15 to 20',
+        description: 'Finish strong on 15→20 to lock in your official JDC Belt colour.',
+      },
+    ],
+    configOptions: [],
+  },
+  {
+    id: 'scoring-gauntlet',
+    title: '99-Dart Scoring Gauntlet',
+    tagline: 'Pure power scoring benchmark. Track live 3DA & Ton+ pace.',
+    description:
+      'Lock onto T20, T19, Bullseye, or Free Scoring for a fixed dart count (30, 60, or 99 darts). Measures exact 3-Dart Average, target hit percentage, and Ton+ bursts without distraction.',
+    category: 'Practice',
+    mode: 'practice',
+    status: 'playable',
+    component: ScoringGauntletGame,
+    accent: 'amber',
+    icon: Zap,
+    minPlayers: 1,
+    maxPlayers: 1,
+    estimatedMinutes: '5–10 min',
+    difficulty: 'Casual',
+    tags: ['Solo Drill', '3DA Benchmark', 'Heavy Scoring'],
+    rules: [
+      {
+        title: '1. Pick Your Focus Bed',
+        description: 'Highlight T20, T19, Bullseye, or throw Free Scoring across the full board.',
+      },
+      {
+        title: '2. Hammer Every Visit',
+        description: 'Track live 3-Dart Average, Target Hit %, and 60+/100+/140+/180 bursts.',
+      },
+    ],
+    configOptions: [
+      {
+        key: 'dartCount',
+        label: 'Total Darts',
+        type: 'select',
+        defaultValue: 99,
+        options: [
+          { label: '30 Darts (Quick Warmup)', value: 30 },
+          { label: '60 Darts (Club Set)', value: 60 },
+          { label: '99 Darts (Classic Benchmark)', value: 99 },
+        ],
+      },
+      {
+        key: 'focus',
+        label: 'Target Focus',
+        type: 'select',
+        defaultValue: 'T20',
+        options: [
+          { label: 'Treble 20 Focus', value: 'T20' },
+          { label: 'Treble 19 Focus', value: 'T19' },
+          { label: 'Bullseye Focus', value: 'Bull' },
+          { label: 'Free Scoring', value: 'free' },
+        ],
+      },
+    ],
+  },
 ];
 
 export function getGameDefinition(id: string): GameDefinition | undefined {
   return GAME_REGISTRY.find((g) => g.id === id);
+}
+
+export function getArcadeGames(): GameDefinition[] {
+  return GAME_REGISTRY.filter((g) => g.mode !== 'practice');
+}
+
+export function getPracticeDrills(): GameDefinition[] {
+  return GAME_REGISTRY.filter((g) => g.mode === 'practice');
 }
 
 export function getDefaultConfigForGame(game: GameDefinition): GameMatchConfig {

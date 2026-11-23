@@ -41,6 +41,7 @@ interface GameStoreState {
   // Actions
   setActiveView: (view: AppView) => void;
   openGamesLobby: () => void;
+  openPracticeLobby: () => void;
   returnToDashboard: () => void;
   setSelectedCategory: (category: GameCategory | 'All') => void;
   toggleSound: () => void;
@@ -49,7 +50,7 @@ interface GameStoreState {
   setActiveTurnPlayerColor: (hex: string | null) => void;
 
   // Game Socket Lifecycle
-  launchGame: (gameId: string, defaultConfig: GameMatchConfig) => void;
+  launchGame: (gameId: string, defaultConfig: GameMatchConfig, isPractice?: boolean) => void;
   exitGameToLobby: () => void;
   setMatchConfigValue: (key: string, value: string | number | boolean) => void;
   addRosterPlayer: (
@@ -68,7 +69,7 @@ interface GameStoreState {
 }
 
 function createInitialRoster(): GamePlayer[] {
-  const players = usePlayerStore.getState().players;
+  const players = usePlayerStore.getState().getVisiblePlayers();
   return players.slice(0, 4).map((p, idx) => {
     const fallbackColor = GAME_PLAYER_COLORS[idx % GAME_PLAYER_COLORS.length];
     return {
@@ -81,6 +82,29 @@ function createInitialRoster(): GamePlayer[] {
     };
   });
 }
+
+function createSoloRoster(): GamePlayer[] {
+  const playerState = usePlayerStore.getState();
+  const active = playerState.getActivePlayer();
+  const fallbackColor = GAME_PLAYER_COLORS[0];
+  return [
+    {
+      id: active.id,
+      name: active.name,
+      nickname: active.nickname,
+      colorHex: active.dartColor || fallbackColor.hex,
+      colorIndex: 0,
+      avatarInitial: active.name.charAt(0).toUpperCase(),
+    },
+  ];
+}
+
+const PRACTICE_DRILL_IDS = new Set([
+  'bobs-27',
+  'checkout-121',
+  'jdc-challenge',
+  'scoring-gauntlet',
+]);
 
 export const useGameStore = create<GameStoreState>()(
   persist(
@@ -114,6 +138,17 @@ export const useGameStore = create<GameStoreState>()(
           activeTurnPlayerColor: null,
         }),
 
+      openPracticeLobby: () =>
+        set({
+          activeView: 'practice-lobby',
+          activeGameId: null,
+          matchPhase: 'setup',
+          lastResult: null,
+          activeController: null,
+          canUndoActiveGame: false,
+          activeTurnPlayerColor: null,
+        }),
+
       returnToDashboard: () =>
         set({
           activeView: 'dashboard',
@@ -135,9 +170,14 @@ export const useGameStore = create<GameStoreState>()(
 
       setActiveTurnPlayerColor: (activeTurnPlayerColor) => set({ activeTurnPlayerColor }),
 
-      launchGame: (gameId, defaultConfig) => {
+      launchGame: (gameId, defaultConfig, isPractice) => {
+        const soloDrill = Boolean(isPractice || PRACTICE_DRILL_IDS.has(gameId));
         const currentRoster = get().roster;
-        const seededRoster = currentRoster.length > 0 ? currentRoster : createInitialRoster();
+        const seededRoster = soloDrill
+          ? createSoloRoster()
+          : currentRoster.length > 0
+          ? currentRoster
+          : createInitialRoster();
         set({
           activeView: 'game-active',
           activeGameId: gameId,
@@ -150,14 +190,16 @@ export const useGameStore = create<GameStoreState>()(
         });
       },
 
-      exitGameToLobby: () =>
+      exitGameToLobby: () => {
+        const wasPractice = Boolean(get().activeGameId && PRACTICE_DRILL_IDS.has(get().activeGameId!));
         set({
-          activeView: 'games-lobby',
+          activeView: wasPractice ? 'practice-lobby' : 'games-lobby',
           activeGameId: null,
           matchPhase: 'setup',
           lastResult: null,
           activeTurnPlayerColor: null,
-        }),
+        });
+      },
 
       setMatchConfigValue: (key, value) =>
         set((s) => ({
@@ -242,17 +284,20 @@ export const useGameStore = create<GameStoreState>()(
           headline: result.headline,
           completedAt: result.completedAt,
         };
+        const isPartyMode = usePlayerStore.getState().isPartyMode;
         const winnerColor =
           result.standings.find((st) => st.rank === 1)?.colorHex ?? null;
         set((s) => ({
           matchPhase: 'finished',
           lastResult: result,
           activeTurnPlayerColor: winnerColor,
-          recentResults: [summary, ...s.recentResults].slice(0, 20),
+          // Never persist Party Mode match history into localStorage
+          recentResults: isPartyMode ? s.recentResults : [summary, ...s.recentResults].slice(0, 20),
         }));
 
-        // Log arcade game played/won into Career Vault for any saved player in the match
+        // Log arcade/practice game played/won into Career Vault & Hall of Fame Leaderboards
         const careerStore = useCareerStore.getState();
+        const gameMode = PRACTICE_DRILL_IDS.has(result.gameId) ? 'practice' : 'arcade';
         for (const standing of result.standings) {
           careerStore.recordArcadeResultForPlayer(
             standing.playerId,
@@ -260,6 +305,27 @@ export const useGameStore = create<GameStoreState>()(
             gameTitle,
             standing.rank === 1
           );
+          const rawNum =
+            typeof standing.primaryStatValue === 'number'
+              ? standing.primaryStatValue
+              : parseFloat(String(standing.primaryStatValue).replace(/[^0-9.-]/g, ''));
+          const statNum = Number.isFinite(rawNum) ? rawNum : 0;
+          const lowerIsBetter =
+            result.gameId === 'demolition' &&
+            standing.primaryStatLabel.toLowerCase().includes('dart');
+          careerStore.recordLeaderboardPerformance({
+            gameId: result.gameId,
+            gameTitle,
+            mode: gameMode,
+            playerId: standing.playerId,
+            playerName: standing.playerName,
+            colorHex: standing.colorHex,
+            didWin: standing.rank === 1 && result.winnerId !== null,
+            statValue: statNum,
+            statDisplay: `${standing.primaryStatValue} ${standing.primaryStatLabel}`,
+            statLabel: standing.primaryStatLabel,
+            lowerIsBetter,
+          });
         }
       },
 

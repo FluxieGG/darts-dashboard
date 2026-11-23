@@ -55,10 +55,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     availableCameras,
     autoStartCamera,
     selectedDeviceId,
-    boardCameraMode,
-    boardCameraDeviceId,
-    autodartsCamIndex,
-    autodartsCamCustomUrl,
     includeAudio,
     saveDir,
     triggers,
@@ -68,10 +64,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     stopCamera,
     setAutoStartCamera,
     setSelectedDeviceId,
-    setBoardCameraMode,
-    setBoardCameraDeviceId,
-    setAutodartsCamIndex,
-    setAutodartsCamCustomUrl,
     setIncludeAudio,
     setSaveDir,
     updateTrigger,
@@ -334,94 +326,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* RIGHT CAMERA: Dartboard Close-Up Cam */}
-          <div className="p-3 rounded-xl bg-slate-950/60 border border-white/[0.08] space-y-2.5">
+          {/* RIGHT CAMERA: Locked Autodarts 3-Camera Board Feed */}
+          <div className="p-3 rounded-xl bg-slate-950/60 border border-emerald-500/25 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="text-[11px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
-                Right Split — Dartboard Camera
+                Right Split — Autodarts 3 Board Cameras (Locked)
               </label>
-              <div className="flex items-center gap-1">
-                {(
-                  [
-                    { id: 'usb', label: 'USB Cam' },
-                    { id: 'autodarts', label: 'Autodarts 3180' },
-                    { id: 'none', label: 'Single Cam' },
-                  ] as const
-                ).map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => {
-                      setBoardCameraMode(mode.id);
-                      if (camStatus === 'buffering') {
-                        void startCamera({ boardCameraMode: mode.id });
-                      }
-                    }}
-                    className={`px-2 py-1 rounded-md text-[10px] font-mono font-bold border transition-colors cursor-pointer ${
-                      boardCameraMode === mode.id
-                        ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
-                        : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/40 text-[10px] font-mono font-bold text-emerald-300">
+                3-Cam Live Stack • Port 3180
+              </span>
             </div>
 
-            {boardCameraMode === 'usb' && (
-              <select
-                value={boardCameraDeviceId}
-                onChange={(e) => {
-                  setBoardCameraDeviceId(e.target.value);
-                  if (camStatus === 'buffering') {
-                    void startCamera({ boardDeviceId: e.target.value });
-                  }
-                }}
-                className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
-              >
-                <option value="">Select 2nd USB / Virtual Board Camera...</option>
-                {availableCameras.map((cam) => (
-                  <option key={cam.deviceId} value={cam.deviceId}>
-                    {cam.label} {cam.deviceId === selectedDeviceId ? '(Used as Oche Cam)' : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {boardCameraMode === 'autodarts' && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-mono text-slate-400">Board Cam Index:</span>
-                  {[0, 1, 2].map((idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => {
-                        setAutodartsCamIndex(idx);
-                        if (camStatus === 'buffering') {
-                          void startCamera({ autodartsCamIndex: idx });
-                        }
-                      }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border cursor-pointer ${
-                        autodartsCamIndex === idx
-                          ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
-                          : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Cam {idx}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={autodartsCamCustomUrl}
-                  onChange={(e) => setAutodartsCamCustomUrl(e.target.value)}
-                  placeholder="Optional custom MJPEG URL (blank = /api/board/api/streams/live?cam=0&warp=true)"
-                  className="w-full bg-slate-900 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-emerald-400"
-                />
-              </div>
-            )}
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Automatically streams all 3 Autodarts board cameras stacked side-by-side next to your
+              Oche throwing webcam directly from <code className="text-slate-200">127.0.0.1:3180/api/streams/live</code>.
+            </p>
 
             {boardFeedError && (
               <div className="p-2 rounded-lg bg-amber-500/15 border border-amber-400/35 text-[11px] text-amber-200">
@@ -448,7 +367,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
               <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/75 text-[10px] font-mono font-bold text-emerald-300 flex items-center gap-1.5 border border-white/10">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-                {boardCameraMode === 'none' ? 'SINGLE CAM LIVE' : 'SIDE-BY-SIDE COMPOSITE LIVE'}
+                OCHE + 3 BOARD CAMS LIVE
               </span>
             </div>
           )}

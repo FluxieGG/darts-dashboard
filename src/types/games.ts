@@ -4,7 +4,7 @@ import { DartThrow } from './darts';
 /**
  * Top-level navigation views in the Autodarts shell
  */
-export type AppView = 'dashboard' | 'games-lobby' | 'game-active';
+export type AppView = 'dashboard' | 'games-lobby' | 'practice-lobby' | 'game-active';
 
 /**
  * Lifecycle phases managed by the GameHost socket
@@ -19,7 +19,7 @@ export type GameStatus = 'coming_soon' | 'beta' | 'playable';
 /**
  * High-level genre categories for lobby filtering
  */
-export type GameCategory = 'Party' | 'Elimination' | 'Precision' | 'Classic' | 'Arcade';
+export type GameCategory = 'Party' | 'Elimination' | 'Precision' | 'Classic' | 'Arcade' | 'Practice';
 
 /**
  * Accent palette aligned with the dashboard design tokens
@@ -188,6 +188,8 @@ export interface GameDefinition {
   /** Richer Flight Club / Roxy Ballroom style description */
   description: string;
   category: GameCategory;
+  /** 'arcade' (default multiplayer/social games) or 'practice' (solo training drills) */
+  mode?: 'arcade' | 'practice';
   status: GameStatus;
   accent: GameAccent;
   /** Icon component from lucide-react */

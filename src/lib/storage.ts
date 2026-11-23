@@ -7,11 +7,19 @@ const STORAGE_KEYS = {
 export const DEFAULT_LAYOUT: DashboardLayout = {
   widgets: [
     {
+      id: 'live-match',
+      title: 'Online Match & Checkout Co-Pilot',
+      description: 'Live 501/301 online match leg tracker with real-time PDC checkout routes',
+      enabled: true,
+      order: 0,
+      colSpan: 2,
+    },
+    {
       id: 'live-visit',
       title: 'Current Visit Tracker',
       description: 'Live 3-dart badge breakdown, multipliers, and visit total',
       enabled: true,
-      order: 0,
+      order: 1,
       colSpan: 2,
     },
     {
@@ -19,7 +27,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Average Progression Trend',
       description: 'Rolling 3-dart average curve across your session',
       enabled: true,
-      order: 1,
+      order: 2,
       colSpan: 2,
     },
     {
@@ -27,7 +35,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Recent Visits Log',
       description: 'Completed visits with dart breakdown and totals',
       enabled: true,
-      order: 2,
+      order: 3,
       colSpan: 2,
     },
     {
@@ -35,7 +43,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Dartboard Coordinate Heatmap',
       description: 'Vector dartboard with real-time dot plotting and density clustering',
       enabled: true,
-      order: 3,
+      order: 4,
       colSpan: 2,
     },
     {
@@ -43,7 +51,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Performance Snapshot',
       description: '3-Dart Average, First 9, Checkout %, and Highest Visit',
       enabled: true,
-      order: 4,
+      order: 5,
       colSpan: 2,
     },
     {
@@ -51,7 +59,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Scoring Power (Ton Breakdown)',
       description: 'Distribution of 60+, 100+, 140+, and maximum 180 visits',
       enabled: true,
-      order: 5,
+      order: 6,
       colSpan: 1,
     },
     {
@@ -59,7 +67,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Precision Hit Rates',
       description: 'Key double & treble target accuracy (T20, T19, D20, Bull)',
       enabled: true,
-      order: 6,
+      order: 7,
       colSpan: 1,
     },
     {
@@ -67,7 +75,15 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Daily & Weekly Objectives',
       description: 'Live fun & skill challenges tied to your Career Vault',
       enabled: true,
-      order: 7,
+      order: 8,
+      colSpan: 2,
+    },
+    {
+      id: 'game-leaderboards',
+      title: 'Hall of Fame & Game Leaderboards',
+      description: 'All-time wins, high breaks, fastest legs & solo drill records across all games',
+      enabled: true,
+      order: 9,
       colSpan: 2,
     },
     {
@@ -75,7 +91,7 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
       title: 'Streak Calendar & Career Vault',
       description: 'Practice calendar, daily streak tracker, and Best Days Ever archive',
       enabled: true,
-      order: 8,
+      order: 10,
       colSpan: 2,
     },
   ],

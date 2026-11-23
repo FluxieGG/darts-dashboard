@@ -30,6 +30,7 @@ export const CareerStreakWidget: React.FC = () => {
   const activePlayer = usePlayerStore((s) => s.getActivePlayer());
   const isPartyMode = usePlayerStore((s) => s.isPartyMode);
   const vaultMap = useCareerStore((s) => s.vault.players);
+  const partyVaultMap = useCareerStore((s) => s.partyVaults);
   const isDiskSynced = useCareerStore((s) => s.isDiskSynced);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
 
@@ -37,7 +38,7 @@ export const CareerStreakWidget: React.FC = () => {
 
   const playerVault = useMemo(
     () => getPlayerVault(activePlayer.id, activePlayer.name),
-    [vaultMap, activePlayer.id, activePlayer.name, getPlayerVault]
+    [vaultMap, partyVaultMap, isPartyMode, activePlayer.id, activePlayer.name, getPlayerVault]
   );
 
   const streaks = useMemo(() => computeStreaks(playerVault.dailyLogs), [playerVault.dailyLogs]);
@@ -72,7 +73,11 @@ export const CareerStreakWidget: React.FC = () => {
             </h3>
             <p className="text-xs text-slate-400 flex items-center gap-1.5">
               <HardDrive className="w-3 h-3 text-emerald-400" />
-              {isDiskSynced ? 'Synced to Career Vault' : 'Local browser vault'}
+              {isPartyMode
+                ? 'Temp Party Session (Unsaved RAM Only)'
+                : isDiskSynced
+                ? 'Synced to Career Vault'
+                : 'Local browser vault'}
             </p>
           </div>
         </div>

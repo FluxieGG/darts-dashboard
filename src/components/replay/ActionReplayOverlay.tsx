@@ -7,6 +7,7 @@ import {
   Columns2,
   FolderOpen,
   Gauge,
+  Loader2,
   Radio,
   Tablet,
   Target,
@@ -16,6 +17,10 @@ import {
  * Pure Full-Viewport Broadcast Action Replay Cinema (Kiosk Display).
  * Zero interactive buttons — playback speed, saving, and dismissal are controlled
  * remotely from the iPad Oche Command Deck.
+ *
+ * When the user taps "Save Clip" on the iPad, the video keeps playing smoothly
+ * underneath a celebratory ~2.2s "CLIP SAVED!" broadcast animation, then automatically
+ * returns to the live game with zero black flicker and zero extra Dismiss tap.
  */
 export const ActionReplayOverlay: React.FC = () => {
   const {
@@ -24,6 +29,8 @@ export const ActionReplayOverlay: React.FC = () => {
     devCaptureNextDartArmed,
     status,
     lastCaptureBanner,
+    isSavingLastClip,
+    savedConfirmation,
   } = useReplayStore();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -78,6 +85,24 @@ export const ActionReplayOverlay: React.FC = () => {
         </div>
       )}
 
+      {/* Standalone "CLIP SAVED!" Banner if user saved from iPad after already closing the replay */}
+      {savedConfirmation && !activeOverlayClip && (
+        <div
+          key={savedConfirmation.id}
+          className="fixed inset-0 z-[60] pointer-events-none flex items-center justify-center p-6"
+        >
+          <div className="animate-clip-saved-pop px-8 py-6 rounded-3xl bg-[#0B0F17]/95 border-2 border-emerald-400/70 shadow-[0_0_70px_rgba(16,185,129,0.55)] text-center space-y-2 backdrop-blur-xl">
+            <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
+            <div className="text-3xl font-black tracking-widest uppercase text-white">
+              CLIP SAVED!
+            </div>
+            <div className="text-xs font-mono text-emerald-300">
+              {savedConfirmation.subfolder} • {savedConfirmation.title}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FULL-SCREEN MAX-SIZE FLIGHT CLUB ACTION REPLAY OVERLAY */}
       {activeOverlayClip && (
         <div className="fixed inset-0 z-50 bg-[#060911]/98 backdrop-blur-lg flex flex-col overflow-hidden">
@@ -106,6 +131,70 @@ export const ActionReplayOverlay: React.FC = () => {
             </div>
           )}
 
+          {/* Smooth "SAVING..." Spinner Pill over Live Video (zero black screen) */}
+          {isSavingLastClip && !savedConfirmation && (
+            <div className="absolute inset-0 z-40 bg-[#060911]/45 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+              <div className="px-7 py-5 rounded-3xl bg-[#0B0F17]/95 border-2 border-emerald-400/60 shadow-[0_0_50px_rgba(16,185,129,0.45)] flex items-center gap-4">
+                <Loader2 className="w-8 h-8 text-emerald-400 animate-spin shrink-0" />
+                <div>
+                  <div className="text-xl sm:text-2xl font-black tracking-wide uppercase text-white">
+                    Saving Clip...
+                  </div>
+                  <div className="text-xs font-mono text-emerald-300/90">
+                    Writing HD split-cam video to disk
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Celebratory ~2.2s "CLIP SAVED!" Broadcast Overlay -> Auto-Resumes Game */}
+          {savedConfirmation && (
+            <div
+              key={savedConfirmation.id}
+              className="absolute inset-0 z-40 bg-[#060911]/72 backdrop-blur-md flex flex-col items-center justify-center p-6 pointer-events-none"
+            >
+              <div className="relative flex flex-col items-center justify-center animate-clip-saved-pop">
+                {/* Expanding Emerald Shockwave Rings */}
+                <div className="absolute w-48 h-48 sm:w-64 sm:h-64 rounded-full border-4 border-emerald-400/75 animate-clip-saved-ring" />
+                <div
+                  className="absolute w-48 h-48 sm:w-64 sm:h-64 rounded-full border-2 border-teal-300/60 animate-clip-saved-ring"
+                  style={{ animationDelay: '0.45s' }}
+                />
+
+                {/* Glowing Checkmark Crest */}
+                <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-gradient-to-tr from-emerald-600 via-emerald-400 to-teal-300 p-2 shadow-[0_0_90px_rgba(16,185,129,0.9)]">
+                  <div className="w-full h-full rounded-full bg-[#0B0F17] border-4 border-white/25 flex items-center justify-center">
+                    <CheckCircle2 className="w-20 h-20 sm:w-24 sm:h-24 text-emerald-400" />
+                  </div>
+                </div>
+
+                {/* Bold 8ft-Glanceable Confirmation Title */}
+                <div className="mt-6 px-8 py-2.5 rounded-full bg-emerald-500 text-slate-950 font-mono font-black text-2xl sm:text-4xl uppercase tracking-[0.22em] shadow-[0_0_50px_rgba(16,185,129,0.85)]">
+                  CLIP SAVED!
+                </div>
+
+                <div className="mt-3 text-sm sm:text-lg font-bold text-white text-center max-w-xl">
+                  {savedConfirmation.title}
+                </div>
+                <div className="mt-1 inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono text-emerald-300/90">
+                  <FolderOpen className="w-4 h-4" />
+                  <span>{savedConfirmation.subfolder}</span>
+                </div>
+
+                {/* Smooth Auto-Resume Progress Bar */}
+                <div className="mt-6 w-64 sm:w-80 space-y-1.5 text-center">
+                  <div className="h-2 rounded-full bg-white/15 overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-emerald-400 to-teal-300 animate-clip-saved-progress" />
+                  </div>
+                  <div className="text-[11px] font-mono uppercase tracking-widest text-slate-300">
+                    Resuming Game...
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Slim Broadcast Top Strip */}
           <div className="shrink-0 px-4 py-3 sm:px-6 bg-gradient-to-r from-rose-600/35 via-amber-500/20 to-emerald-600/25 border-b border-white/10 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -115,7 +204,11 @@ export const ActionReplayOverlay: React.FC = () => {
               </span>
               <div className="min-w-0">
                 <div className="text-base sm:text-2xl font-black text-white leading-tight truncate">
-                  {activeOverlayClip.playerName} — {activeOverlayClip.reason}
+                  {activeOverlayClip.reason
+                    .toLowerCase()
+                    .includes(activeOverlayClip.playerName.toLowerCase())
+                    ? activeOverlayClip.reason
+                    : `${activeOverlayClip.playerName} — ${activeOverlayClip.reason}`}
                 </div>
                 <div className="text-[11px] font-mono text-slate-300/85">
                   {activeOverlayClip.durationSec.toFixed(1)}s clip (~{activeOverlayClip.preSeconds}s

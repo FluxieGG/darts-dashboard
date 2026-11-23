@@ -1,6 +1,7 @@
 import React, { useCallback, useRef } from 'react';
 import { useGameStore } from '../../store/useGameStore';
 import { useLiveBoardStore } from '../../store/useLiveBoardStore';
+import { useReplayStore } from '../../store/useReplayStore';
 import { getGameDefinition } from '../gameRegistry';
 import { GameModuleController, GameResult } from '../../types/games';
 import { soundEngine } from '../utils/soundEngine';
@@ -73,6 +74,24 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
       if (!game) return;
       soundEngine.playVictory(soundEnabled);
       completeMatch(game.title, result);
+
+      // Automatically clip & save the game-winning shot / checkout for EVERY game!
+      const winnerName =
+        result.winnerName?.trim() || result.standings[0]?.playerName || 'Winner';
+      const visitThrows = useLiveBoardStore.getState().currentVisitThrows;
+      const winningDart = visitThrows[visitThrows.length - 1];
+      const clipTitle = `${game.title} - Game Winning Shot - ${winnerName}`;
+
+      void useReplayStore.getState().triggerActionReplay({
+        playerName: winnerName,
+        segmentName: winningDart?.segment.name || 'WIN',
+        score: winningDart?.score ?? 0,
+        reason: clipTitle,
+        customFileName: clipTitle,
+        coords: winningDart?.coords,
+        category: 'game',
+        forceAutoSave: true,
+      });
     },
     [game, soundEnabled, completeMatch]
   );
@@ -222,44 +241,50 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
             <div className="space-y-4">
               <h3 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
                 <Sliders className="w-6 h-6 text-sky-400" />
-                Match Rules
+                {game.mode === 'practice' ? 'Drill Rules' : 'Match Rules'}
               </h3>
 
-              <div className="space-y-2.5">
-                {game.configOptions.map((opt) => {
-                  const value = matchConfig[opt.key] ?? opt.defaultValue;
-                  const displayValue =
-                    opt.type === 'toggle'
-                      ? value
-                        ? 'ON'
-                        : 'OFF'
-                      : opt.options?.find((c) => c.value === value)?.label ?? String(value);
+              {game.configOptions.length === 0 ? (
+                <div className="p-4 rounded-xl bg-slate-900/70 border border-white/[0.08] text-sm text-slate-300 leading-relaxed">
+                  {game.description}
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {game.configOptions.map((opt) => {
+                    const value = matchConfig[opt.key] ?? opt.defaultValue;
+                    const displayValue =
+                      opt.type === 'toggle'
+                        ? value
+                          ? 'ON'
+                          : 'OFF'
+                        : opt.options?.find((c) => c.value === value)?.label ?? String(value);
 
-                  return (
-                    <div
-                      key={opt.key}
-                      className="p-4 rounded-xl bg-slate-900/70 border border-white/[0.08] flex items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm sm:text-base font-bold text-white">{opt.label}</div>
-                        {opt.description && (
-                          <div className="text-xs text-slate-400 mt-0.5">{opt.description}</div>
-                        )}
-                      </div>
-                      <span
-                        className={cn(
-                          'shrink-0 px-3 py-1 rounded-lg font-mono text-xs sm:text-sm font-black border',
-                          opt.type === 'toggle' && !value
-                            ? 'bg-slate-950/70 border-white/10 text-slate-400'
-                            : 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
-                        )}
+                    return (
+                      <div
+                        key={opt.key}
+                        className="p-4 rounded-xl bg-slate-900/70 border border-white/[0.08] flex items-center justify-between gap-3"
                       >
-                        {displayValue}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+                        <div className="min-w-0">
+                          <div className="text-sm sm:text-base font-bold text-white">{opt.label}</div>
+                          {opt.description && (
+                            <div className="text-xs text-slate-400 mt-0.5">{opt.description}</div>
+                          )}
+                        </div>
+                        <span
+                          className={cn(
+                            'shrink-0 px-3 py-1 rounded-lg font-mono text-xs sm:text-sm font-black border',
+                            opt.type === 'toggle' && !value
+                              ? 'bg-slate-950/70 border-white/10 text-slate-400'
+                              : 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                          )}
+                        >
+                          {displayValue}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="space-y-3 pt-3 border-t border-white/10">

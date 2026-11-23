@@ -1,5 +1,5 @@
 import React from 'react';
-import { GAME_REGISTRY } from '../gameRegistry';
+import { getArcadeGames } from '../gameRegistry';
 import { GameCard } from './GameCard';
 import { Badge } from '../../components/common/Badge';
 import { Gamepad2, Sparkles, Tablet, Wifi } from 'lucide-react';
@@ -14,7 +14,8 @@ interface GamesLobbyProps {
  * all game launches & setup are driven from the iPad Oche Command Deck.
  */
 export const GamesLobby: React.FC<GamesLobbyProps> = ({ isLocalConnected }) => {
-  const playableCount = GAME_REGISTRY.filter(
+  const arcadeGames = getArcadeGames();
+  const playableCount = arcadeGames.filter(
     (g) => g.status !== 'coming_soon' && Boolean(g.component)
   ).length;
 
@@ -62,7 +63,7 @@ export const GamesLobby: React.FC<GamesLobbyProps> = ({ isLocalConnected }) => {
 
       {/* Portrait-First Bento Game Showcase Grid (2 cols on portrait 1080px, 4 cols on landscape xl) */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
-        {GAME_REGISTRY.map((game) => (
+        {arcadeGames.map((game) => (
           <GameCard key={game.id} game={game} />
         ))}
       </section>

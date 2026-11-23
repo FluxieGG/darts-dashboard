@@ -10,8 +10,19 @@ import {
   ReplayTriggerSettings,
 } from '../types/replay';
 import { ocheCamService } from '../services/ocheCamService';
+import { soundEngine } from '../games/utils/soundEngine';
+import { useGameStore } from './useGameStore';
 
 export const DEFAULT_REPLAY_SAVE_DIR = 'C:\\Users\\callu\\Desktop\\Media\\darts-autoclipper';
+
+export interface SavedClipConfirmation {
+  id: number;
+  title: string;
+  subfolder: string;
+  filename: string;
+}
+
+let savedConfirmTimer: number | null = null;
 
 interface ReplayStoreState {
   // Persisted settings
@@ -43,6 +54,8 @@ interface ReplayStoreState {
   lastRecordedClip: ReplayClipRecord | null;
   pendingSaveBundle: RecordedClipBundle | null;
   isSavingLastClip: boolean;
+  /** Non-null during the ~2.2s "CLIP SAVED!" broadcast confirmation before auto-resuming game */
+  savedConfirmation: SavedClipConfirmation | null;
 
   /* [DEV-TEST: REMOVE WHEN DONE] One-shot debug trigger to clip the very next dart */
   devCaptureNextDartArmed: boolean;
@@ -96,7 +109,7 @@ export const useReplayStore = create<ReplayStoreState>()(
       cameraEnabled: false,
       autoStartCamera: true,
       selectedDeviceId: '',
-      boardCameraMode: 'usb',
+      boardCameraMode: 'autodarts',
       boardCameraDeviceId: '',
       autodartsCamIndex: 0,
       autodartsCamCustomUrl: '',
@@ -123,6 +136,7 @@ export const useReplayStore = create<ReplayStoreState>()(
       lastRecordedClip: null,
       pendingSaveBundle: null,
       isSavingLastClip: false,
+      savedConfirmation: null,
 
       devCaptureNextDartArmed: false,
       lastCaptureBanner: null,
@@ -164,20 +178,16 @@ export const useReplayStore = create<ReplayStoreState>()(
       startCamera: async (override) => {
         const state = get();
         const ocheDeviceId = override?.ocheDeviceId ?? state.selectedDeviceId;
-        const boardCameraMode = override?.boardCameraMode ?? state.boardCameraMode;
-        const boardDeviceId = override?.boardDeviceId ?? state.boardCameraDeviceId;
-        const autodartsCamIndex = override?.autodartsCamIndex ?? state.autodartsCamIndex;
+        // Board Cam is permanently locked to Autodarts Desktop's 3-camera live stream
+        const boardCameraMode: BoardCameraMode = 'autodarts';
         const includeAudio = state.includeAudio;
 
-        set({ status: 'starting', errorMessage: null, boardFeedError: null });
+        set({ status: 'starting', errorMessage: null, boardFeedError: null, boardCameraMode });
         try {
           await ocheCamService.start({
             ocheDeviceId: ocheDeviceId || undefined,
             includeAudio,
             boardCameraMode,
-            boardDeviceId: boardDeviceId || undefined,
-            autodartsCamIndex,
-            autodartsCamCustomUrl: state.autodartsCamCustomUrl || undefined,
           });
           const cams = await ocheCamService.listCameras();
           const activeTrack = ocheCamService.getOcheStream()?.getVideoTracks()[0];
@@ -187,9 +197,8 @@ export const useReplayStore = create<ReplayStoreState>()(
 
           set({
             cameraEnabled: true,
+            boardCameraMode: 'autodarts',
             selectedDeviceId: resolvedId,
-            boardCameraDeviceId:
-              boardDeviceId || cams.find((c) => c.deviceId !== resolvedId)?.deviceId || '',
             availableCameras: cams,
             status: 'buffering',
             errorMessage: null,
@@ -221,7 +230,7 @@ export const useReplayStore = create<ReplayStoreState>()(
 
       setAutoStartCamera: (autoStartCamera) => set({ autoStartCamera }),
 
-      setBoardCameraMode: (boardCameraMode) => set({ boardCameraMode }),
+      setBoardCameraMode: () => set({ boardCameraMode: 'autodarts' }),
 
       setBoardCameraDeviceId: (boardCameraDeviceId) => set({ boardCameraDeviceId }),
 
@@ -293,12 +302,23 @@ export const useReplayStore = create<ReplayStoreState>()(
           return null;
         }
         if (get().status === 'capturing') {
+          // If a Game Winning Shot landed on the exact same dart as a Bullseye/Ton+ highlight,
+          // upgrade the in-flight capture so it uses the winning shot title & auto-saves to disk!
+          if (meta.forceAutoSave && ocheCamService.upgradeActiveCaptureMeta(meta)) {
+            set({
+              lastCaptureBanner: `Game Winning Shot — Saving ${meta.playerName}'s clip...`,
+            });
+          }
           return null;
         }
 
         set({
           status: 'capturing',
-          lastCaptureBanner: `Recording 5s reaction for ${meta.segmentName}...`,
+          lastCaptureBanner: meta.forceAutoSave
+            ? `Game Winning Shot — Recording ${meta.playerName}'s celebration...`
+            : meta.category === 'user'
+            ? `Capturing 20s Manual Clip (15s back + 5s)...`
+            : `Recording 5s reaction for ${meta.segmentName}...`,
         });
 
         try {
@@ -311,6 +331,9 @@ export const useReplayStore = create<ReplayStoreState>()(
             return null;
           }
 
+          const finalMeta = bundle.meta;
+          const resolvedCategory = finalMeta.isDevTest ? 'dev' : finalMeta.category || 'game';
+
           // Revoke previous unsaved object URL if we are replacing it
           const prevClip = get().lastRecordedClip;
           if (prevClip && !prevClip.isSavedToDisk && prevClip.url.startsWith('blob:')) {
@@ -318,9 +341,15 @@ export const useReplayStore = create<ReplayStoreState>()(
           }
 
           const hasRemoteConnected = get().connectedRemotes > 0;
+          // Automatic game clips & winning shots ALWAYS auto-save straight to disk;
+          // Manual iPad clips ("Clip That!") show preview and await iPad Save confirmation (unless no iPad paired)
+          const shouldAutoSave =
+            !hasRemoteConnected ||
+            Boolean(finalMeta.forceAutoSave) ||
+            resolvedCategory === 'game';
 
-          if (!hasRemoteConnected) {
-            // NO OCHE REMOTE DETECTED -> AUTO-SAVE AUTOMATICALLY TO DISK
+          if (shouldAutoSave) {
+            // AUTO-SAVE TO DISK (Game Winning Shots ALWAYS auto-save, or when no iPad is connected)
             const saved = await ocheCamService.uploadRecordedClip(
               bundle,
               get().saveDir || DEFAULT_REPLAY_SAVE_DIR
@@ -333,14 +362,16 @@ export const useReplayStore = create<ReplayStoreState>()(
               lastRecordedClip: saved,
               pendingSaveBundle: null,
               activeOverlayClip:
-                s.triggers.autoShowOverlay || meta.isDevTest ? saved : s.activeOverlayClip,
+                s.triggers.autoShowOverlay || finalMeta.isDevTest || finalMeta.forceAutoSave
+                  ? saved
+                  : s.activeOverlayClip,
             }));
 
             return saved;
           } else {
             // IPAD / OCHE REMOTE CONNECTED -> SHOW REPLAY IMMEDIATELY & LET IPAD CLICK TO SAVE
             const blobUrl = URL.createObjectURL(bundle.blob);
-            const resolvedCategory = meta.isDevTest ? 'dev' : meta.category || 'game';
+            const resolvedCategory = finalMeta.isDevTest ? 'dev' : finalMeta.category || 'game';
             const resolvedSubfolder =
               resolvedCategory === 'dev'
                 ? 'Dev Tests'
@@ -349,21 +380,21 @@ export const useReplayStore = create<ReplayStoreState>()(
                 : 'Game Highlights';
             const previewClip: ReplayClipRecord = {
               id: `unsaved-${bundle.createdAt}`,
-              filename: `${meta.playerName}_${meta.segmentName}_unsaved.webm`,
+              filename: `${finalMeta.customFileName || `${finalMeta.playerName}_${finalMeta.segmentName}`}_unsaved.webm`,
               category: resolvedCategory,
               subfolder: resolvedSubfolder,
               filePath: `${get().saveDir || DEFAULT_REPLAY_SAVE_DIR}\\${resolvedSubfolder} (Tap Save on iPad)`,
               url: blobUrl,
-              playerName: meta.playerName,
-              segmentName: meta.segmentName,
-              score: meta.score,
-              reason: meta.reason,
-              coords: meta.coords,
+              playerName: finalMeta.playerName,
+              segmentName: finalMeta.segmentName,
+              score: finalMeta.score,
+              reason: finalMeta.reason,
+              coords: finalMeta.coords,
               preSeconds: bundle.preSeconds,
               postSeconds: bundle.postSeconds,
               durationSec: bundle.durationSec,
               sizeBytes: bundle.blob.size,
-              isDevTest: Boolean(meta.isDevTest),
+              isDevTest: Boolean(finalMeta.isDevTest),
               isDualCamera: bundle.isDualCamera,
               isSavedToDisk: false,
               createdAt: bundle.createdAt,
@@ -375,7 +406,7 @@ export const useReplayStore = create<ReplayStoreState>()(
               lastRecordedClip: previewClip,
               pendingSaveBundle: bundle,
               activeOverlayClip:
-                s.triggers.autoShowOverlay || meta.isDevTest ? previewClip : s.activeOverlayClip,
+                s.triggers.autoShowOverlay || finalMeta.isDevTest ? previewClip : s.activeOverlayClip,
             }));
 
             return previewClip;
@@ -397,6 +428,12 @@ export const useReplayStore = create<ReplayStoreState>()(
           return lastRecordedClip?.isSavedToDisk ? lastRecordedClip : null;
         }
 
+        const tempClipId = lastRecordedClip?.id;
+        const tempBlobUrl =
+          lastRecordedClip && lastRecordedClip.url.startsWith('blob:')
+            ? lastRecordedClip.url
+            : null;
+
         set({ isSavingLastClip: true, errorMessage: null });
         try {
           const saved = await ocheCamService.uploadRecordedClip(
@@ -404,21 +441,48 @@ export const useReplayStore = create<ReplayStoreState>()(
             saveDir || DEFAULT_REPLAY_SAVE_DIR
           );
 
-          // Revoke temp blob URL if overlay isn't using it (overlay switches to disk URL seamlessly)
-          if (lastRecordedClip && lastRecordedClip.url.startsWith('blob:')) {
-            URL.revokeObjectURL(lastRecordedClip.url);
-          }
+          soundEngine.playBonusHit(useGameStore.getState().soundEnabled);
 
+          const confirmId = Date.now();
+          const confirmation: SavedClipConfirmation = {
+            id: confirmId,
+            title: saved.reason,
+            subfolder: saved.subfolder || 'Game Highlights',
+            filename: saved.filename,
+          };
+
+          // Keep the currently playing blob video intact (zero black flash!) while playing
+          // the celebratory "CLIP SAVED!" animation, then auto-resume the game cleanly.
           set((s) => ({
             isSavingLastClip: false,
             pendingSaveBundle: null,
             lastRecordedClip: saved,
             clips: [saved, ...s.clips].slice(0, 150),
+            savedConfirmation: confirmation,
             activeOverlayClip:
-              s.activeOverlayClip && s.activeOverlayClip.id === lastRecordedClip?.id
-                ? saved
+              s.activeOverlayClip && s.activeOverlayClip.id === tempClipId
+                ? { ...s.activeOverlayClip, isSavedToDisk: true, filePath: saved.filePath }
                 : s.activeOverlayClip,
           }));
+
+          if (savedConfirmTimer !== null) {
+            window.clearTimeout(savedConfirmTimer);
+          }
+          savedConfirmTimer = window.setTimeout(() => {
+            savedConfirmTimer = null;
+            set((s) => ({
+              savedConfirmation:
+                s.savedConfirmation?.id === confirmId ? null : s.savedConfirmation,
+              activeOverlayClip:
+                s.activeOverlayClip && s.activeOverlayClip.id === tempClipId
+                  ? null
+                  : s.activeOverlayClip,
+            }));
+            if (tempBlobUrl) {
+              // Revoke temp blob URL safely AFTER the <video> element unmounts
+              window.setTimeout(() => URL.revokeObjectURL(tempBlobUrl), 250);
+            }
+          }, 2200);
 
           return saved;
         } catch (err) {
@@ -444,6 +508,16 @@ export const useReplayStore = create<ReplayStoreState>()(
         triggers: state.triggers,
         playbackRate: state.playbackRate,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.boardCameraMode = 'autodarts';
+        }
+      },
     }
   )
 );
+
+// Keep live Autodarts 3-cam board feed status/errors synced into the store
+ocheCamService.onBoardFeedStatusChange(({ error }) => {
+  useReplayStore.setState({ boardFeedError: error });
+});

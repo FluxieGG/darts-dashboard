@@ -1,0 +1,1 @@
+export { ScoringGauntletGame } from './ScoringGauntletGame';

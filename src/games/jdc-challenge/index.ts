@@ -1,0 +1,1 @@
+export { JdcChallengeGame } from './JdcChallengeGame';

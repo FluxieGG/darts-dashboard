@@ -224,7 +224,13 @@ export const MobileDevConsoleView: React.FC = () => {
   // =========================================================================
   if (!unlocked) {
     return (
-      <div className="min-h-screen bg-[#070A10] text-slate-100 flex items-center justify-center p-6 font-sans select-none">
+      <div
+        className="min-h-screen bg-[#070A10] text-slate-100 flex items-center justify-center px-6 font-sans select-none"
+        style={{
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 24px)',
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
+        }}
+      >
         <div className="w-full max-w-xs card-matte rounded-3xl p-6 space-y-6 border-sky-500/30 text-center">
           <div className="space-y-2">
             <div className="w-14 h-14 rounded-2xl bg-sky-500/15 border border-sky-400/35 flex items-center justify-center mx-auto text-sky-400">
@@ -298,9 +304,15 @@ export const MobileDevConsoleView: React.FC = () => {
   // LIVE MOBILE DEV DEBUG CONSOLE
   // =========================================================================
   return (
-    <div className="min-h-screen bg-[#070A10] text-slate-100 flex flex-col font-sans antialiased">
-      {/* Top Dev Header */}
-      <header className="sticky top-0 z-30 bg-[#0B0F17]/95 backdrop-blur-md border-b border-sky-500/20 px-3.5 py-2.5">
+    <div
+      className="min-h-screen bg-[#070A10] text-slate-100 flex flex-col font-sans antialiased"
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+    >
+      {/* Top Dev Header (safe-area aware for iOS Notch / Dynamic Island Home Screen Web App) */}
+      <header
+        className="sticky top-0 z-30 bg-[#0B0F17]/95 backdrop-blur-md border-b border-sky-500/20 px-3.5 pb-2.5"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 14px)' }}
+      >
         <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300">

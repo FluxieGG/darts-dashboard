@@ -66,4 +66,12 @@ export interface CaptureClipMetadata {
   coords?: DartCoords;
   isDevTest?: boolean;
   category?: ReplayClipCategory;
+  /** Optional readable clip filename base, e.g. "Killer - Game Winning Shot - Callum" */
+  customFileName?: string;
+  /** Always auto-save directly to disk even when an iPad Oche Remote is connected */
+  forceAutoSave?: boolean;
+  /** Target seconds before trigger moment (default 5s for game clips, 15s for manual clips) */
+  preSeconds?: number;
+  /** Target seconds after trigger moment (default 5s) */
+  postSeconds?: number;
 }
