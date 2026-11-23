@@ -19,9 +19,9 @@ export function useOnlineMatchSync(): void {
       const match = useOnlineMatchStore.getState();
       if (!match.isActive || match.matchWinner) return;
 
-      // Only track throws on the Dashboard (never interfere with Arcade / Practice games)
+      // Track throws on both Dashboard and dedicated DartCounter Kiosk views (never interfere with Arcade/Practice games)
       const activeView = useGameStore.getState().activeView;
-      if (activeView !== 'dashboard') return;
+      if (activeView !== 'dashboard' && activeView !== 'dartcounter') return;
 
       const soundEnabled = useGameStore.getState().soundEnabled;
 
@@ -36,8 +36,15 @@ export function useOnlineMatchSync(): void {
 
           const player = usePlayerStore.getState().getActivePlayer();
           const playerName = player.name || 'Player';
-          const gameTitle = `Online ${match.startScore}`;
-          const clipTitle = `${gameTitle} - Game Winning Shot - ${playerName}`;
+          const gameTitle =
+            match.source === 'dartcounter'
+              ? `DartCounter ${match.startScore}`
+              : `Online ${match.startScore}`;
+          const vsSuffix =
+            match.source === 'dartcounter' && match.opponentName && match.opponentName !== 'Online Opponent'
+              ? ` vs ${match.opponentName}`
+              : '';
+          const clipTitle = `${gameTitle}${vsSuffix} - Game Winning Shot - ${playerName}`;
 
           // Auto-clip & save the checkout shot!
           void useReplayStore.getState().triggerActionReplay({

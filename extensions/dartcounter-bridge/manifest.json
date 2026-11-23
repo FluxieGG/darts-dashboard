@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Autodarts ↔ DartCounter Bridge",
+  "version": "1.2.0",
+  "description": "Links Target DartCounter Web (app.dartcounter.net) to your local Autodarts Kiosk Dashboard for live TV match mirroring, iPad remote control (start games & accept friend invites), checkout routes, auto-clipping, and hands-free Autodarts auto-scoring.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "https://app.dartcounter.net/*",
+    "https://dartcounter.net/*",
+    "http://127.0.0.1:5173/*",
+    "http://localhost:5173/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.dartcounter.net/*",
+        "https://*.dartcounter.net/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Autodarts ↔ DartCounter Bridge",
+    "default_popup": "popup.html"
+  }
+}

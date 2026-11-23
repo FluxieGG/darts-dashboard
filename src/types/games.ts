@@ -4,7 +4,7 @@ import { DartThrow } from './darts';
 /**
  * Top-level navigation views in the Autodarts shell
  */
-export type AppView = 'dashboard' | 'games-lobby' | 'practice-lobby' | 'game-active';
+export type AppView = 'dashboard' | 'games-lobby' | 'practice-lobby' | 'dartcounter' | 'game-active';
 
 /**
  * Lifecycle phases managed by the GameHost socket

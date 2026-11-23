@@ -281,8 +281,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 value={selectedDeviceId}
                 onChange={(e) => {
                   setSelectedDeviceId(e.target.value);
-                  if (camStatus === 'buffering') {
-                    void startCamera({ ocheDeviceId: e.target.value });
+                  if (camStatus === 'buffering' || camStatus === 'error') {
+                    void startCamera({ ocheDeviceId: e.target.value, strictSelection: true });
                   }
                 }}
                 className="flex-1 min-w-[180px] bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-rose-400"
@@ -293,6 +293,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   availableCameras.map((cam) => (
                     <option key={cam.deviceId} value={cam.deviceId}>
                       {cam.label}
+                      {cam.isAutodartsBoardCam ? ' [Autodarts Board Cam]' : ''}
                     </option>
                   ))
                 )}
@@ -329,20 +330,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* RIGHT CAMERA: Locked Autodarts 3-Camera Board Feed */}
+          {/* RIGHT CAMERA: Consolidated 3-in-1 Straight-On Board Cam */}
           <div className="p-3 rounded-xl bg-slate-950/60 border border-emerald-500/25 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="text-[11px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
-                Right Split — Autodarts 3 Board Cameras (Locked)
+                Right Split — 3-in-1 Straight-On Board Cam (Locked)
               </label>
               <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/40 text-[10px] font-mono font-bold text-emerald-300">
-                3-Cam Live Stack • Port 3180
+                3-Cam Fused Front View • Port 3180
               </span>
             </div>
 
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Automatically streams all 3 Autodarts board cameras stacked side-by-side next to your
-              Oche throwing webcam directly from <code className="text-slate-200">127.0.0.1:3180/api/streams/live</code>.
+              Reads Autodarts&apos; lightweight raw 3-camera stream from{' '}
+              <code className="text-slate-200">127.0.0.1:3180/api/streams/live</code> (zero impact on
+              Autodarts scoring) and renders a GPU WebGL straight-on Virtual Board Camera exclusively
+              for action replay clips.
             </p>
 
             {boardFeedError && (

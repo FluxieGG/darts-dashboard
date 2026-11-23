@@ -6,6 +6,47 @@ import type { Plugin } from 'vite';
 
 const DEFAULT_CLIPS_DIR = 'C:\\Users\\callu\\Desktop\\Media\\darts-autoclipper';
 const INDEX_FILENAME = 'clips-index.json';
+const CAMERA_BOOT_REPORT_PATH = path.resolve(process.cwd(), 'data', 'camera-boot-report.json');
+
+function fetchAutodartsCameraConfig(): Promise<{
+  vidPids: string[];
+  configuredCamCount: number;
+  reachable: boolean;
+}> {
+  return new Promise((resolve) => {
+    const req = http.get('http://127.0.0.1:3180/api/config', { timeout: 1500 }, (upstreamRes) => {
+      let raw = '';
+      upstreamRes.on('data', (chunk) => {
+        raw += chunk.toString();
+      });
+      upstreamRes.on('end', () => {
+        try {
+          const parsed = JSON.parse(raw) as { cam?: { cams?: string[] } };
+          const cams = Array.isArray(parsed?.cam?.cams) ? parsed.cam.cams : [];
+          const vidPids: string[] = [];
+          for (const spec of cams) {
+            const match = String(spec).match(/vid=([0-9a-f]{4})&pid=([0-9a-f]{4})/i);
+            if (match) {
+              const vp = `${match[1].toLowerCase()}:${match[2].toLowerCase()}`;
+              if (!vidPids.includes(vp)) vidPids.push(vp);
+            }
+          }
+          resolve({ vidPids, configuredCamCount: cams.length, reachable: true });
+        } catch {
+          resolve({ vidPids: [], configuredCamCount: 0, reachable: true });
+        }
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ vidPids: [], configuredCamCount: 0, reachable: false });
+    });
+    req.on('error', () => {
+      resolve({ vidPids: [], configuredCamCount: 0, reachable: false });
+    });
+  });
+}
 
 type ClipCategory = 'game' | 'user' | 'dev';
 
@@ -382,6 +423,40 @@ function attachReplayMiddleware(
 
       req.on('close', () => {
         upstreamReq.destroy();
+      });
+      return;
+    }
+
+    // 0b. GET /api/replays/cameras — Live Autodarts board camera VID:PIDs + start-kiosk.ps1 boot camera report
+    if (req.method === 'GET' && pathname === '/api/replays/cameras') {
+      void fetchAutodartsCameraConfig().then((adInfo) => {
+        let bootReport: unknown = null;
+        try {
+          if (fs.existsSync(CAMERA_BOOT_REPORT_PATH)) {
+            const raw = fs.readFileSync(CAMERA_BOOT_REPORT_PATH, 'utf-8').replace(/^\uFEFF/, '');
+            bootReport = JSON.parse(raw);
+          }
+        } catch {
+          bootReport = null;
+        }
+
+        const reportVidPids = Array.isArray((bootReport as { autodartsVidPids?: unknown })?.autodartsVidPids)
+          ? ((bootReport as { autodartsVidPids: string[] }).autodartsVidPids)
+          : [];
+        const mergedVidPids = Array.from(new Set([...adInfo.vidPids, ...reportVidPids]));
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(
+          JSON.stringify({
+            ok: true,
+            autodartsReachable: adInfo.reachable,
+            autodartsVidPids: mergedVidPids,
+            autodartsConfiguredCamCount: adInfo.configuredCamCount,
+            bootReport,
+          })
+        );
       });
       return;
     }

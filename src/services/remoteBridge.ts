@@ -20,6 +20,13 @@ import { gameEventBus } from './gameEventBus';
 import { generateSimulatedThrow, generateSimulatedVisit } from './simulator';
 import { ocheCamService } from './ocheCamService';
 import { devLogger } from './devLogger';
+import {
+  confirmAndSendPendingDartCounterVisit,
+  discardPendingDartCounterVisit,
+  forceSendCurrentVisitToDartCounter,
+  sendDartCounterControl,
+  setDartCounterBridgeMode,
+} from './dartCounterBridge';
 
 export async function fetchRemoteInfo(): Promise<RemoteNetworkInfo | null> {
   try {
@@ -150,10 +157,14 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
     weeklyObjectives: evaluatedObjectives.weekly,
     onlineMatch: {
       isActive: onlineMatchState.isActive,
+      source: onlineMatchState.source,
       startScore: onlineMatchState.startScore,
       outRule: onlineMatchState.outRule,
       legsToWin: onlineMatchState.legsToWin,
       opponentName: onlineMatchState.opponentName,
+      opponentRemaining: onlineMatchState.opponentRemaining,
+      opponentAvg: onlineMatchState.opponentAvg,
+      isPlayerTurn: onlineMatchState.isPlayerTurn,
       playerLegs: onlineMatchState.playerLegs,
       opponentLegs: onlineMatchState.opponentLegs,
       remaining: onlineMatchState.remaining,
@@ -166,6 +177,22 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       isBust: onlineMatchState.isBust,
       canUndo: onlineMatchState.history.length > 0,
       matchWinner: onlineMatchState.matchWinner,
+      dcConnected: onlineMatchState.dcConnected,
+      dcMode: onlineMatchState.dcMode,
+      dcLastSubmitStatus: onlineMatchState.dcLastSubmitStatus,
+      dcLastControlStatus: onlineMatchState.dcLastControlStatus,
+      dcPendingInvites: onlineMatchState.dcPendingInvites,
+      isFullscreenKiosk: onlineMatchState.isFullscreenKiosk,
+      dcPendingVisit: onlineMatchState.dcPendingVisit
+        ? {
+            id: onlineMatchState.dcPendingVisit.id,
+            score: onlineMatchState.dcPendingVisit.score,
+            throws: onlineMatchState.dcPendingVisit.throws,
+            dartsUsed: onlineMatchState.dcPendingVisit.dartsUsed,
+            isBust: onlineMatchState.dcPendingVisit.isBust,
+            isCheckout: onlineMatchState.dcPendingVisit.isCheckout,
+          }
+        : null,
     },
     replayStatus: replayState.status,
     replayBoardCameraMode: replayState.boardCameraMode,
@@ -173,6 +200,25 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
     replayPlaybackRate: replayState.playbackRate,
     replayTriggers: replayState.triggers,
     replayDevArmed: replayState.devCaptureNextDartArmed,
+    replayError: replayState.errorMessage,
+    replayBoardFeedActive: replayState.boardFeedActive,
+    replayBoardFeedError: replayState.boardFeedError,
+    replayActiveCameraLabel: replayState.activeCameraLabel,
+    replaySelectedDeviceId: replayState.selectedDeviceId,
+    replayAvailableCameras: replayState.availableCameras.map((c) => ({
+      deviceId: c.deviceId,
+      label: c.label,
+      isAutodartsBoardCam: c.isAutodartsBoardCam,
+    })),
+    replayHasCameraIssue:
+      replayState.status === 'error' ||
+      Boolean(replayState.errorMessage) ||
+      Boolean(replayState.boardFeedError),
+    replayCameraIssueSummary:
+      replayState.errorMessage ||
+      replayState.boardFeedError ||
+      (replayState.status === 'error' ? 'Camera error detected' : null),
+    replayErrorEpoch: replayState.cameraErrorEpoch,
     hasActiveReplayOverlay: Boolean(replayState.activeOverlayClip),
     replayClipCount: replayState.clips.length,
     isSavingReplay: replayState.isSavingLastClip,
@@ -247,6 +293,8 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
         gameStore.returnToDashboard();
       } else if (cmd.view === 'practice-lobby') {
         gameStore.openPracticeLobby();
+      } else if (cmd.view === 'dartcounter') {
+        gameStore.openDartCounterView();
       } else {
         gameStore.openGamesLobby();
       }
@@ -383,6 +431,20 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       useReplayStore.getState().stopCamera();
       break;
 
+    case 'redetect_cameras':
+      devLogger.log('CAMERA', 'info', 'iPad requested full camera auto-detection & restart...');
+      void useReplayStore.getState().redetectCameras();
+      break;
+
+    case 'select_oche_camera':
+      devLogger.log('CAMERA', 'info', 'iPad selected Oche camera', cmd.deviceId);
+      useReplayStore.getState().setSelectedDeviceId(cmd.deviceId);
+      void useReplayStore.getState().startCamera({
+        ocheDeviceId: cmd.deviceId,
+        strictSelection: true,
+      });
+      break;
+
     case 'set_board_camera_mode': {
       const rs = useReplayStore.getState();
       rs.setBoardCameraMode(cmd.mode);
@@ -485,6 +547,37 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
 
     case 'online_match_set_score':
       useOnlineMatchStore.getState().setRemainingManual(cmd.remaining);
+      break;
+
+    case 'online_match_set_fullscreen': {
+      const om = useOnlineMatchStore.getState();
+      if (!om.isActive) break;
+      const next = typeof cmd.enabled === 'boolean' ? cmd.enabled : !om.isFullscreenKiosk;
+      om.setFullscreenKiosk(next);
+      if (next) {
+        gameStore.returnToDashboard();
+      }
+      break;
+    }
+
+    case 'dc_set_mode':
+      void setDartCounterBridgeMode(cmd.mode);
+      break;
+
+    case 'dc_confirm_visit':
+      void confirmAndSendPendingDartCounterVisit();
+      break;
+
+    case 'dc_discard_visit':
+      discardPendingDartCounterVisit();
+      break;
+
+    case 'dc_force_send_visit':
+      void forceSendCurrentVisitToDartCounter();
+      break;
+
+    case 'dc_control':
+      void sendDartCounterControl(cmd.command);
       break;
 
     case 'toggle_rules_overlay':

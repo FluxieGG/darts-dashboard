@@ -259,6 +259,7 @@ export function useKioskDevBridge(
     });
 
     let prevCamStatus = useReplayStore.getState().status;
+    let prevBoardFeedError = useReplayStore.getState().boardFeedError;
     let prevClipCount = useReplayStore.getState().clips.length;
     let prevLastClipId = useReplayStore.getState().lastRecordedClip?.id ?? null;
     const unsubReplay = useReplayStore.subscribe((s) => {
@@ -266,10 +267,18 @@ export function useKioskDevBridge(
         devLogger.log(
           'CAMERA',
           s.status === 'error' ? 'error' : s.status === 'buffering' ? 'success' : 'info',
-          `Oche-Cam status → ${s.status} (${s.boardCameraMode})`,
+          `Oche-Cam status → ${s.status}${s.activeCameraLabel ? ` [${s.activeCameraLabel}]` : ''} (${s.boardCameraMode})`,
           s.errorMessage || s.boardFeedError || undefined
         );
         prevCamStatus = s.status;
+      }
+      if (s.boardFeedError !== prevBoardFeedError) {
+        if (s.boardFeedError) {
+          devLogger.log('CAMERA', 'error', 'Autodarts 3-Cam Board Feed issue', s.boardFeedError);
+        } else if (prevBoardFeedError) {
+          devLogger.log('CAMERA', 'success', 'Autodarts 3-Cam Board Feed restored');
+        }
+        prevBoardFeedError = s.boardFeedError;
       }
       if (s.lastRecordedClip && s.lastRecordedClip.id !== prevLastClipId) {
         devLogger.log(

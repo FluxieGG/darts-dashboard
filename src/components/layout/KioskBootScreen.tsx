@@ -133,32 +133,27 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
       );
       await sleep(140);
 
-      // STAGE 4: Side-by-Side Split-Cam Buffer (Default Auto-Start)
+      // STAGE 4: Side-by-Side Split-Cam Buffer (Enabled Immediately by Default)
       const replay = useReplayStore.getState();
       if (replay.autoStartCamera) {
-        setStage('camera', 'running', 'Arming Side-by-Side Oche + Board cameras...');
+        setStage('camera', 'running', 'Detecting all cameras & arming Split-Cam...');
         await replay.refreshCameras();
-        if (useReplayStore.getState().availableCameras.length > 0) {
-          await replay.startCamera();
-          if (cancelled) return;
-          const after = useReplayStore.getState();
-          if (after.status === 'buffering') {
-            setStage(
-              'camera',
-              'done',
-              after.boardCameraMode === 'none'
-                ? 'Oche-Cam 10s buffer armed'
-                : 'Side-by-Side Split-Cam 10s buffer armed'
-            );
-          } else {
-            setStage(
-              'camera',
-              'warn',
-              'Camera awaiting permission (start anytime in Settings)'
-            );
-          }
+        await replay.startCamera();
+        if (cancelled) return;
+        const after = useReplayStore.getState();
+        if (after.status === 'buffering' || after.status === 'capturing') {
+          const camName = after.activeCameraLabel || 'Oche Webcam';
+          setStage(
+            'camera',
+            'done',
+            `Split-Cam armed (${camName} + 3 Board Cams)`
+          );
         } else {
-          setStage('camera', 'warn', 'No webcam detected yet (configure in Settings)');
+          setStage(
+            'camera',
+            'warn',
+            after.errorMessage || 'Camera error detected — iPad Oche Deck notified'
+          );
         }
       } else {
         setStage('camera', 'done', 'Auto-start disabled in Settings');

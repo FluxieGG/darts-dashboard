@@ -128,6 +128,60 @@ Open **[http://localhost:5173](http://localhost:5173)** in Chrome or Edge.
 
 ---
 
+## Target DartCounter Live Bridge Setup Guide (TV Mirror + Autodarts Auto-Scoring)
+
+This dashboard includes a built-in **Chrome / Edge Browser Extension** (`extensions/dartcounter-bridge/`) and a local Vite relay (`/api/dartcounter/*`) that links **Target DartCounter Web** (`https://app.dartcounter.net`) directly to your Autodarts Kiosk TV, iPad Oche Deck, and Split-Cam Auto-Clipper.
+
+### What It Does
+* **Live Vertical TV Sync (Option A):** Starting any X01 match (`501` / `301` / `701`) on `app.dartcounter.net` automatically mirrors your remaining score, **opponent's live score & 3DA**, leg scoreboard, active turn indicator, live **PDC checkout routes**, and **Split-Cam auto-clipping** (e.g. `DartCounter 501 vs Dave - Game Winning Shot`) onto your vertical kiosk monitor.
+* **DIY "Omni" Auto-Scoring (Option B):** Automatically feeds your 3-dart Autodarts camera visit totals directly into DartCounter Web when you pull your darts — with three safety modes switchable right on the iPad or extension popup:
+  * **iPad Confirm *(Recommended)*:** Queues each completed visit on the iPad with a 1-tap **"Send XX to DartCounter"** button (or **Skip**) so a misread dart never gets submitted by mistake.
+  * **Auto-Score:** Hands-free — enters your visit total into DartCounter automatically as soon as Autodarts detects takeout on your turn.
+  * **Sync TV Only:** Read-only — mirrors the match, checkouts, and winning clips to your TV without ever touching DartCounter's keypad.
+
+---
+
+### Step-by-Step Installation (2 Minutes — Chrome or Microsoft Edge)
+
+#### 1. Make Sure the Dashboard Server Is Running
+Start the kiosk as usual (`Start-Autodarts-Kiosk.bat` or `npm run dev`) so the local relay is listening on `http://127.0.0.1:5173`.
+
+#### 2. Load the Unpacked Extension in Edge or Chrome
+1. Open **Microsoft Edge** or **Google Chrome** on your darts PC.
+2. In the address bar, go to:
+   * **Edge:** `edge://extensions`
+   * **Chrome:** `chrome://extensions`
+3. Toggle **Developer mode** **ON** (left sidebar in Edge, top-right corner in Chrome).
+4. Click **Load unpacked**.
+5. Select the extension folder inside this project:
+   ```text
+   C:\Users\callu\Desktop\Programs\dashboard\extensions\dartcounter-bridge
+   ```
+6. *(Optional)* Click the puzzle-piece icon in your browser toolbar and **Pin** **Autodarts ↔ DartCounter Bridge** so you can check status or switch modes in one click.
+
+#### 3. Configure Your DartCounter Username & Mode
+1. Click the **Autodarts ↔ DartCounter Bridge** icon in your browser toolbar.
+2. Verify the top-right status pill turns green (**`Kiosk Live`**).
+3. Enter **Your DartCounter Username** exactly as it appears on the scoreboard in DartCounter (e.g. `Callum`) — this ensures the bridge always knows which side of the scoreboard is yours, even when you throw second.
+4. Choose your preferred mode (**iPad Confirm**, **Auto**, or **Sync Only**) and click **Save & Sync**.
+
+#### 4. Play on Target DartCounter Web
+1. Open **[https://app.dartcounter.net](https://app.dartcounter.net)** in that same Chrome/Edge browser and start a DartBot or Online X01 match.
+2. You will see a compact **`AUTODARTS BRIDGE`** floating pill in the bottom-right corner of DartCounter showing live sync status (click `–` to collapse or `Pause` anytime).
+3. On your **Vertical Kiosk TV**, the **Live Match & Checkout Co-Pilot** widget automatically switches to **`DartCounter Live`** with both players' scores and live checkout routes.
+4. On your **iPad Oche Deck (`/?remote=1`)**, open the **Dashboard → Goals** tab to switch between **Auto-Score / iPad Confirm / Sync TV Only** or tap **Send to DartCounter** in Confirm mode.
+
+### DartCounter Bridge Troubleshooting
+
+| Issue | Fix |
+| :--- | :--- |
+| Extension popup shows **`Offline`** | Confirm the dashboard server is running on `http://127.0.0.1:5173`, then click **Reconnect** in the extension popup. |
+| TV shows opponent's score as yours | Open the extension popup, set **Your DartCounter Username** to match your DartCounter display name, and click **Save & Sync**. |
+| Score didn't auto-submit on takeout | Check that mode isn't set to **Sync Only**, the HUD pill isn't **Paused**, and DartCounter is showing **YOUR TURN** with the keypad visible. |
+| Want to use DartCounter on a different PC | In the extension popup, change **Kiosk Dashboard URL** to your darts PC's LAN URL (e.g. `http://192.168.0.197:5173`) and reload the extension. |
+
+---
+
 ## Optional: Autodarts Cloud API (OAuth 2.0 + PKCE)
 
 You do **not** need this for local board play. If you later want to connect Autodarts Cloud accounts/career stats:

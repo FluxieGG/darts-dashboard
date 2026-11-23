@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Autodarts ↔ DartCounter Bridge</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        width: 320px;
+        background: #0b0f17;
+        color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        padding: 14px;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .logo {
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        background: linear-gradient(135deg, #10b981, #34d399);
+        color: #020617;
+        font-weight: 900;
+        font-family: ui-monospace, monospace;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+      }
+      .title {
+        font-weight: 800;
+        font-size: 13px;
+        letter-spacing: -0.01em;
+      }
+      .subtitle {
+        font-size: 10px;
+        color: #94a3b8;
+        font-family: ui-monospace, monospace;
+      }
+      .pill {
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 800;
+        font-family: ui-monospace, monospace;
+        text-transform: uppercase;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      .pill.ok {
+        background: rgba(16, 185, 129, 0.18);
+        border-color: rgba(16, 185, 129, 0.5);
+        color: #6ee7b7;
+      }
+      .pill.err {
+        background: rgba(244, 63, 94, 0.18);
+        border-color: rgba(244, 63, 94, 0.5);
+        color: #fda4af;
+      }
+      .card {
+        background: rgba(17, 24, 39, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 12px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+      }
+      .label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #94a3b8;
+        font-family: ui-monospace, monospace;
+        font-weight: 700;
+        margin-bottom: 6px;
+        display: block;
+      }
+      input[type='text'] {
+        width: 100%;
+        background: #020617;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        color: #fff;
+        padding: 7px 9px;
+        font-size: 12px;
+        font-family: ui-monospace, monospace;
+        outline: none;
+      }
+      input[type='text']:focus {
+        border-color: #10b981;
+      }
+      .modes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+      .mode-btn {
+        background: #020617;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #94a3b8;
+        border-radius: 8px;
+        padding: 7px 4px;
+        font-size: 10.5px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .mode-btn.active {
+        background: rgba(16, 185, 129, 0.2);
+        border-color: rgba(16, 185, 129, 0.6);
+        color: #a7f3d0;
+      }
+      .mode-btn.active-auto {
+        background: rgba(245, 158, 11, 0.2);
+        border-color: rgba(245, 158, 11, 0.6);
+        color: #fde68a;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .btn {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 7px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .btn.primary {
+        background: #10b981;
+        border-color: #34d399;
+        color: #020617;
+        font-weight: 900;
+      }
+      .match-box {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: #cbd5e1;
+      }
+      .hint {
+        font-size: 10px;
+        color: #64748b;
+        margin-top: 6px;
+        line-height: 1.35;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div class="brand">
+        <div class="logo">AD</div>
+        <div>
+          <div class="title">DartCounter Bridge</div>
+          <div class="subtitle">Autodarts Kiosk Sync</div>
+        </div>
+      </div>
+      <span id="status-pill" class="pill err">Offline</span>
+    </div>
+
+    <div class="card">
+      <span class="label">Auto-Scoring Mode</span>
+      <div class="modes">
+        <button class="mode-btn" data-mode="auto">Auto</button>
+        <button class="mode-btn" data-mode="confirm">iPad Confirm</button>
+        <button class="mode-btn" data-mode="read-only">Sync Only</button>
+      </div>
+      <div class="hint" id="mode-hint">
+        Confirm mode queues your Autodarts visit for 1-tap approval on the iPad before entering into DartCounter.
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="label" for="player-name">Your DartCounter Username</label>
+      <input id="player-name" type="text" placeholder="e.g. Callum" />
+      <label class="label" for="kiosk-url" style="margin-top: 8px">Kiosk Dashboard URL</label>
+      <input id="kiosk-url" type="text" placeholder="http://127.0.0.1:5173" />
+    </div>
+
+    <div class="card">
+      <span class="label">Live Match Preview</span>
+      <div id="match-preview" class="match-box">Open app.dartcounter.net to link...</div>
+    </div>
+
+    <div class="actions">
+      <button id="save-btn" class="btn primary">Save &amp; Sync</button>
+      <button id="reconnect-btn" class="btn">Reconnect</button>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

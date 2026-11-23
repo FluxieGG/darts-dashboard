@@ -6,6 +6,8 @@ import { getArcadeGames, getPracticeDrills, getGameDefinition } from '../../game
 import { DART_COLOR_OPTIONS, DEFAULT_DART_COLOR, hexToRgbTriplet } from '../../lib/playerThemes';
 import { DevConsoleQrModal } from '../dev/DevConsoleQrModal';
 import { GameCompanionScreen } from './GameCompanionScreen';
+import { DartCounterRemoteScreen } from './DartCounterRemoteScreen';
+import { DartCounterIcon } from '../common/DartCounterIcon';
 import { Badge } from '../common/Badge';
 import {
   Gamepad2,
@@ -41,18 +43,21 @@ import {
   ChevronUp,
   ChevronDown,
   Maximize2,
+  Minimize2,
   Flame,
   Palette,
   FlaskConical,
   Target,
   Dices,
   BookOpen,
+  AlertTriangle,
+  Camera,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 type MobileTab = 'control' | 'mode' | 'players' | 'replays' | 'display';
 type TabletRightPanel = 'mode' | 'players' | 'replays' | 'display';
-type AppMode = 'dashboard' | 'arcade' | 'practice';
+type AppMode = 'dashboard' | 'arcade' | 'practice' | 'dartcounter';
 type ClipFilter = 'all' | ReplayClipCategory;
 
 const QUICK_TARGETS = ['T20', 'S20', 'T19', 'T18', 'D20', 'D16', 'Bull', '25', 'Miss'] as const;
@@ -93,18 +98,15 @@ export const MobileRemoteView: React.FC = () => {
   const [loadingClips, setLoadingClips] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [isDevQrOpen, setIsDevQrOpen] = useState(false);
+  const [isCameraIssueModalOpen, setIsCameraIssueModalOpen] = useState(false);
 
-  // Online Match Co-Pilot setup inputs
-  const [onlineStartScore, setOnlineStartScore] = useState<501 | 301 | 701>(501);
-  const [onlineOutRule, setOnlineOutRule] = useState<'double' | 'straight'>('double');
-  const [onlineLegsToWin, setOnlineLegsToWin] = useState<number>(3);
-  const [onlineOpponent, setOnlineOpponent] = useState<string>('');
-  const [manualScoreInput, setManualScoreInput] = useState<string>('');
+  // Quick Online Match card (clean DartCounter Red/Green status pill + Play on Kiosk CTA)
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const lastEventAtRef = useRef<number>(0);
   const devTapCountRef = useRef(0);
   const devTapTimerRef = useRef<number | null>(null);
+  const hasAutoPoppedCameraErrorRef = useRef(false);
 
   // Secret 5-tap on AD crest opens the PIN 0161 Dev Debug Console QR modal
   const handleSecretCrestTap = () => {
@@ -320,22 +322,30 @@ export const MobileRemoteView: React.FC = () => {
   const activeGame = state?.activeGame ?? null;
   const activeGameDef = activeGame ? getGameDefinition(activeGame.id) : undefined;
   const currentMode: AppMode =
-    state?.activeView === 'practice-lobby' || activeGame?.mode === 'practice'
+    state?.activeView === 'dartcounter'
+      ? 'dartcounter'
+      : state?.activeView === 'practice-lobby' || activeGame?.mode === 'practice'
       ? 'practice'
       : state?.activeView === 'games-lobby' || activeGame?.mode === 'arcade'
       ? 'arcade'
       : 'dashboard';
+  const isDartCounterMode = currentMode === 'dartcounter' && !activeGame;
+  const pendingInviteCount = state?.onlineMatch?.dcPendingInvites?.length ?? 0;
 
   const handleSwitchMode = (mode: AppMode) => {
     const view =
       mode === 'dashboard'
         ? 'dashboard'
+        : mode === 'dartcounter'
+        ? 'dartcounter'
         : mode === 'practice'
         ? 'practice-lobby'
         : 'games-lobby';
     const label =
       mode === 'dashboard'
         ? 'Stats Dashboard'
+        : mode === 'dartcounter'
+        ? 'Target DartCounter'
         : mode === 'practice'
         ? 'Solo Training Mode'
         : 'Tech Darts Arcade';
@@ -349,6 +359,8 @@ export const MobileRemoteView: React.FC = () => {
       ? { label: 'Goals', icon: Trophy }
       : currentMode === 'practice'
       ? { label: 'Drills', icon: Crosshair }
+      : currentMode === 'dartcounter'
+      ? { label: 'DartCounter', icon: DartCounterIcon }
       : { label: 'Games', icon: Gamepad2 };
 
   const activeTintHex = state?.activeTintHex ?? null;
@@ -357,6 +369,20 @@ export const MobileRemoteView: React.FC = () => {
   const camBuffering = state?.replayStatus === 'buffering';
   const camCapturing = state?.replayStatus === 'capturing';
   const camActive = camBuffering || camCapturing || state?.replayStatus === 'starting';
+  const hasCameraIssue = Boolean(
+    state?.replayHasCameraIssue ||
+      state?.replayStatus === 'error' ||
+      state?.replayError ||
+      state?.replayBoardFeedError
+  );
+
+  // On the FIRST camera error detected by the Kiosk, automatically pop up the iPad camera warning modal
+  useEffect(() => {
+    if (hasCameraIssue && !hasAutoPoppedCameraErrorRef.current) {
+      hasAutoPoppedCameraErrorRef.current = true;
+      setIsCameraIssueModalOpen(true);
+    }
+  }, [hasCameraIssue]);
 
   const remoteStyle = activeTintHex
     ? ({
@@ -390,6 +416,41 @@ export const MobileRemoteView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Quick Play-on-Kiosk X01 Toggle — ONLY shown when a DartCounter match is loaded */}
+          {state?.onlineMatch?.isActive && state.onlineMatch.source === 'dartcounter' && (
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch(
+                  {
+                    type: 'online_match_set_fullscreen',
+                    enabled: !state.onlineMatch.isFullscreenKiosk,
+                  },
+                  state.onlineMatch.isFullscreenKiosk
+                    ? 'Exited Kiosk X01 View'
+                    : `Playing ${state.onlineMatch.startScore} on Kiosk TV!`
+                )
+              }
+              className={cn(
+                'inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer',
+                state.onlineMatch.isFullscreenKiosk
+                  ? 'bg-emerald-500/25 border-emerald-400/70 text-emerald-200 shadow-[0_0_14px_-2px_rgba(16,185,129,0.55)]'
+                  : 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-400/50 text-emerald-200'
+              )}
+            >
+              {state.onlineMatch.isFullscreenKiosk ? (
+                <>
+                  <Minimize2 className="w-3 h-3" />
+                  <span>Exit {state.onlineMatch.startScore} TV</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Play on Kiosk</span>
+                </>
+              )}
+            </button>
+          )}
           {state && (
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/35 text-xs font-mono font-black text-emerald-300 tabular-nums">
               3DA {state.statsSnapshot.threeDartAvg.toFixed(1)}
@@ -772,32 +833,52 @@ export const MobileRemoteView: React.FC = () => {
     const weekly = state?.weeklyObjectives || [];
     const om = state?.onlineMatch;
 
+    const hasDartCounterMatch = Boolean(om?.isActive && om.source === 'dartcounter');
+
     const renderOnlineMatchCard = () => (
       <section
         className={cn(
-          'card-matte rounded-2xl p-4 space-y-3',
-          om?.isActive ? 'border-sky-400/55' : 'border-white/10'
+          'card-matte rounded-2xl p-4 space-y-3 transition-all',
+          hasDartCounterMatch
+            ? 'border-emerald-400/55 shadow-[0_0_24px_-6px_rgba(16,185,129,0.3)]'
+            : 'border-white/10'
         )}
       >
+        {/* Clean Red / Green DartCounter Status Pill */}
         <div className="flex items-center justify-between gap-2">
-          <div className="text-xs font-mono uppercase tracking-wider font-black text-sky-300 flex items-center gap-1.5">
-            <Target className="w-3.5 h-3.5" />
-            Online Match &amp; Checkout Co-Pilot
+          <div className="text-xs font-mono uppercase tracking-wider font-black text-slate-200 flex items-center gap-1.5">
+            <Target className="w-3.5 h-3.5 text-sky-400" />
+            DartCounter Online
           </div>
-          {om?.isActive && (
-            <Badge variant="emerald" size="sm" dot>
-              Live {om.startScore}
-            </Badge>
+
+          {hasDartCounterMatch ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/65 text-[11px] font-mono font-black text-emerald-200 shadow-[0_0_16px_-3px_rgba(16,185,129,0.55)]">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Connected • Match Found
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/18 border border-rose-400/55 text-[11px] font-mono font-black text-rose-200">
+              <span className="w-2 h-2 rounded-full bg-rose-400" />
+              No Match Found
+            </span>
           )}
         </div>
 
-        {om?.isActive ? (
+        {hasDartCounterMatch && om ? (
           <div className="space-y-3">
-            {/* Live Score & Legs */}
-            <div className="p-3 rounded-xl bg-slate-900/90 border border-white/10 flex items-center justify-between gap-3">
+            {/* Compact Live DartCounter Match Summary */}
+            <div className="p-3 rounded-xl bg-slate-900/90 border border-emerald-400/25 flex items-center justify-between gap-3">
               <div>
-                <div className="text-[10px] font-mono uppercase text-slate-400">
-                  Remaining ({om.outRule === 'double' ? 'Double Out' : 'Straight'})
+                <div className="text-[10px] font-mono uppercase text-slate-400 flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      'w-2 h-2 rounded-full',
+                      om.isPlayerTurn ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                    )}
+                  />
+                  <span>
+                    {om.startScore} • {om.isPlayerTurn ? 'Your Throw' : `${om.opponentName}'s Turn`}
+                  </span>
                 </div>
                 <div className="text-3xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
                   {om.remaining}
@@ -811,8 +892,11 @@ export const MobileRemoteView: React.FC = () => {
                 <div className="text-xs font-mono font-black text-emerald-300 tabular-nums">
                   Legs {om.playerLegs} — {om.opponentLegs}
                 </div>
-                <div className="text-[10px] font-mono text-slate-400 truncate max-w-[130px]">
+                <div className="text-[10px] font-mono text-slate-300 truncate max-w-[140px]">
                   vs {om.opponentName}
+                  {om.opponentRemaining !== null && (
+                    <span className="text-sky-300 font-bold ml-1">({om.opponentRemaining})</span>
+                  )}
                 </div>
                 {om.checkoutRoute && (
                   <div className="flex items-center justify-end gap-1 pt-0.5">
@@ -829,161 +913,116 @@ export const MobileRemoteView: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick Controls */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                disabled={!om.canUndo}
-                onClick={() => void dispatch({ type: 'online_match_undo' }, 'Undid Dart')}
-                className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-white/10 disabled:opacity-40 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
-              >
-                Undo Dart
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch({ type: 'online_match_opp_leg' }, 'Opponent Leg Logged')
-                }
-                className="py-2 px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-xs font-bold text-amber-200 cursor-pointer"
-              >
-                Opp Won Leg
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch({ type: 'online_match_reset_leg' }, 'Reset Current Leg')
-                }
-                className="py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
-              >
-                Reset Leg
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void dispatch({ type: 'online_match_stop' }, 'Ended Online Match')
-                }
-                className="py-2 px-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-xs font-bold text-rose-200 cursor-pointer"
-              >
-                End Match
-              </button>
-            </div>
-
-            {/* Mid-Leg Manual Score Sync */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const val = parseInt(manualScoreInput, 10);
-                if (!Number.isNaN(val) && val >= 2 && val <= om.startScore) {
-                  void dispatch(
-                    { type: 'online_match_set_score', remaining: val },
-                    `Synced Remaining -> ${val}`
-                  );
-                  setManualScoreInput('');
-                }
-              }}
-              className="flex gap-1.5"
-            >
-              <input
-                type="number"
-                min={2}
-                max={om.startScore}
-                value={manualScoreInput}
-                onChange={(e) => setManualScoreInput(e.target.value)}
-                placeholder="Sync exact score (e.g. 141)..."
-                className="flex-1 rounded-lg bg-slate-950/80 border border-white/10 px-2.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-sky-400"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-sky-200 text-xs font-bold cursor-pointer"
-              >
-                Sync
-              </button>
-            </form>
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            <div className="grid grid-cols-3 gap-1.5">
-              {([501, 301, 701] as const).map((sc) => (
-                <button
-                  key={sc}
-                  type="button"
-                  onClick={() => setOnlineStartScore(sc)}
-                  className={cn(
-                    'py-1.5 rounded-lg text-xs font-mono font-black border cursor-pointer',
-                    onlineStartScore === sc
-                      ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
-                      : 'bg-slate-900 border-white/10 text-slate-400'
-                  )}
-                >
-                  {sc}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              {(
-                [
-                  { id: 'double', label: 'Double Out' },
-                  { id: 'straight', label: 'Straight Out' },
-                ] as const
-              ).map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setOnlineOutRule(r.id)}
-                  className={cn(
-                    'py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer',
-                    onlineOutRule === r.id
-                      ? 'bg-emerald-500/20 border-emerald-400/55 text-emerald-200'
-                      : 'bg-slate-900 border-white/10 text-slate-400'
-                  )}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-1.5">
-              <input
-                type="text"
-                value={onlineOpponent}
-                onChange={(e) => setOnlineOpponent(e.target.value)}
-                placeholder="Opponent name (optional)..."
-                maxLength={24}
-                className="flex-1 rounded-lg bg-slate-900 border border-white/10 px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-400"
-              />
-              <select
-                value={onlineLegsToWin}
-                onChange={(e) => setOnlineLegsToWin(Number(e.target.value))}
-                className="rounded-lg bg-slate-900 border border-white/10 px-2 py-1.5 text-xs font-mono text-slate-200"
-              >
-                <option value={1}>1 Leg</option>
-                <option value={3}>FT3</option>
-                <option value={5}>FT5</option>
-                <option value={7}>FT7</option>
-              </select>
-            </div>
-
+            {/* Primary CTA: Play on Kiosk (Normal X01 Format with Live DartCounter Data) */}
             <button
               type="button"
               onClick={() =>
                 void dispatch(
                   {
-                    type: 'online_match_start',
-                    startScore: onlineStartScore,
-                    outRule: onlineOutRule,
-                    legsToWin: onlineLegsToWin,
-                    opponentName: onlineOpponent.trim() || 'Online Opponent',
+                    type: 'online_match_set_fullscreen',
+                    enabled: !om.isFullscreenKiosk,
                   },
-                  `Started Online ${onlineStartScore} Co-Pilot!`
+                  om.isFullscreenKiosk
+                    ? 'Exited Kiosk X01 View'
+                    : `Playing ${om.startScore} on Kiosk TV!`
                 )
               }
-              className="w-full py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer"
+              className={cn(
+                'w-full py-3.5 px-4 rounded-xl border-2 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] transition-all cursor-pointer',
+                om.isFullscreenKiosk
+                  ? 'bg-slate-900 border-emerald-400/65 text-emerald-200'
+                  : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950 shadow-[0_0_24px_rgba(16,185,129,0.4)]'
+              )}
             >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              Start Live {onlineStartScore} Tracker
+              {om.isFullscreenKiosk ? (
+                <>
+                  <Minimize2 className="w-4 h-4" />
+                  <span>Exit Kiosk X01 View</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>Play on Kiosk ({om.startScore})</span>
+                </>
+              )}
             </button>
+
+            {/* 1-Tap Confirm Banner if a visit is waiting in Confirm mode */}
+            {om.dcPendingVisit && (
+              <div className="p-3 rounded-xl bg-emerald-500/15 border-2 border-emerald-400/70 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-mono uppercase tracking-wider font-black text-emerald-300">
+                      Ready for DartCounter
+                    </div>
+                    <div className="text-sm font-black text-white truncate">
+                      {om.dcPendingVisit.isBust ? 'BUST (0)' : `${om.dcPendingVisit.score} pts`}{' '}
+                      <span className="text-xs font-mono font-normal text-slate-300">
+                        ({om.dcPendingVisit.throws.join(' • ')})
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void dispatch({ type: 'dc_discard_visit' }, 'Skipped Visit')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-950/80 border border-white/15 text-[11px] font-bold text-slate-300 cursor-pointer"
+                  >
+                    Skip
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'dc_confirm_visit' },
+                      `Sent ${om.dcPendingVisit!.score} to DartCounter!`
+                    )
+                  }
+                  className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider cursor-pointer"
+                >
+                  Send {om.dcPendingVisit.score} to DartCounter
+                </button>
+              </div>
+            )}
+
+            {/* Compact Auto-Score Mode Switcher */}
+            <div className="grid grid-cols-3 gap-1 pt-1">
+              {(
+                [
+                  { id: 'auto', label: 'Auto-Score' },
+                  { id: 'confirm', label: 'iPad Confirm' },
+                  { id: 'read-only', label: 'Sync Only' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'dc_set_mode', mode: m.id },
+                      `DartCounter → ${m.label}`
+                    )
+                  }
+                  className={cn(
+                    'py-1.5 px-1.5 rounded-lg text-[10px] font-black border transition-colors cursor-pointer',
+                    (om.dcMode || 'confirm') === m.id
+                      ? m.id === 'auto'
+                        ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
+                        : 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                      : 'bg-slate-950/70 border-white/10 text-slate-400 hover:text-white'
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
           </div>
+        ) : (
+          <p className="text-[11px] font-mono text-slate-400 leading-snug">
+            {om?.dcConnected
+              ? 'Extension online — start an X01 match on app.dartcounter.net to play on Kiosk.'
+              : 'Open app.dartcounter.net with the browser extension to detect a match.'}
+          </p>
         )}
       </section>
     );
@@ -1820,18 +1859,116 @@ export const MobileRemoteView: React.FC = () => {
           )}
         </div>
 
+        {/* Live Camera Error Alert inside Replays Panel */}
+        {hasCameraIssue && (
+          <div className="p-3 rounded-xl bg-amber-500/12 border border-amber-400/45 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+              <div className="min-w-0 text-xs text-amber-100 leading-snug">
+                <div className="font-black text-amber-200 uppercase tracking-wider text-[11px]">
+                  Camera Issue Detected
+                </div>
+                <div className="mt-0.5 break-words">
+                  {state?.replayCameraIssueSummary ||
+                    state?.replayError ||
+                    state?.replayBoardFeedError ||
+                    'Check camera USB cables or Autodarts Desktop.'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'redetect_cameras' }, 'Scanning & restarting all cameras...')
+              }
+              className="w-full py-2 px-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-[0.98] cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Auto-Detect &amp; Retry Cameras
+            </button>
+          </div>
+        )}
+
+        {/* Active Oche Webcam + Quick Camera Selector */}
+        <div className="p-2.5 rounded-xl bg-slate-900/75 border border-white/10 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[10px] font-mono uppercase text-rose-300 font-bold">
+                Oche / Throwing Cam (Left)
+              </div>
+              <div className="text-xs font-bold text-slate-200 truncate">
+                {state?.replayActiveCameraLabel ||
+                  (camActive ? 'Oche Webcam Live' : 'Not Connected')}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'redetect_cameras' }, 'Auto-detecting cameras...')
+              }
+              title="Auto-detect & pick Oche webcam"
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-white/10 border border-white/15 text-[10px] font-mono font-bold text-slate-200 cursor-pointer"
+            >
+              <RefreshCw className="w-3 h-3 text-emerald-400" />
+              Auto-Detect
+            </button>
+          </div>
+
+          {(state?.replayAvailableCameras?.length || 0) > 1 && (
+            <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/10">
+              {state!.replayAvailableCameras.map((cam) => {
+                const isSelected = state?.replaySelectedDeviceId === cam.deviceId;
+                return (
+                  <button
+                    key={cam.deviceId}
+                    type="button"
+                    onClick={() =>
+                      void dispatch(
+                        { type: 'select_oche_camera', deviceId: cam.deviceId },
+                        `Switched cam → ${cam.label}`
+                      )
+                    }
+                    className={cn(
+                      'px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer max-w-full truncate',
+                      isSelected
+                        ? 'bg-emerald-500/20 border-emerald-400/55 text-emerald-200'
+                        : cam.isAutodartsBoardCam
+                        ? 'bg-slate-950/50 border-white/5 text-slate-500 hover:text-slate-300'
+                        : 'bg-slate-950/80 border-white/15 text-slate-300 hover:text-white'
+                    )}
+                    title={cam.label}
+                  >
+                    {cam.label}
+                    {cam.isAutodartsBoardCam ? ' (Board)' : ''}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Locked Board Cam Source Indicator */}
-        <div className="p-2.5 rounded-xl bg-slate-900/75 border border-emerald-400/25 flex items-center justify-between gap-2">
+        <div
+          className={cn(
+            'p-2.5 rounded-xl bg-slate-900/75 border flex items-center justify-between gap-2',
+            state?.replayBoardFeedError ? 'border-amber-400/45' : 'border-emerald-400/25'
+          )}
+        >
           <div className="min-w-0">
-            <div className="text-[10px] font-mono uppercase text-emerald-300 font-bold">
+            <div
+              className={cn(
+                'text-[10px] font-mono uppercase font-bold',
+                state?.replayBoardFeedError ? 'text-amber-300' : 'text-emerald-300'
+              )}
+            >
               Board Cam (Locked)
             </div>
             <div className="text-xs font-bold text-slate-200 truncate">
-              Autodarts 3-Camera Live Stack (Port 3180)
+              {state?.replayBoardFeedError || 'Virtual Straight-On Board Cam (Clips Only)'}
             </div>
           </div>
-          <Badge variant="emerald" size="sm">
-            3 Cams
+          <Badge variant={state?.replayBoardFeedError ? 'amber' : 'emerald'} size="sm">
+            {state?.replayBoardFeedError ? 'Error' : 'Virtual'}
           </Badge>
         </div>
 
@@ -2357,80 +2494,147 @@ export const MobileRemoteView: React.FC = () => {
 
   return (
     <div
-      data-theme={isPartyMode ? 'party' : 'default'}
-      data-player-tint={!isPartyMode && Boolean(activeTintHex) ? 'on' : 'off'}
-      data-turn-tint={isTurnTint ? 'on' : 'off'}
-      style={remoteStyle}
-      className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans select-none antialiased pb-24 md:pb-8"
+      data-theme={isDartCounterMode ? 'dartcounter' : isPartyMode ? 'party' : 'default'}
+      data-player-tint={!isDartCounterMode && !isPartyMode && Boolean(activeTintHex) ? 'on' : 'off'}
+      data-turn-tint={!isDartCounterMode && isTurnTint ? 'on' : 'off'}
+      style={isDartCounterMode ? undefined : remoteStyle}
+      className={cn(
+        'min-h-screen flex flex-col font-sans select-none antialiased transition-colors duration-300',
+        isDartCounterMode
+          ? 'bg-[#F4F5F7] text-[#111827] pb-8'
+          : 'bg-[#0B0F17] text-slate-100 pb-24 md:pb-8'
+      )}
     >
       {/* Responsive iPad & Mobile Top Command Header (safe-area aware for iOS/iPadOS Home Screen Web App) */}
       <header
         className={cn(
           'sticky top-0 z-30 backdrop-blur-md border-b px-3.5 pb-2.5 sm:px-6 sm:pb-3 transition-colors',
-          isPartyMode
+          isDartCounterMode
+            ? 'bg-white/95 border-slate-200 shadow-sm'
+            : isPartyMode
             ? 'bg-[#120A20]/95 border-purple-400/25'
             : 'bg-[#0B0F17]/95 border-white/10'
         )}
         style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}
       >
         <div className="max-w-6xl mx-auto space-y-2.5">
-          {/* Row 1: Brand | Desktop 3-Mode Switcher | Party + Resync + Pairing */}
+          {/* Row 1: Brand | Desktop 4-Mode Switcher | Party + Resync + Pairing */}
           <div className="flex items-center justify-between gap-2">
-            {/* Left: Brand (Secret 5-tap on AD crest opens PIN 0161 Dev Console QR Modal) */}
+            {/* Left: Brand (Secret 5-tap on crest opens PIN 0161 Dev Console QR Modal) */}
             <div className="flex items-center gap-2.5 min-w-0">
               <div
                 onClick={handleSecretCrestTap}
                 className={cn(
-                  'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-slate-950 text-sm select-none cursor-default shrink-0',
-                  isPartyMode
-                    ? 'bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-amber-300'
-                    : 'bg-gradient-to-tr from-emerald-500 to-emerald-300'
+                  'w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-sm select-none cursor-default shrink-0 transition-all',
+                  isDartCounterMode
+                    ? 'bg-gradient-to-tr from-[#E05600] to-[#F76505] text-white shadow-[0_4px_14px_rgba(247,101,5,0.35)]'
+                    : isPartyMode
+                    ? 'bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-amber-300 text-slate-950'
+                    : 'bg-gradient-to-tr from-emerald-500 to-emerald-300 text-slate-950'
                 )}
               >
-                AD
+                {isDartCounterMode ? <DartCounterIcon className="w-5 h-5 text-white" /> : 'AD'}
               </div>
               <div className="min-w-0">
-                <h1 className="text-sm sm:text-base font-black tracking-tight text-white leading-none truncate">
-                  OCHE DECK
+                <h1
+                  className={cn(
+                    'text-sm sm:text-base font-black tracking-tight leading-none truncate',
+                    isDartCounterMode ? 'text-[#111827]' : 'text-white'
+                  )}
+                >
+                  {isDartCounterMode ? 'DARTCOUNTER' : 'OCHE DECK'}
                 </h1>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block truncate">
-                  {isPartyMode ? 'Vice Party Mode' : state?.activePlayer.name || 'Connecting...'}
+                <span
+                  className={cn(
+                    'text-[10px] font-mono uppercase tracking-wider block truncate font-bold',
+                    isDartCounterMode
+                      ? 'text-[#F76505]'
+                      : 'text-slate-400'
+                  )}
+                >
+                  {isDartCounterMode
+                    ? 'Target Webapp Controller'
+                    : isPartyMode
+                    ? 'Vice Party Mode'
+                    : state?.activePlayer.name || 'Connecting...'}
                 </span>
               </div>
             </div>
 
-            {/* Center (Wide iPad Landscape / Desktop lg+): Inline 3-Mode Switcher (hidden in dedicated Game/Practice Companion) */}
+            {/* Center (Wide iPad Landscape / Desktop lg+): Inline 4-Mode Switcher (hidden in dedicated Game/Practice Companion) */}
             {!activeGame && (
-            <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
+            <div
+              className={cn(
+                'hidden lg:flex items-center gap-1 p-1 rounded-xl border',
+                isDartCounterMode
+                  ? 'bg-slate-100 border-slate-200'
+                  : 'bg-slate-900/90 border-white/10'
+              )}
+            >
               {(
                 [
-                  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300' },
-                  { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300' },
-                  { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300' },
+                  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300', lightTone: 'bg-white text-slate-900 shadow-sm' },
+                  { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300', lightTone: 'bg-white text-slate-900 shadow-sm' },
+                  { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300', lightTone: 'bg-white text-slate-900 shadow-sm' },
+                  { id: 'dartcounter', label: 'DartCounter', icon: DartCounterIcon, tone: 'bg-[#F76505] text-white shadow-sm', lightTone: 'bg-[#F76505] text-white shadow-sm' },
                 ] as const
               ).map((m) => {
                 const Icon = m.icon;
                 const active = currentMode === m.id;
+                const showInviteDot = m.id === 'dartcounter' && pendingInviteCount > 0;
                 return (
                   <button
                     key={m.id}
                     type="button"
                     onClick={() => handleSwitchMode(m.id)}
                     className={cn(
-                      'inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
-                      active ? m.tone : 'text-slate-400 hover:text-white'
+                      'relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer',
+                      active
+                        ? isDartCounterMode
+                          ? m.lightTone
+                          : m.tone
+                        : isDartCounterMode
+                        ? 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                        : 'text-slate-400 hover:text-white'
                     )}
                   >
-                    <Icon className="w-3.5 h-3.5" />
+                    <Icon className={cn('w-3.5 h-3.5', m.id === 'dartcounter' && !active && 'text-[#F76505]')} />
                     <span>{m.label}</span>
+                    {showInviteDot && (
+                      <span className="w-2 h-2 rounded-full bg-[#F76505] ring-2 ring-white animate-pulse" />
+                    )}
                   </button>
                 );
               })}
             </div>
             )}
 
-            {/* Right: Party Mode Toggle + Resync + Pairing Badge */}
+            {/* Right: Camera Warning (if any error) + Party Mode Toggle + Resync + Pairing Badge */}
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {hasCameraIssue && (
+                <button
+                  type="button"
+                  onClick={() => setIsCameraIssueModalOpen(true)}
+                  title={state?.replayCameraIssueSummary || 'Camera Issues Detected — Tap for details'}
+                  aria-label="Camera Issues Detected"
+                  className={cn(
+                    'relative inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border active:scale-95 transition-all cursor-pointer',
+                    isDartCounterMode
+                      ? 'bg-amber-100 hover:bg-amber-200 border-amber-400 text-amber-800'
+                      : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/65 text-amber-200 shadow-[0_0_18px_-4px_rgba(245,158,11,0.65)]'
+                  )}
+                >
+                  <span className="relative flex items-center justify-center">
+                    <Camera className={cn('w-4 h-4', isDartCounterMode ? 'text-amber-700' : 'text-amber-300')} />
+                    <AlertTriangle className="w-2.5 h-2.5 text-rose-500 fill-rose-950 absolute -top-1 -right-1.5 animate-pulse" />
+                  </span>
+                  <span className={cn('hidden sm:inline text-[11px] font-mono font-black uppercase tracking-wider ml-0.5', isDartCounterMode ? 'text-amber-800' : 'text-amber-200')}>
+                    Cam
+                  </span>
+                </button>
+              )}
+
+              {!isDartCounterMode && (
               <button
                 type="button"
                 onClick={() =>
@@ -2460,18 +2664,35 @@ export const MobileRemoteView: React.FC = () => {
                   </>
                 )}
               </button>
+              )}
 
               <button
                 type="button"
                 disabled={syncing}
                 onClick={() => void handleManualResync()}
                 title="Resync Kiosk & Recalibrate Autodarts Cameras"
-                className="p-2 rounded-xl bg-slate-900/80 border border-white/10 text-slate-300 hover:text-white disabled:opacity-60 cursor-pointer"
+                className={cn(
+                  'p-2 rounded-xl border disabled:opacity-60 cursor-pointer transition-colors',
+                  isDartCounterMode
+                    ? 'bg-slate-100 border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                    : 'bg-slate-900/80 border-white/10 text-slate-300 hover:text-white'
+                )}
               >
-                <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin text-emerald-400')} />
+                <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin text-[#F76505]')} />
               </button>
 
-              <Badge variant={connected && kioskOnline ? 'emerald' : 'rose'} size="sm" dot>
+              <Badge
+                variant={connected && kioskOnline ? 'emerald' : 'rose'}
+                size="sm"
+                dot
+                className={
+                  isDartCounterMode
+                    ? connected && kioskOnline
+                      ? 'bg-[#E6F5EC] border-[#107C41]/30 text-[#107C41]'
+                      : 'bg-rose-50 border-rose-300 text-rose-700'
+                    : undefined
+                }
+              >
                 <Wifi className="w-3 h-3" />
                 <span className="hidden sm:inline">
                   {connected && kioskOnline ? 'Paired' : connected ? 'No Kiosk' : 'Offline'}
@@ -2480,30 +2701,48 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 2 (iPad Portrait & Phone < lg): Crisp Full-Width 3-Mode Toggle Strip (hidden during dedicated Companion) */}
+          {/* Row 2 (iPad Portrait & Phone < lg): Crisp Full-Width 4-Mode Toggle Strip (hidden during dedicated Companion) */}
           {!activeGame && (
-          <div className="lg:hidden grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
+          <div
+            className={cn(
+              'lg:hidden grid grid-cols-4 gap-1 p-1 rounded-xl border',
+              isDartCounterMode
+                ? 'bg-slate-100 border-slate-200'
+                : 'bg-slate-900/90 border-white/10'
+            )}
+          >
             {(
               [
-                { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' },
-                { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' },
-                { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300 border-sky-400/40' },
+                { id: 'dashboard', label: 'Stats', icon: LayoutDashboard, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40', lightTone: 'bg-white text-slate-900 border-slate-200 shadow-sm' },
+                { id: 'arcade', label: 'Arcade', icon: Gamepad2, tone: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40', lightTone: 'bg-white text-slate-900 border-slate-200 shadow-sm' },
+                { id: 'practice', label: 'Practice', icon: Crosshair, tone: 'bg-sky-500/20 text-sky-300 border-sky-400/40', lightTone: 'bg-white text-slate-900 border-slate-200 shadow-sm' },
+                { id: 'dartcounter', label: 'DC', icon: DartCounterIcon, tone: 'bg-[#F76505] text-white border-[#F76505]', lightTone: 'bg-[#F76505] text-white border-[#F76505] shadow-sm' },
               ] as const
             ).map((m) => {
               const Icon = m.icon;
               const active = currentMode === m.id;
+              const showInviteDot = m.id === 'dartcounter' && pendingInviteCount > 0;
               return (
                 <button
                   key={m.id}
                   type="button"
                   onClick={() => handleSwitchMode(m.id)}
                   className={cn(
-                    'inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold border transition-colors cursor-pointer',
-                    active ? m.tone : 'border-transparent text-slate-400 hover:text-white'
+                    'relative inline-flex items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-[11px] sm:text-xs font-bold border transition-colors cursor-pointer',
+                    active
+                      ? isDartCounterMode
+                        ? m.lightTone
+                        : m.tone
+                      : isDartCounterMode
+                      ? 'border-transparent text-slate-600 hover:text-slate-900'
+                      : 'border-transparent text-slate-400 hover:text-white'
                   )}
                 >
-                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span>{m.label}</span>
+                  <Icon className={cn('w-3.5 h-3.5 shrink-0', m.id === 'dartcounter' && !active && 'text-[#F76505]')} />
+                  <span className="truncate">{m.id === 'dartcounter' ? 'DartCounter' : m.label}</span>
+                  {showInviteDot && (
+                    <span className="w-2 h-2 rounded-full bg-[#F76505] ring-2 ring-white animate-pulse shrink-0" />
+                  )}
                 </button>
               );
             })}
@@ -2514,14 +2753,20 @@ export const MobileRemoteView: React.FC = () => {
 
       {/* Instant Feedback Toast */}
       {toast && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-slate-950/95 border border-emerald-400/50 text-emerald-300 text-xs font-bold shadow-2xl animate-in fade-in zoom-in-95">
+        <div
+          className={cn(
+            'fixed top-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full border text-xs font-bold shadow-2xl animate-in fade-in zoom-in-95',
+            isDartCounterMode
+              ? 'bg-[#111827] border-[#F76505] text-white'
+              : 'bg-slate-950/95 border-emerald-400/50 text-emerald-300'
+          )}
+        >
           {toast}
         </div>
       )}
 
       {/* =====================================================================
-          DEDICATED GAME / PRACTICE IPAD COMPANION SCREEN
-          Takes over whenever any Arcade Game or Practice Drill is active!
+          DEDICATED GAME / PRACTICE COMPANION OR TARGET DARTCOUNTER CONTROLLER
          ===================================================================== */}
       {state && activeGame && activeGameDef ? (
         <GameCompanionScreen
@@ -2537,6 +2782,8 @@ export const MobileRemoteView: React.FC = () => {
           setSaveNewPlayer={setSaveNewPlayer}
           onAddPlayerSubmit={handleAddPlayerSubmit}
         />
+      ) : isDartCounterMode ? (
+        <DartCounterRemoteScreen state={state} dispatch={dispatch} />
       ) : (
         <>
           {/* =====================================================================
@@ -2662,6 +2909,207 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           </nav>
         </>
+      )}
+
+      {/* Camera Issues Popup Modal (auto-opens on FIRST camera error, or when tapping Header Camera Warning icon) */}
+      {isCameraIssueModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Camera Issues Detected"
+        >
+          <div className="w-full max-w-md card-matte rounded-3xl border-2 border-amber-400/55 bg-[#0E1420] shadow-[0_0_50px_-10px_rgba(245,158,11,0.45)] overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-5 pt-5 pb-4 border-b border-white/10 flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className={cn(
+                    'w-11 h-11 rounded-2xl border flex items-center justify-center shrink-0 relative',
+                    hasCameraIssue
+                      ? 'bg-amber-500/15 border-amber-400/50 text-amber-300'
+                      : 'bg-emerald-500/15 border-emerald-400/50 text-emerald-300'
+                  )}
+                >
+                  <Camera className="w-5 h-5" />
+                  {hasCameraIssue && (
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400 fill-rose-950 absolute -top-1 -right-1" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base sm:text-lg font-black text-white tracking-tight leading-tight">
+                    {hasCameraIssue ? 'Camera Issues Detected' : 'All Cameras Online'}
+                  </h2>
+                  <p className="text-xs font-mono text-slate-400 mt-0.5">
+                    {hasCameraIssue
+                      ? 'Split-Cam Auto-Clipper needs attention'
+                      : 'Oche Cam & 3 Board Cams are healthy'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsCameraIssueModalOpen(false)}
+                aria-label="Close camera warning"
+                className="p-2 rounded-xl bg-slate-900/90 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Diagnostics Body */}
+            <div className="p-5 space-y-3.5">
+              {/* Oche Webcam Status Card */}
+              <div
+                className={cn(
+                  'p-3.5 rounded-2xl border space-y-1',
+                  state?.replayStatus === 'error' || state?.replayError
+                    ? 'bg-rose-500/12 border-rose-400/45'
+                    : 'bg-emerald-500/10 border-emerald-400/35'
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider font-black text-slate-200">
+                    Oche / Throwing Webcam
+                  </span>
+                  <Badge
+                    variant={
+                      state?.replayStatus === 'error' || state?.replayError ? 'rose' : 'emerald'
+                    }
+                    size="sm"
+                    dot
+                  >
+                    {state?.replayStatus === 'error' || state?.replayError ? 'ERROR' : 'LIVE'}
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-200 leading-snug break-words">
+                  {state?.replayError
+                    ? state.replayError
+                    : state?.replayActiveCameraLabel
+                    ? `Streaming from ${state.replayActiveCameraLabel}`
+                    : state?.replayStatus === 'starting'
+                    ? 'Starting Oche webcam...'
+                    : 'Ready'}
+                </p>
+              </div>
+
+              {/* Autodarts 3-Cam Board Feed Status Card */}
+              <div
+                className={cn(
+                  'p-3.5 rounded-2xl border space-y-1',
+                  state?.replayBoardFeedError
+                    ? 'bg-amber-500/12 border-amber-400/45'
+                    : 'bg-slate-900/75 border-white/10'
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider font-black text-slate-200">
+                    Autodarts 3 Board Cameras
+                  </span>
+                  <Badge
+                    variant={
+                      state?.replayBoardFeedError
+                        ? 'amber'
+                        : state?.replayBoardFeedActive
+                        ? 'emerald'
+                        : 'slate'
+                    }
+                    size="sm"
+                    dot
+                  >
+                    {state?.replayBoardFeedError
+                      ? 'ISSUE'
+                      : state?.replayBoardFeedActive
+                      ? 'LIVE'
+                      : 'STANDBY'}
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-300 leading-snug break-words">
+                  {state?.replayBoardFeedError ||
+                    (state?.replayBoardFeedActive
+                      ? '3-camera live stack connected (port 3180).'
+                      : 'Will connect automatically once Split-Cam starts.')}
+                </p>
+              </div>
+
+              {/* Quick Camera Picker if multiple cameras are detected */}
+              {(state?.replayAvailableCameras?.length || 0) > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                    Detected PC Cameras ({state!.replayAvailableCameras.length}) — Tap to try as Oche Cam
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {state!.replayAvailableCameras.map((cam) => {
+                      const isSelected = state?.replaySelectedDeviceId === cam.deviceId;
+                      return (
+                        <button
+                          key={cam.deviceId}
+                          type="button"
+                          onClick={() =>
+                            void dispatch(
+                              { type: 'select_oche_camera', deviceId: cam.deviceId },
+                              `Switching Oche cam → ${cam.label}`
+                            )
+                          }
+                          className={cn(
+                            'px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer max-w-full truncate',
+                            isSelected
+                              ? 'bg-emerald-500/20 border-emerald-400/55 text-emerald-200'
+                              : cam.isAutodartsBoardCam
+                              ? 'bg-slate-900/60 border-white/10 text-slate-500 hover:text-slate-300'
+                              : 'bg-slate-900 border-white/15 text-white hover:border-emerald-400/50'
+                          )}
+                        >
+                          {cam.label}
+                          {cam.isAutodartsBoardCam ? ' (Autodarts Board)' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="pt-2 space-y-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'redetect_cameras' },
+                      'Auto-detecting all cameras & restarting Split-Cam...'
+                    )
+                  }
+                  className="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-[0_0_24px_rgba(16,185,129,0.3)]"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Auto-Detect &amp; Retry Cameras
+                </button>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCameraIssueModalOpen(false);
+                      setTabletRightPanel('replays');
+                      setMobileTab('replays');
+                    }}
+                    className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-white/10 border border-white/15 text-slate-200 font-bold text-xs uppercase tracking-wider cursor-pointer"
+                  >
+                    Open Replays Tab
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCameraIssueModalOpen(false)}
+                    className="py-2.5 px-3 rounded-xl bg-slate-900/70 hover:bg-white/10 border border-white/10 text-slate-300 font-bold text-xs uppercase tracking-wider cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Hidden PIN-Protected Dev Console QR Modal (Code: 0161 — 5-tap AD crest) */}

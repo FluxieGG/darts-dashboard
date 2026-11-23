@@ -191,14 +191,14 @@ Write-BootLog "======================================================" 'Cyan'
 
 # Optional cold-boot settle delay so USB cameras & Wi-Fi initialize cleanly
 if ($BootDelaySec -gt 0) {
-  Write-BootLog "[0/4] Waiting ${BootDelaySec}s for Windows USB cameras & Wi-Fi to settle..." 'DarkGray'
+  Write-BootLog "[0/6] Waiting ${BootDelaySec}s for Windows USB cameras & Wi-Fi to settle..." 'DarkGray'
   Start-Sleep -Seconds $BootDelaySec
 }
 
 # ----------------------------------------------------------------------------
 # STEP 1: Launch Autodarts Desktop & wait for Local Board Manager (Port 3180)
 # ----------------------------------------------------------------------------
-Write-BootLog "[1/4] Checking Autodarts Desktop (port $BoardPort)..." 'Yellow'
+Write-BootLog "[1/6] Checking Autodarts Desktop (port $BoardPort)..." 'Yellow'
 
 if (Test-LocalPort $BoardPort) {
   Write-BootLog "      Autodarts Board Manager is already live on port $BoardPort." 'Green'
@@ -231,9 +231,124 @@ if (Test-LocalPort $BoardPort) {
 }
 
 # ----------------------------------------------------------------------------
-# STEP 2: Start Dashboard + iPad LAN Relay + Career Vault + Replay Clipper
+# STEP 2: Detect & Verify All Connected Cameras (Oche Cam + 3 Board Cams)
 # ----------------------------------------------------------------------------
-Write-BootLog "[2/4] Starting Autodarts Dashboard server (port $DashboardPort)..." 'Yellow'
+Write-BootLog "[2/6] Detecting all connected USB & Autodarts board cameras..." 'Yellow'
+
+$autodartsVidPids = @()
+$autodartsConfiguredCount = 0
+$boardStreamOk = $false
+$cameraWarnings = @()
+
+try {
+  $adConfig = Invoke-RestMethod -Uri "http://127.0.0.1:$BoardPort/api/config" -TimeoutSec 2
+  if ($adConfig -and $adConfig.cam -and $adConfig.cam.cams) {
+    $autodartsConfiguredCount = @($adConfig.cam.cams).Count
+    foreach ($camSpec in $adConfig.cam.cams) {
+      $specStr = [string]$camSpec
+      if ($specStr -match 'vid=([0-9a-fA-F]{4})&pid=([0-9a-fA-F]{4})') {
+        $vp = "$($Matches[1].ToLower()):$($Matches[2].ToLower())"
+        if ($autodartsVidPids -notcontains $vp) {
+          $autodartsVidPids += $vp
+        }
+      }
+    }
+  }
+} catch {
+  $cameraWarnings += "Autodarts Desktop config unreachable on port $BoardPort"
+}
+
+try {
+  $streamReq = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$BoardPort/api/streams/live")
+  $streamReq.Timeout = 2500
+  $streamResp = $streamReq.GetResponse()
+  if ([int]$streamResp.StatusCode -eq 200) {
+    $s = $streamResp.GetResponseStream()
+    $buf = New-Object byte[] 64
+    $readBytes = $s.Read($buf, 0, 64)
+    if ($readBytes -gt 0) {
+      $boardStreamOk = $true
+    }
+  }
+  $streamResp.Close()
+} catch {
+  $boardStreamOk = $false
+  $cameraWarnings += "Autodarts 3-camera live stream not responding on port $BoardPort"
+}
+
+$pnpCams = @(Get-PnpDevice -Class Camera,Image -ErrorAction SilentlyContinue)
+$activeCameras = @()
+$ocheCandidates = @()
+$boardCamDevices = @()
+
+foreach ($dev in $pnpCams) {
+  $inst = [string]$dev.InstanceId
+  $status = [string]$dev.Status
+  $name = [string]$dev.FriendlyName
+  if (-not $name) { $name = 'USB Video Device' }
+
+  $vidPid = ''
+  if ($inst -match 'VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})') {
+    $vidPid = "$($Matches[1].ToLower()):$($Matches[2].ToLower())"
+  }
+
+  $isBoardCam = ($vidPid -ne '' -and ($autodartsVidPids -contains $vidPid))
+  $role = if ($isBoardCam) { 'board' } else { 'oche' }
+
+  if ($status -eq 'OK') {
+    $entry = [ordered]@{
+      name       = $name
+      vidPid     = $vidPid
+      instanceId = $inst
+      status     = $status
+      role       = $role
+    }
+    $activeCameras += $entry
+    if ($isBoardCam) {
+      $boardCamDevices += $entry
+    } else {
+      $ocheCandidates += $entry
+    }
+    Write-BootLog "      [OK] ($($role.ToUpper())) $name [$vidPid]" 'Cyan'
+  } elseif ($status -eq 'Error' -or $status -eq 'Degraded') {
+    $warnMsg = "Camera device problem: $name ($status)"
+    $cameraWarnings += $warnMsg
+    Write-BootLog "      [WARN] $warnMsg" 'DarkYellow'
+  }
+}
+
+if ($ocheCandidates.Count -eq 0) {
+  $cameraWarnings += "No dedicated Oche / Throwing webcam detected (only $($boardCamDevices.Count) Autodarts board camera(s) found)"
+  Write-BootLog "      [WARN] No dedicated Oche webcam detected!" 'DarkYellow'
+} else {
+  Write-BootLog "      Detected $($ocheCandidates.Count) Oche cam(s) + $($boardCamDevices.Count) Autodarts board cam(s) (3-cam stream: $(if ($boardStreamOk) { 'LIVE' } else { 'OFFLINE' }))." 'Green'
+}
+
+if ($autodartsConfiguredCount -gt 0 -and $boardCamDevices.Count -lt $autodartsConfiguredCount) {
+  $cameraWarnings += "Expected $autodartsConfiguredCount Autodarts board cameras, but Windows reports $($boardCamDevices.Count) active"
+}
+
+$cameraReportPath = Join-Path $DataDir 'camera-boot-report.json'
+try {
+  $reportObj = [ordered]@{
+    detectedAt                = (Get-Date).ToString('o')
+    detectedAtMs              = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    totalActiveCameras        = $activeCameras.Count
+    autodartsConfiguredCount  = $autodartsConfiguredCount
+    autodartsBoardCamCount    = $boardCamDevices.Count
+    autodartsVidPids          = $autodartsVidPids
+    boardStreamOk             = $boardStreamOk
+    ocheCandidates            = $ocheCandidates
+    cameras                   = $activeCameras
+    warnings                  = $cameraWarnings
+  }
+  $reportObj | ConvertTo-Json -Depth 5 | Set-Content -Path $cameraReportPath -Encoding UTF8
+} catch {}
+
+# ----------------------------------------------------------------------------
+# STEP 3: Start Dashboard + iPad LAN Relay + Career Vault + Replay Clipper
+# ----------------------------------------------------------------------------
+Write-BootLog "[3/6] Starting Autodarts Dashboard server (port $DashboardPort)..." 'Yellow'
 
 if (Test-LocalPort $DashboardPort) {
   Write-BootLog "      Dashboard server is already running on port $DashboardPort." 'Green'
@@ -262,9 +377,9 @@ if (Test-LocalPort $DashboardPort) {
 }
 
 # ----------------------------------------------------------------------------
-# STEP 3: Verify iPad Oche Deck LAN Relay is listening
+# STEP 4: Verify iPad Oche Deck LAN Relay is listening
 # ----------------------------------------------------------------------------
-Write-BootLog "[3/4] Arming iPad Oche Deck LAN Relay..." 'Yellow'
+Write-BootLog "[4/6] Arming iPad Oche Deck LAN Relay..." 'Yellow'
 $lanUrl = $null
 for ($i = 0; $i -lt 8; $i++) {
   try {
@@ -285,9 +400,53 @@ if ($lanUrl) {
 }
 
 # ----------------------------------------------------------------------------
-# STEP 4: Open App -> Maximize -> Instant Fullscreen Kiosk Mode
+# STEP 5: Launch Brave Browser -> Target DartCounter (Ready for Online Games)
 # ----------------------------------------------------------------------------
-Write-BootLog "[4/4] Launching Autodarts Kiosk Display (Open -> Maximize -> Fullscreen)..." 'Yellow'
+Write-BootLog "[5/6] Launching Brave Browser -> Target DartCounter (https://app.dartcounter.net)..." 'Yellow'
+
+$dartCounterUrl = "https://app.dartcounter.net"
+$existingBraveDc = Get-Process -Name brave -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.MainWindowHandle -ne [IntPtr]::Zero -and
+    ($_.MainWindowTitle -like '*DartCounter*' -or $_.MainWindowTitle -like '*dartcounter*')
+  } |
+  Select-Object -First 1
+
+if ($existingBraveDc) {
+  Write-BootLog "      Brave is already open on DartCounter ($($existingBraveDc.MainWindowTitle))." 'Green'
+} else {
+  $bravePaths = @(
+    "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe",
+    "${env:ProgramFiles(x86)}\BraveSoftware\Brave-Browser\Application\brave.exe",
+    "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe"
+  )
+  $braveExe = $bravePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+  if ($braveExe) {
+    # Disable background tab throttling / window occlusion so DartCounter stays 100% live
+    # and auto-logs scores instantly even while Brave sits behind the fullscreen Kiosk TV!
+    Start-Process -FilePath $braveExe -ArgumentList @(
+      "--new-window",
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-features=CalculateNativeWinOcclusion",
+      "--autoplay-policy=no-user-gesture-required",
+      "--disable-session-crashed-bubble",
+      "--no-first-run",
+      $dartCounterUrl
+    )
+    Write-BootLog "      Brave launched (un-throttled) to $dartCounterUrl (ready to start a game)." 'Green'
+    Start-Sleep -Milliseconds 900
+  } else {
+    Write-BootLog "      Brave Browser executable not found in standard paths." 'DarkYellow'
+  }
+}
+
+# ----------------------------------------------------------------------------
+# STEP 6: Open App -> Maximize -> Instant Fullscreen Kiosk Mode
+# ----------------------------------------------------------------------------
+Write-BootLog "[6/6] Launching Autodarts Kiosk Display (Open -> Maximize -> Fullscreen)..." 'Yellow'
 
 $kioskUrl = "http://localhost:$DashboardPort/?kiosk=1"
 $existingWindow = Find-AutodartsBrowserWindow

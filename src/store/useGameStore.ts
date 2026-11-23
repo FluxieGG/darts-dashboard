@@ -44,6 +44,7 @@ interface GameStoreState {
   setActiveView: (view: AppView) => void;
   openGamesLobby: () => void;
   openPracticeLobby: () => void;
+  openDartCounterView: () => void;
   returnToDashboard: () => void;
   setSelectedCategory: (category: GameCategory | 'All') => void;
   toggleSound: () => void;
@@ -151,6 +152,18 @@ export const useGameStore = create<GameStoreState>()(
       openPracticeLobby: () =>
         set({
           activeView: 'practice-lobby',
+          activeGameId: null,
+          matchPhase: 'setup',
+          lastResult: null,
+          activeController: null,
+          canUndoActiveGame: false,
+          activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
+        }),
+
+      openDartCounterView: () =>
+        set({
+          activeView: 'dartcounter',
           activeGameId: null,
           matchPhase: 'setup',
           lastResult: null,

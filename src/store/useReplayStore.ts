@@ -23,6 +23,9 @@ export interface SavedClipConfirmation {
 }
 
 let savedConfirmTimer: number | null = null;
+let inFlightStartPromise: Promise<void> | null = null;
+let deviceChangeListenerAttached = false;
+let deviceChangeRetryTimer: number | null = null;
 
 interface ReplayStoreState {
   // Persisted settings
@@ -42,7 +45,11 @@ interface ReplayStoreState {
   // Ephemeral runtime state
   status: OcheCamStatus;
   errorMessage: string | null;
+  boardFeedActive: boolean;
   boardFeedError: string | null;
+  activeCameraLabel: string | null;
+  /** Increments each time a camera error episode occurs so paired iPads know an error fired */
+  cameraErrorEpoch: number;
   availableCameras: CameraDeviceInfo[];
   clips: ReplayClipRecord[];
   activeOverlayClip: ReplayClipRecord | null;
@@ -67,10 +74,13 @@ interface ReplayStoreState {
   loadSavedClips: () => Promise<void>;
   startCamera: (override?: {
     ocheDeviceId?: string;
+    strictSelection?: boolean;
+    autoDetect?: boolean;
     boardCameraMode?: BoardCameraMode;
     boardDeviceId?: string;
     autodartsCamIndex?: number;
   }) => Promise<void>;
+  redetectCameras: () => Promise<void>;
   stopCamera: () => void;
   setSelectedDeviceId: (deviceId: string) => void;
   setAutoStartCamera: (autoStart: boolean) => void;
@@ -126,7 +136,10 @@ export const useReplayStore = create<ReplayStoreState>()(
 
       status: 'idle',
       errorMessage: null,
+      boardFeedActive: false,
       boardFeedError: null,
+      activeCameraLabel: null,
+      cameraErrorEpoch: 0,
       availableCameras: [],
       clips: [],
       activeOverlayClip: null,
@@ -147,7 +160,12 @@ export const useReplayStore = create<ReplayStoreState>()(
         try {
           const cams = await ocheCamService.listCameras();
           set((s) => {
-            const ocheId = s.selectedDeviceId || cams[0]?.deviceId || '';
+            const preferredNonBoard = cams.find((c) => !c.isAutodartsBoardCam);
+            const savedMatch = cams.find((c) => c.deviceId === s.selectedDeviceId);
+            const ocheId =
+              savedMatch && !savedMatch.isAutodartsBoardCam
+                ? savedMatch.deviceId
+                : preferredNonBoard?.deviceId || savedMatch?.deviceId || cams[0]?.deviceId || '';
             const fallbackBoard =
               cams.find((c) => c.deviceId !== ocheId)?.deviceId || '';
             return {
@@ -176,43 +194,91 @@ export const useReplayStore = create<ReplayStoreState>()(
       },
 
       startCamera: async (override) => {
-        const state = get();
-        const ocheDeviceId = override?.ocheDeviceId ?? state.selectedDeviceId;
-        // Board Cam is permanently locked to Autodarts Desktop's 3-camera live stream
-        const boardCameraMode: BoardCameraMode = 'autodarts';
-        const includeAudio = state.includeAudio;
+        // Deduplicate concurrent startup calls (e.g. KioskBootScreen + App mount) unless explicit override
+        if (inFlightStartPromise && !override?.ocheDeviceId && !override?.autoDetect) {
+          return inFlightStartPromise;
+        }
 
-        set({ status: 'starting', errorMessage: null, boardFeedError: null, boardCameraMode });
-        try {
-          await ocheCamService.start({
-            ocheDeviceId: ocheDeviceId || undefined,
-            includeAudio,
+        const runStart = async () => {
+          const state = get();
+          const ocheDeviceId = override?.autoDetect
+            ? undefined
+            : override?.ocheDeviceId ?? state.selectedDeviceId;
+          const strictSelection = Boolean(override?.strictSelection);
+          const autoDetect = Boolean(override?.autoDetect);
+          // Board Cam is permanently locked to Autodarts Desktop's 3-camera live stream
+          const boardCameraMode: BoardCameraMode = 'autodarts';
+          const includeAudio = state.includeAudio;
+
+          set({
+            status: 'starting',
+            errorMessage: null,
+            boardFeedError: null,
             boardCameraMode,
           });
-          const cams = await ocheCamService.listCameras();
-          const activeTrack = ocheCamService.getOcheStream()?.getVideoTracks()[0];
-          const resolvedId =
-            activeTrack?.getSettings()?.deviceId || ocheDeviceId || cams[0]?.deviceId || '';
-          const boardStatus = ocheCamService.getBoardFeedStatus();
+          try {
+            await ocheCamService.start({
+              ocheDeviceId: ocheDeviceId || undefined,
+              strictSelection,
+              autoDetect,
+              includeAudio,
+              boardCameraMode,
+            });
+            const cams = await ocheCamService.listCameras();
+            const activeTrack = ocheCamService.getOcheStream()?.getVideoTracks()[0];
+            const activeInfo = ocheCamService.getActiveCameraInfo();
+            const resolvedId =
+              activeInfo.deviceId ||
+              activeTrack?.getSettings()?.deviceId ||
+              ocheDeviceId ||
+              cams.find((c) => !c.isAutodartsBoardCam)?.deviceId ||
+              cams[0]?.deviceId ||
+              '';
+            const resolvedLabel =
+              activeInfo.label ||
+              activeTrack?.label ||
+              cams.find((c) => c.deviceId === resolvedId)?.label ||
+              'Oche Webcam';
+            const boardStatus = ocheCamService.getBoardFeedStatus();
 
-          set({
-            cameraEnabled: true,
-            boardCameraMode: 'autodarts',
-            selectedDeviceId: resolvedId,
-            availableCameras: cams,
-            status: 'buffering',
-            errorMessage: null,
-            boardFeedError: boardStatus.error,
-          });
-        } catch (err) {
-          set({
-            cameraEnabled: false,
-            status: 'error',
-            errorMessage:
+            set({
+              cameraEnabled: true,
+              boardCameraMode: 'autodarts',
+              selectedDeviceId: resolvedId,
+              activeCameraLabel: resolvedLabel,
+              availableCameras: cams,
+              status: 'buffering',
+              errorMessage: null,
+              boardFeedActive: boardStatus.active,
+              boardFeedError: boardStatus.error,
+            });
+          } catch (err) {
+            const cams = await ocheCamService.listCameras().catch(() => get().availableCameras);
+            const message =
               (err as Error).message ||
-              'Could not access webcam. Check camera permissions or device selection.',
-          });
-        }
+              'Could not access Oche webcam. Check USB cable, camera permissions, or device selection.';
+            set((s) => ({
+              cameraEnabled: false,
+              availableCameras: cams,
+              activeCameraLabel: null,
+              status: 'error',
+              errorMessage: message,
+              cameraErrorEpoch: s.cameraErrorEpoch + 1,
+            }));
+          }
+        };
+
+        const p = runStart().finally(() => {
+          if (inFlightStartPromise === p) {
+            inFlightStartPromise = null;
+          }
+        });
+        inFlightStartPromise = p;
+        return p;
+      },
+
+      redetectCameras: async () => {
+        await get().startCamera({ autoDetect: true });
       },
 
       stopCamera: () => {
@@ -220,6 +286,8 @@ export const useReplayStore = create<ReplayStoreState>()(
         set({
           cameraEnabled: false,
           status: 'idle',
+          activeCameraLabel: null,
+          boardFeedActive: false,
           devCaptureNextDartArmed: false,
           errorMessage: null,
           boardFeedError: null,
@@ -518,6 +586,51 @@ export const useReplayStore = create<ReplayStoreState>()(
 );
 
 // Keep live Autodarts 3-cam board feed status/errors synced into the store
-ocheCamService.onBoardFeedStatusChange(({ error }) => {
-  useReplayStore.setState({ boardFeedError: error });
+ocheCamService.onBoardFeedStatusChange(({ active, error }) => {
+  useReplayStore.setState((s) => {
+    const isNewBoardError = Boolean(error) && !s.boardFeedError;
+    return {
+      boardFeedActive: active,
+      boardFeedError: error,
+      cameraErrorEpoch: isNewBoardError ? s.cameraErrorEpoch + 1 : s.cameraErrorEpoch,
+    };
+  });
 });
+
+// Keep live Oche webcam disconnect/recovery events synced into the store
+ocheCamService.onOcheStatusChange(({ active, error, label }) => {
+  if (!active && error) {
+    useReplayStore.setState((s) => ({
+      cameraEnabled: false,
+      status: 'error',
+      activeCameraLabel: null,
+      errorMessage: error,
+      cameraErrorEpoch: s.cameraErrorEpoch + 1,
+    }));
+  } else if (active && label) {
+    useReplayStore.setState({ activeCameraLabel: label });
+  }
+});
+
+// Automatically detect newly plugged-in USB cameras and recover Split-Cam if currently errored
+if (
+  typeof window !== 'undefined' &&
+  typeof navigator !== 'undefined' &&
+  navigator.mediaDevices?.addEventListener &&
+  !deviceChangeListenerAttached
+) {
+  deviceChangeListenerAttached = true;
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (deviceChangeRetryTimer !== null) {
+      window.clearTimeout(deviceChangeRetryTimer);
+    }
+    deviceChangeRetryTimer = window.setTimeout(() => {
+      deviceChangeRetryTimer = null;
+      const state = useReplayStore.getState();
+      void state.refreshCameras();
+      if (state.autoStartCamera && state.status === 'error') {
+        void state.startCamera({ autoDetect: true });
+      }
+    }, 1200);
+  });
+}

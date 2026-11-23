@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Header } from './components/layout/Header';
 import { BentoGrid } from './components/layout/BentoGrid';
+import { OnlineMatchFullscreenArena } from './components/online/OnlineMatchFullscreenArena';
+import { DartCounterKioskArena } from './components/online/DartCounterKioskArena';
 import { SettingsModal } from './components/layout/SettingsModal';
 import { RemoteQrModal } from './components/remote/RemoteQrModal';
 import { MobileRemoteView } from './components/remote/MobileRemoteView';
@@ -17,8 +19,10 @@ import { usePlayerStore } from './store/usePlayerStore';
 import { useGameStore } from './store/useGameStore';
 import { useCareerStore } from './store/useCareerStore';
 import { useReplayStore } from './store/useReplayStore';
+import { useOnlineMatchStore } from './store/useOnlineMatchStore';
 import { useReplayAutoTrigger } from './hooks/useReplayAutoTrigger';
 import { useOnlineMatchSync } from './hooks/useOnlineMatchSync';
+import { useDartCounterBridge } from './services/dartCounterBridge';
 import { LocalBoardManagerService } from './services/localBoardManager';
 import { generateSimulatedThrow } from './services/simulator';
 import { useKioskRemoteBridge } from './services/remoteBridge';
@@ -45,6 +49,9 @@ const KioskApp: React.FC = () => {
   const recentlyCompletedObjective = useCareerStore((s) => s.recentlyCompletedObjective);
   const dismissObjectiveToast = useCareerStore((s) => s.dismissObjectiveToast);
   const loadSavedClips = useReplayStore((s) => s.loadSavedClips);
+  const isOnlineMatchActive = useOnlineMatchStore((s) => s.isActive);
+  const isOnlineMatchFullscreen = useOnlineMatchStore((s) => s.isFullscreenKiosk);
+  const onlineMatchSource = useOnlineMatchStore((s) => s.source);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteQrOpen, setIsRemoteQrOpen] = useState(false);
@@ -56,6 +63,7 @@ const KioskApp: React.FC = () => {
   const { connectedDevs } = useKioskDevBridge(isLocalConnected, connectedRemotes);
   useReplayAutoTrigger();
   useOnlineMatchSync();
+  useDartCounterBridge();
 
   const boardServiceRef = useRef<LocalBoardManagerService | null>(null);
 
@@ -119,6 +127,11 @@ const KioskApp: React.FC = () => {
     void hydrateDashboardStateFromDisk().then(() => {
       if (!cancelled) {
         stopSync = startDashboardDiskSync();
+        // Immediately enable Split-Cam on boot (deduplicated with KioskBootScreen so skipping boot never skips cameras!)
+        const replay = useReplayStore.getState();
+        if (replay.autoStartCamera && replay.status === 'idle') {
+          void replay.startCamera();
+        }
       }
     });
     void hydrateVault();
@@ -202,8 +215,17 @@ const KioskApp: React.FC = () => {
     return () => clearInterval(interval);
   }, [isAutoSimulating, dataMode, autoSimIntervalMs, addSimulatedDart, activePlayerId]);
 
+  const isDartCounterTheme =
+    activeView === 'dartcounter' ||
+    (activeView === 'dashboard' &&
+      isOnlineMatchActive &&
+      isOnlineMatchFullscreen &&
+      onlineMatchSource === 'dartcounter');
+
   const isTurnTintActive = activeView === 'game-active' && Boolean(activeTurnPlayerColor);
-  const resolvedTintHex = isTurnTintActive
+  const resolvedTintHex = isDartCounterTheme
+    ? undefined
+    : isTurnTintActive
     ? activeTurnPlayerColor!
     : !isPartyMode
     ? activePlayer.dartColor || DEFAULT_DART_COLOR
@@ -218,11 +240,15 @@ const KioskApp: React.FC = () => {
 
   return (
     <div
-      data-theme={isPartyMode ? 'party' : 'default'}
-      data-player-tint={!isPartyMode && Boolean(resolvedTintHex) ? 'on' : 'off'}
-      data-turn-tint={isTurnTintActive ? 'on' : 'off'}
+      data-theme={isDartCounterTheme ? 'dartcounter' : isPartyMode ? 'party' : 'default'}
+      data-player-tint={!isDartCounterTheme && !isPartyMode && Boolean(resolvedTintHex) ? 'on' : 'off'}
+      data-turn-tint={!isDartCounterTheme && isTurnTintActive ? 'on' : 'off'}
       style={rootStyle}
-      className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans select-none antialiased transition-colors duration-300"
+      className={`min-h-screen flex flex-col font-sans select-none antialiased transition-colors duration-300 ${
+        isDartCounterTheme
+          ? 'bg-[#F4F5F7] text-[#111827]'
+          : 'bg-[#0B0F17] text-slate-100'
+      }`}
     >
       {/* Ordered Kiosk Boot Sequence (Vault -> Board 3180 -> iPad Relay -> Split-Cam) */}
       {isBootingKiosk && (
@@ -240,9 +266,19 @@ const KioskApp: React.FC = () => {
         isLocalConnected={isLocalConnected}
       />
 
-      {/* Main Content View: Dashboard Bento Grid | Tech Darts Arcade | Solo Training | Active Game */}
+      {/* Main Content View: Dashboard Bento Grid | Target DartCounter Arena | Arcade | Solo Training | Active Game */}
       <div className="flex-1 pb-8">
-        {activeView === 'dashboard' && <BentoGrid />}
+        {activeView === 'dashboard' &&
+          (isOnlineMatchActive && isOnlineMatchFullscreen ? (
+            onlineMatchSource === 'dartcounter' ? (
+              <DartCounterKioskArena />
+            ) : (
+              <OnlineMatchFullscreenArena />
+            )
+          ) : (
+            <BentoGrid />
+          ))}
+        {activeView === 'dartcounter' && <DartCounterKioskArena />}
         {activeView === 'games-lobby' && (
           <GamesLobby isLocalConnected={isLocalConnected} />
         )}
@@ -288,16 +324,23 @@ const KioskApp: React.FC = () => {
         </div>
       )}
 
-      {/* Calm Dark-Night Broadcast Footer */}
+      {/* Broadcast Footer (adapts to DartCounter Light / Party / Dark-Night themes) */}
       <footer
         className={`border-t py-2 px-4 sm:px-6 text-center text-[11px] font-mono flex items-center justify-between transition-colors ${
-          isPartyMode
+          isDartCounterTheme
+            ? 'bg-white border-slate-200 text-slate-500'
+            : isPartyMode
             ? 'border-purple-400/15 text-purple-300/75'
             : 'border-white/[0.05] text-slate-600'
         }`}
       >
         <div className="flex items-center gap-3">
-          {isPartyMode ? (
+          {isDartCounterTheme ? (
+            <span className="flex items-center gap-1.5 text-[#F76505] font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#F76505]" />
+              Target DartCounter Live Bridge • Autodarts Auto-Scoring Active
+            </span>
+          ) : isPartyMode ? (
             <span className="flex items-center gap-1.5 text-amber-300/90 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
               Party Mode Active • Personal Stats Protected
@@ -315,7 +358,9 @@ const KioskApp: React.FC = () => {
         </div>
         <div>
           <span>
-            {isPartyMode
+            {isDartCounterTheme
+              ? 'DartCounter Broadcast Arena • Controlled via iPad Oche Deck'
+              : isPartyMode
               ? 'Vice Party Session • Controlled via iPad Oche Deck'
               : 'Autodarts Broadcast Kiosk • Controlled via iPad Oche Deck'}
           </span>

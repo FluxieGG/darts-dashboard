@@ -41,6 +41,8 @@ export interface RecordedClipBundle {
 export interface CameraDeviceInfo {
   deviceId: string;
   label: string;
+  /** True when the camera matches an Autodarts Desktop board camera VID:PID (reserved by Autodarts) */
+  isAutodartsBoardCam?: boolean;
 }
 
 export interface ReplayTriggerSettings {

@@ -119,6 +119,44 @@
 }
 
 /* ==========================================================================
+   Target DartCounter Official Light / Vibrant Orange Brand Theme
+   Inspired by app.dartcounter.net: crisp off-white canvas (#F4F5F7),
+   pure white cards (#FFFFFF), Target Orange (#F76505), Darts Green (#107C41)
+   ========================================================================== */
+[data-theme="dartcounter"] {
+  background-color: #F4F5F7 !important;
+  color: #111827 !important;
+  background-image:
+    radial-gradient(ellipse 75% 40% at 50% -6%, rgba(247, 101, 5, 0.14), transparent 62%),
+    radial-gradient(ellipse 48% 36% at 95% 100%, rgba(16, 124, 65, 0.08), transparent 58%) !important;
+  background-attachment: fixed;
+}
+
+[data-theme="dartcounter"] .card-matte {
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  color: #111827;
+  box-shadow:
+    0 6px 22px -6px rgba(15, 23, 42, 0.08),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+[data-theme="dartcounter"] .card-matte-hover:hover {
+  border-color: rgba(247, 101, 5, 0.45);
+  box-shadow:
+    0 10px 28px -6px rgba(247, 101, 5, 0.16),
+    0 2px 4px rgba(15, 23, 42, 0.05);
+}
+
+[data-theme="dartcounter"] ::-webkit-scrollbar-track {
+  background: #F4F5F7;
+}
+
+[data-theme="dartcounter"] ::-webkit-scrollbar-thumb {
+  background: rgba(247, 101, 5, 0.35);
+}
+
+/* ==========================================================================
    Subtle Player Darts-Colour Theme Tint
    Gently tints ambient gradients & card rims to the active player's darts colour
    ========================================================================== */

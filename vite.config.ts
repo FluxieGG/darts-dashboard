@@ -5,6 +5,7 @@ import path from 'path';
 import { remoteRelayPlugin } from './scripts/viteRemoteRelayPlugin';
 import { careerVaultPlugin } from './scripts/viteCareerVaultPlugin';
 import { replayClipperPlugin } from './scripts/viteReplayClipperPlugin';
+import { dartCounterBridgePlugin } from './scripts/viteDartCounterPlugin';
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -14,6 +15,7 @@ export default defineConfig({
     remoteRelayPlugin(),
     careerVaultPlugin(),
     replayClipperPlugin(),
+    dartCounterBridgePlugin(),
   ],
   resolve: {
     alias: {

@@ -5,6 +5,7 @@ import {
   RecordedClipBundle,
   ReplayClipRecord,
 } from '../types/replay';
+import { VirtualBoardCamera } from './virtualBoardCam';
 
 interface RollingSlot {
   id: number;
@@ -16,12 +17,55 @@ interface RollingSlot {
 
 export interface StartOcheCamOptions {
   ocheDeviceId?: string;
+  /** When true, strictly prefer `ocheDeviceId` first (user manually picked it); still falls back if busy/missing */
+  strictSelection?: boolean;
+  /** When true, ignore saved deviceId and scan all non-Autodarts cameras fresh */
+  autoDetect?: boolean;
   includeAudio?: boolean;
   /** Kept for interface compatibility — Board Cam is always locked to Autodarts' 3 board cameras */
   boardCameraMode?: BoardCameraMode;
   boardDeviceId?: string;
   autodartsCamIndex?: number;
   autodartsCamCustomUrl?: string;
+}
+
+function isAutodartsBoardLabel(label: string, autodartsVidPids: string[]): boolean {
+  const lower = (label || '').toLowerCase();
+  if (!lower) return false;
+  for (const vp of autodartsVidPids) {
+    if (vp && lower.includes(vp.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Scores a camera candidate so dedicated Oche / throwing webcams (e.g. "USB Live camera", Logitech, etc.)
+ * are tried BEFORE generic/board cameras when auto-detecting.
+ */
+function scoreOcheCameraCandidate(cam: CameraDeviceInfo, autodartsVidPids: string[]): number {
+  const label = (cam.label || '').toLowerCase();
+  let score = 0;
+  if (isAutodartsBoardLabel(label, autodartsVidPids)) {
+    score -= 1000;
+  }
+  if (
+    label.includes('live') ||
+    label.includes('oche') ||
+    label.includes('logitech') ||
+    label.includes('brio') ||
+    label.includes('c920') ||
+    label.includes('c922') ||
+    label.includes('hd pro') ||
+    label.includes('webcam')
+  ) {
+    score += 50;
+  }
+  if (label && !label.startsWith('camera ')) {
+    score += 10;
+  }
+  return score;
 }
 
 /**
@@ -142,6 +186,9 @@ class OcheCamService {
 
   private ocheVideoEl: HTMLVideoElement | null = null;
   private boardFrameBitmap: ImageBitmap | null = null;
+  /** Dedicated GPU WebGL Virtual Straight-On Board Camera (clips only — zero load on Autodarts scoring!) */
+  private virtualBoardCam: VirtualBoardCamera | null = null;
+  private virtualBoardReady = false;
   private boardStreamAbort: AbortController | null = null;
   private boardReconnectTimer: number | null = null;
   private boardFrameCount = 0;
@@ -152,6 +199,11 @@ class OcheCamService {
   private isDualMode = true;
   private boardFeedActive = false;
   private boardFeedError: string | null = null;
+  private boardLastFrameAt = 0;
+  private boardWatchdogTimer: number | null = null;
+  private activeOcheCameraLabel: string | null = null;
+  private activeOcheDeviceId: string | null = null;
+  private autodartsVidPids: string[] = [];
 
   private slots: RollingSlot[] = [];
   private rotationTimer: number | null = null;
@@ -161,6 +213,9 @@ class OcheCamService {
   private activeCaptureMeta: CaptureClipMetadata | null = null;
   private captureListeners = new Set<(capturing: boolean, countdownSec?: number) => void>();
   private boardStatusListeners = new Set<(status: { active: boolean; error: string | null }) => void>();
+  private ocheStatusListeners = new Set<
+    (status: { active: boolean; error: string | null; label: string | null }) => void
+  >();
 
   private readonly DEFAULT_PRE_TARGET_SEC = 5;
   private readonly MANUAL_PRE_TARGET_SEC = 15;
@@ -184,15 +239,81 @@ class OcheCamService {
     return '';
   }
 
+  /**
+   * Queries Vite's `/api/replays/cameras` (and falls back to `/api/board/api/config`)
+   * to discover which USB VID:PIDs belong to Autodarts Desktop's 3 board cameras so
+   * Split-Cam never tries to open a camera that Autodarts Desktop has exclusively locked.
+   */
+  public async fetchAutodartsCamVidPids(): Promise<string[]> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1800);
+    try {
+      const res = await fetch('/api/replays/cameras', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { autodartsVidPids?: string[] };
+        if (Array.isArray(data.autodartsVidPids) && data.autodartsVidPids.length > 0) {
+          this.autodartsVidPids = data.autodartsVidPids.map((v) => String(v).toLowerCase());
+          return this.autodartsVidPids;
+        }
+      }
+    } catch {
+      // fall through to direct proxied Autodarts config
+    } finally {
+      window.clearTimeout(timer);
+    }
+
+    const fallbackCtrl = new AbortController();
+    const fallbackTimer = window.setTimeout(() => fallbackCtrl.abort(), 1500);
+    try {
+      const res = await fetch('/api/board/api/config', {
+        cache: 'no-store',
+        signal: fallbackCtrl.signal,
+      });
+      if (res.ok) {
+        const cfg = (await res.json()) as { cam?: { cams?: string[] } };
+        const cams = Array.isArray(cfg?.cam?.cams) ? cfg.cam.cams : [];
+        const vidPids: string[] = [];
+        for (const spec of cams) {
+          const m = String(spec).match(/vid=([0-9a-f]{4})&pid=([0-9a-f]{4})/i);
+          if (m) {
+            const vp = `${m[1].toLowerCase()}:${m[2].toLowerCase()}`;
+            if (!vidPids.includes(vp)) vidPids.push(vp);
+          }
+        }
+        if (vidPids.length > 0) {
+          this.autodartsVidPids = vidPids;
+        }
+      }
+    } catch {
+      // ignore if Autodarts is offline
+    } finally {
+      window.clearTimeout(fallbackTimer);
+    }
+
+    return this.autodartsVidPids;
+  }
+
   public async listCameras(): Promise<CameraDeviceInfo[]> {
     if (!navigator.mediaDevices?.enumerateDevices) return [];
-    const devices = await navigator.mediaDevices.enumerateDevices();
+    const [devices, vidPids] = await Promise.all([
+      navigator.mediaDevices.enumerateDevices(),
+      this.autodartsVidPids.length > 0
+        ? Promise.resolve(this.autodartsVidPids)
+        : this.fetchAutodartsCamVidPids(),
+    ]);
     return devices
       .filter((d) => d.kind === 'videoinput')
-      .map((d, idx) => ({
-        deviceId: d.deviceId,
-        label: d.label || `Camera ${idx + 1}`,
-      }));
+      .map((d, idx) => {
+        const label = d.label || `Camera ${idx + 1}`;
+        return {
+          deviceId: d.deviceId,
+          label,
+          isAutodartsBoardCam: isAutodartsBoardLabel(label, vidPids),
+        };
+      });
   }
 
   public getStream(): MediaStream | null {
@@ -201,6 +322,13 @@ class OcheCamService {
 
   public getOcheStream(): MediaStream | null {
     return this.ocheStream;
+  }
+
+  public getActiveCameraInfo(): { deviceId: string | null; label: string | null } {
+    return {
+      deviceId: this.activeOcheDeviceId,
+      label: this.activeOcheCameraLabel,
+    };
   }
 
   public isDualCameraActive(): boolean {
@@ -227,8 +355,21 @@ class OcheCamService {
     return () => this.boardStatusListeners.delete(cb);
   }
 
+  public onOcheStatusChange(
+    cb: (status: { active: boolean; error: string | null; label: string | null }) => void
+  ): () => void {
+    this.ocheStatusListeners.add(cb);
+    return () => this.ocheStatusListeners.delete(cb);
+  }
+
   private emitCaptureState(capturing: boolean, countdownSec?: number): void {
     this.captureListeners.forEach((cb) => cb(capturing, countdownSec));
+  }
+
+  private emitOcheStatus(active: boolean, error: string | null): void {
+    this.ocheStatusListeners.forEach((cb) =>
+      cb({ active, error, label: this.activeOcheCameraLabel })
+    );
   }
 
   private setBoardFeedStatus(active: boolean, error: string | null): void {
@@ -260,11 +401,37 @@ class OcheCamService {
 
     const abort = new AbortController();
     this.boardStreamAbort = abort;
+    this.boardLastFrameAt = 0;
+    this.virtualBoardCam = new VirtualBoardCamera(900);
+    this.virtualBoardReady = false;
+
+    // Watchdog: if Autodarts 3-cam feed fails to deliver frames within 12s on boot (or stalls > 45s), surface a warning
+    // (Autodarts Desktop naturally slows MJPEG output during idle/standby, so keep stall tolerance generous.)
+    const startedAt = Date.now();
+    this.boardWatchdogTimer = window.setInterval(() => {
+      if (abort.signal.aborted) return;
+      const now = Date.now();
+      if (this.boardLastFrameAt === 0 && now - startedAt > 12000) {
+        if (!this.boardFeedError) {
+          this.setBoardFeedStatus(
+            false,
+            'Autodarts 3-camera board stream not sending frames (check Autodarts Desktop on port 3180)'
+          );
+        }
+      } else if (this.boardLastFrameAt > 0 && now - this.boardLastFrameAt > 45000) {
+        this.setBoardFeedStatus(
+          false,
+          'Autodarts 3-camera board stream stalled — reconnecting...'
+        );
+      }
+    }, 5000);
 
     const connectLoop = async () => {
       if (abort.signal.aborted) return;
 
       try {
+        // Use Autodarts Desktop's original lightweight RAW 3-cam stream (NO ?warp=true!)
+        // so Autodarts Desktop CPU & auto-scoring stay 100% untouched and fast!
         const res = await fetch('/api/replays/board-stream', {
           cache: 'no-store',
           signal: abort.signal,
@@ -335,7 +502,12 @@ class OcheCamService {
                 const prev = this.boardFrameBitmap;
                 this.boardFrameBitmap = bitmap;
                 if (prev) prev.close();
+                // Render into our dedicated GPU WebGL Virtual Straight-On Board Camera (clips only!)
+                if (this.virtualBoardCam && this.virtualBoardCam.render(bitmap)) {
+                  this.virtualBoardReady = true;
+                }
                 this.boardFrameCount += 1;
+                this.boardLastFrameAt = Date.now();
                 this.setBoardFeedStatus(true, null);
               })
               .catch(() => {
@@ -368,6 +540,10 @@ class OcheCamService {
   }
 
   private stopAutodartsThreeCamReader(): void {
+    if (this.boardWatchdogTimer !== null) {
+      window.clearInterval(this.boardWatchdogTimer);
+      this.boardWatchdogTimer = null;
+    }
     if (this.boardReconnectTimer !== null) {
       window.clearTimeout(this.boardReconnectTimer);
       this.boardReconnectTimer = null;
@@ -380,7 +556,130 @@ class OcheCamService {
       this.boardFrameBitmap.close();
       this.boardFrameBitmap = null;
     }
+    if (this.virtualBoardCam) {
+      this.virtualBoardCam.dispose();
+      this.virtualBoardCam = null;
+    }
+    this.virtualBoardReady = false;
     this.boardFrameCount = 0;
+    this.boardLastFrameAt = 0;
+  }
+
+  /**
+   * Opens the best available Oche / Throwing webcam by:
+   * 1. Discovering Autodarts Desktop's 3 board camera VID:PIDs (so we skip busy Autodarts cams!)
+   * 2. Ordering all detected USB cameras with dedicated non-Autodarts webcams first
+   * 3. Automatically falling back across every detected camera if a saved deviceId is stale or busy
+   */
+  private async openBestOcheCamera(options: StartOcheCamOptions): Promise<MediaStream> {
+    const { ocheDeviceId, strictSelection = false, autoDetect = false, includeAudio = false } = options;
+
+    const vidPids = await this.fetchAutodartsCamVidPids();
+    const allCams = await this.listCameras();
+
+    const orderedCandidates: CameraDeviceInfo[] = [];
+    const pushUnique = (cam: CameraDeviceInfo | undefined) => {
+      if (!cam || !cam.deviceId) return;
+      if (!orderedCandidates.some((c) => c.deviceId === cam.deviceId)) {
+        orderedCandidates.push(cam);
+      }
+    };
+
+    const nonBoardCams = allCams
+      .filter((c) => !isAutodartsBoardLabel(c.label, vidPids))
+      .sort((a, b) => scoreOcheCameraCandidate(b, vidPids) - scoreOcheCameraCandidate(a, vidPids));
+    const boardCams = allCams.filter((c) => isAutodartsBoardLabel(c.label, vidPids));
+
+    const savedCam = !autoDetect && ocheDeviceId
+      ? allCams.find((c) => c.deviceId === ocheDeviceId)
+      : undefined;
+
+    if (strictSelection && savedCam) {
+      // User explicitly picked this exact camera — try it first, then fall back to non-board cams
+      pushUnique(savedCam);
+      nonBoardCams.forEach(pushUnique);
+      boardCams.forEach(pushUnique);
+    } else {
+      // Auto-boot / Auto-detect:
+      // Prefer saved camera ONLY if it is NOT an Autodarts Desktop board camera!
+      if (savedCam && !isAutodartsBoardLabel(savedCam.label, vidPids)) {
+        pushUnique(savedCam);
+      }
+      // Next try all dedicated non-Autodarts cameras (e.g. "USB  Live camera")
+      nonBoardCams.forEach(pushUnique);
+      // Finally fall back to remaining cameras only if nothing else opened
+      if (savedCam) pushUnique(savedCam);
+      boardCams.forEach(pushUnique);
+    }
+
+    const attemptErrors: string[] = [];
+
+    const tryOpenDevice = async (deviceId?: string): Promise<MediaStream> => {
+      const idealConstraints: MediaTrackConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 },
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+      };
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: idealConstraints,
+          audio: includeAudio,
+        });
+      } catch (err) {
+        const name = (err as DOMException)?.name || '';
+        // If 720p@30fps was rejected by the webcam driver, retry with relaxed video constraints
+        if (name === 'OverconstrainedError') {
+          return await navigator.mediaDevices.getUserMedia({
+            video: deviceId ? { deviceId: { exact: deviceId } } : true,
+            audio: includeAudio,
+          });
+        }
+        throw err;
+      }
+    };
+
+    for (const candidate of orderedCandidates) {
+      try {
+        const stream = await tryOpenDevice(candidate.deviceId);
+        const track = stream.getVideoTracks()[0];
+        this.activeOcheDeviceId = track?.getSettings()?.deviceId || candidate.deviceId;
+        this.activeOcheCameraLabel = track?.label || candidate.label || 'Oche Webcam';
+        return stream;
+      } catch (err) {
+        const domErr = err as DOMException;
+        const name = domErr?.name || 'Error';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          throw new Error('Camera permission denied in browser. Allow camera access on localhost:5173.');
+        }
+        attemptErrors.push(`${candidate.label}: ${domErr?.message || name}`);
+      }
+    }
+
+    // Last resort: if enumerateDevices returned 0 labeled devices (e.g. before permission grant), try generic default
+    try {
+      const stream = await tryOpenDevice(undefined);
+      const track = stream.getVideoTracks()[0];
+      this.activeOcheDeviceId = track?.getSettings()?.deviceId || null;
+      this.activeOcheCameraLabel = track?.label || 'Oche Webcam';
+      return stream;
+    } catch (err) {
+      const domErr = err as DOMException;
+      const name = domErr?.name || 'Error';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        throw new Error('Camera permission denied in browser. Allow camera access on localhost:5173.');
+      }
+      if (allCams.length === 0) {
+        throw new Error('No cameras detected on this PC. Check USB connections.');
+      }
+      if (nonBoardCams.length === 0 && boardCams.length > 0) {
+        throw new Error(
+          `Only ${boardCams.length} Autodarts board camera(s) detected — Oche webcam not found. Check USB cable.`
+        );
+      }
+      const detail = attemptErrors[0] || domErr?.message || 'Could not start video source';
+      throw new Error(`Unable to open Oche webcam (${detail})`);
+    }
   }
 
   public async start(options: StartOcheCamOptions = {}): Promise<MediaStream> {
@@ -390,24 +689,24 @@ class OcheCamService {
       throw new Error('Camera API (getUserMedia) is not available in this browser context.');
     }
 
-    const { ocheDeviceId, includeAudio = false } = options;
+    const { includeAudio = false } = options;
 
-    // 1. Open Throwing / Oche Reaction camera (unchanged from user's working setup)
-    const ocheVideoConstraints: MediaTrackConstraints = {
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      frameRate: { ideal: 30 },
-    };
-    if (ocheDeviceId) {
-      ocheVideoConstraints.deviceId = { exact: ocheDeviceId };
-    }
-
-    const ocheStream = await navigator.mediaDevices.getUserMedia({
-      video: ocheVideoConstraints,
-      audio: includeAudio,
-    });
+    // 1. Auto-detect & open the best available Oche / Throwing camera (skipping locked Autodarts board cams)
+    const ocheStream = await this.openBestOcheCamera(options);
     this.ocheStream = ocheStream;
     this.ocheVideoEl = this.createHiddenVideo(ocheStream);
+
+    // Watch for live USB webcam unplug / driver drop mid-session
+    const videoTrack = ocheStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.addEventListener('ended', () => {
+        if (this.ocheStream === ocheStream) {
+          this.stop();
+          this.emitOcheStatus(false, 'Oche webcam disconnected — check USB cable');
+        }
+      });
+    }
+    this.emitOcheStatus(true, null);
 
     // 2. Always lock Board Cam to Autodarts Desktop's 3-camera live stream (port 3180)
     this.isDualMode = true;
@@ -415,8 +714,8 @@ class OcheCamService {
     this.startAutodartsThreeCamReader();
 
     // 3. Create 1600×900 16:9 Broadcast Canvas Compositor
-    //    LEFT  (1066×900): Oche / Throwing Camera
-    //    RIGHT  (534×900): All 3 Autodarts Board Cameras stacked vertically (534×300 each = 16:9!)
+    //    LEFT  (700×900): Oche / Throwing Reaction Webcam
+    //    RIGHT (900×900): Single Consolidated Straight-On 3-in-1 Board Cam (exact 1:1 square!)
     const canvas = document.createElement('canvas');
     canvas.width = 1600;
     canvas.height = 900;
@@ -427,70 +726,51 @@ class OcheCamService {
       if (!ctx || !this.canvasEl) return;
       const W = this.canvasEl.width;
       const H = this.canvasEl.height;
-      const leftW = 1066;
+      const rightW = H; // 900 — exact 1:1 square for the full straight-on circular dartboard!
+      const leftW = W - rightW; // 700
       const rightX = leftW;
-      const rightW = W - leftW; // 534
-      const camH = H / 3; // 300
 
       ctx.fillStyle = '#0B0F17';
       ctx.fillRect(0, 0, W, H);
 
-      // LEFT: Oche / Throwing Camera (full tall reaction view)
+      // LEFT: Oche / Throwing Camera
       if (this.ocheVideoEl) {
         drawCover(ctx, this.ocheVideoEl, 0, 0, leftW, H);
       }
       drawCornerLabel(ctx, 'OCHE CAM', 18, 18, '#F43F5E');
 
-      // RIGHT: All 3 Autodarts Board Cameras stacked cleanly top-to-bottom
-      const bmp = this.boardFrameBitmap;
-      if (bmp && bmp.width > 0 && bmp.height > 0) {
-        if (bmp.width >= bmp.height * 2.4) {
-          // Autodarts combined 3-camera wide strip (e.g. 3840×720 = 3 × 1280×720)
-          const sliceW = Math.floor(bmp.width / 3);
-          for (let i = 0; i < 3; i++) {
-            const dy = Math.round(i * camH);
-            const dh = i === 2 ? H - dy : Math.round(camH);
-            drawCover(ctx, bmp, rightX, dy, rightW, dh, {
-              sx: i * sliceW,
-              sy: 0,
-              sw: sliceW,
-              sh: bmp.height,
-            });
-            drawCornerLabel(ctx, `BOARD CAM ${i + 1}`, rightX + 12, dy + 12, '#10B981', true);
-          }
-
-          // Subtle horizontal dividers between Cam 1 / Cam 2 / Cam 3
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.24)';
-          ctx.fillRect(rightX, Math.round(camH) - 1, rightW, 2);
-          ctx.fillRect(rightX, Math.round(camH * 2) - 1, rightW, 2);
-        } else {
-          // Fallback if Autodarts ever returns a single camera frame
-          drawCover(ctx, bmp, rightX, 0, rightW, H);
-          drawCornerLabel(ctx, 'BOARD CAM', rightX + 14, 18, '#10B981');
-        }
+      // RIGHT: Dedicated GPU WebGL Virtual Straight-On Board Camera (Clips Only!)
+      const virtualCanvas = this.virtualBoardReady ? this.virtualBoardCam?.getCanvas() : null;
+      if (virtualCanvas) {
+        ctx.drawImage(virtualCanvas, rightX, 0, rightW, H);
+        drawCornerLabel(ctx, 'VIRTUAL BOARD CAM', rightX + 18, 18, '#10B981');
+      } else if (this.boardFrameBitmap && this.boardFrameBitmap.width > 0) {
+        // Fallback if WebGL is unavailable on a device
+        drawCover(ctx, this.boardFrameBitmap, rightX, 0, rightW, H);
+        drawCornerLabel(ctx, 'BOARD CAM', rightX + 18, 18, '#10B981');
       } else {
-        // Waiting placeholder for the 3 board cameras
+        // Waiting placeholder for the virtual straight-on board camera
         ctx.fillStyle = '#111827';
         ctx.fillRect(rightX, 0, rightW, H);
         ctx.fillStyle = '#94A3B8';
-        ctx.font = '700 22px "Plus Jakarta Sans", sans-serif';
+        ctx.font = '700 24px "Plus Jakarta Sans", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('3 BOARD CAMS CONNECTING...', rightX + rightW / 2, H / 2 - 14);
-        ctx.font = '500 13px "JetBrains Mono", monospace';
+        ctx.fillText('VIRTUAL BOARD CAM CONNECTING...', rightX + rightW / 2, H / 2 - 14);
+        ctx.font = '500 14px "JetBrains Mono", monospace';
         ctx.fillStyle = '#64748B';
         ctx.fillText(
           this.boardFeedError
             ? 'Start Autodarts Desktop (port 3180)'
-            : 'Linking Autodarts 3-cam stream...',
+            : 'Linking raw 3-cam feed into GPU virtual camera...',
           rightX + rightW / 2,
-          H / 2 + 18
+          H / 2 + 20
         );
         ctx.textAlign = 'left';
-        drawCornerLabel(ctx, 'BOARD CAMS (3)', rightX + 14, 18, '#F59E0B', true);
+        drawCornerLabel(ctx, 'VIRTUAL BOARD CAM', rightX + 18, 18, '#F59E0B', true);
       }
 
-      // Crisp vertical divider separating Oche Cam & 3-Cam Board Stack
+      // Crisp vertical divider separating Oche Cam & Consolidated Straight-On Board Cam
       ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
       ctx.fillRect(leftW - 2, 0, 4, H);
     };
@@ -561,6 +841,8 @@ class OcheCamService {
       this.compositeStream = null;
     }
 
+    this.activeOcheCameraLabel = null;
+    this.activeOcheDeviceId = null;
     this.setBoardFeedStatus(false, null);
     this.isCapturing = false;
     this.emitCaptureState(false);

@@ -7,6 +7,7 @@ import {
   ReplayClipCategory,
   ReplayTriggerSettings,
 } from './replay';
+import { DartCounterControlCommand } from './dartCounter';
 
 export interface RemoteInterfaceOption {
   address: string;
@@ -103,10 +104,14 @@ export interface RemoteKioskState {
   weeklyObjectives: ObjectiveProgress[];
   onlineMatch: {
     isActive: boolean;
+    source: 'manual' | 'dartcounter';
     startScore: 501 | 301 | 701;
     outRule: 'double' | 'straight';
     legsToWin: number;
     opponentName: string;
+    opponentRemaining: number | null;
+    opponentAvg: number | null;
+    isPlayerTurn: boolean;
     playerLegs: number;
     opponentLegs: number;
     remaining: number;
@@ -116,6 +121,25 @@ export interface RemoteKioskState {
     isBust: boolean;
     canUndo: boolean;
     matchWinner: 'player' | 'opponent' | null;
+    dcConnected: boolean;
+    dcMode: 'auto' | 'confirm' | 'read-only';
+    dcLastSubmitStatus: string | null;
+    dcLastControlStatus: string | null;
+    dcPendingInvites: Array<{
+      id: string;
+      fromName: string;
+      summary: string;
+      detectedAt: number;
+    }>;
+    isFullscreenKiosk: boolean;
+    dcPendingVisit: {
+      id: string;
+      score: number;
+      throws: string[];
+      dartsUsed: number;
+      isBust: boolean;
+      isCheckout: boolean;
+    } | null;
   };
   replayStatus: OcheCamStatus;
   replayBoardCameraMode: BoardCameraMode;
@@ -123,6 +147,19 @@ export interface RemoteKioskState {
   replayPlaybackRate: 0.5 | 0.75 | 1;
   replayTriggers: ReplayTriggerSettings;
   replayDevArmed: boolean;
+  replayError: string | null;
+  replayBoardFeedActive: boolean;
+  replayBoardFeedError: string | null;
+  replayActiveCameraLabel: string | null;
+  replaySelectedDeviceId: string;
+  replayAvailableCameras: Array<{
+    deviceId: string;
+    label: string;
+    isAutodartsBoardCam?: boolean;
+  }>;
+  replayHasCameraIssue: boolean;
+  replayCameraIssueSummary: string | null;
+  replayErrorEpoch: number;
   hasActiveReplayOverlay: boolean;
   replayClipCount: number;
   isSavingReplay: boolean;
@@ -157,7 +194,7 @@ export interface RemoteKioskState {
  */
 export type RemoteCommand =
   | { type: 'toggle_party_mode' }
-  | { type: 'navigate'; view: 'dashboard' | 'games-lobby' | 'practice-lobby' }
+  | { type: 'navigate'; view: 'dashboard' | 'games-lobby' | 'practice-lobby' | 'dartcounter' }
   | { type: 'switch_player'; playerId: string }
   | { type: 'add_player'; name: string; addToRoster?: boolean; dartColor?: string; isSaved?: boolean }
   | { type: 'update_player_color'; playerId: string; dartColor: string }
@@ -188,6 +225,8 @@ export type RemoteCommand =
   | { type: 'simulate_visit' }
   | { type: 'start_cameras' }
   | { type: 'stop_cameras' }
+  | { type: 'redetect_cameras' }
+  | { type: 'select_oche_camera'; deviceId: string }
   | { type: 'set_board_camera_mode'; mode: BoardCameraMode }
   | { type: 'set_auto_start_camera'; enabled: boolean }
   | { type: 'update_replay_trigger'; key: keyof ReplayTriggerSettings; value: boolean }
@@ -212,5 +251,11 @@ export type RemoteCommand =
   | { type: 'online_match_reset_leg' }
   | { type: 'online_match_undo' }
   | { type: 'online_match_set_score'; remaining: number }
+  | { type: 'online_match_set_fullscreen'; enabled?: boolean }
+  | { type: 'dc_set_mode'; mode: 'auto' | 'confirm' | 'read-only' }
+  | { type: 'dc_confirm_visit' }
+  | { type: 'dc_discard_visit' }
+  | { type: 'dc_force_send_visit' }
+  | { type: 'dc_control'; command: DartCounterControlCommand }
   | { type: 'resync_and_recalibrate' }
   | { type: 'toggle_rules_overlay'; open?: boolean };
