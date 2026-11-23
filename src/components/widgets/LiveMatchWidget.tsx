@@ -4,7 +4,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useLiveBoardStore } from '../../store/useLiveBoardStore';
 import { getCheckoutRoute } from '../../games/utils/dartHelpers';
 import { Badge } from '../common/Badge';
-import { Crosshair, Radio, ShieldAlert, Tablet, Target, Trophy } from 'lucide-react';
+import { Crosshair, ExternalLink, Radio, ShieldAlert, Tablet, Target, Trophy, VideoOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /**
@@ -32,6 +32,7 @@ export const LiveMatchWidget: React.FC = () => {
     matchWinner,
     dcConnected,
     dcMode,
+    dcMatchUrl,
     dcLastSubmitStatus,
   } = useOnlineMatchStore();
 
@@ -84,6 +85,56 @@ export const LiveMatchWidget: React.FC = () => {
   }
 
   const isDartCounter = source === 'dartcounter';
+
+  // For Target DartCounter matches, show a clean lightweight handoff banner to app.dartcounter.net/match
+  // (clipping is disabled, and the player confirms Autodarts totals on the iPad).
+  if (isDartCounter) {
+    const matchHref = dcMatchUrl || 'https://app.dartcounter.net/match';
+    return (
+      <div className="card-matte rounded-2xl p-5 sm:p-6 border-orange-500/50 bg-gradient-to-r from-orange-500/10 via-slate-900/90 to-emerald-500/10 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <Badge variant="emerald" size="sm" dot>
+              <Radio className="w-3 h-3" />
+              Online Match Started
+            </Badge>
+            <Badge variant="amber" size="sm">
+              {dcMode === 'confirm'
+                ? 'IPAD CONFIRM'
+                : dcMode === 'auto'
+                ? 'AUTO-LOG'
+                : 'MANUAL'}
+            </Badge>
+            <Badge variant="slate" size="sm">
+              <VideoOff className="w-3 h-3" />
+              CLIPS OFF
+            </Badge>
+          </div>
+          <a
+            href={matchHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#F76505] hover:bg-[#E05600] text-white font-mono font-black text-xs uppercase tracking-wider"
+          >
+            <span>app.dartcounter.net/match</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-slate-300">
+          <span>
+            Use Target DartCounter in Brave — confirm your Autodarts visit totals on the{' '}
+            <strong className="text-white">iPad Oche Deck</strong>.
+          </span>
+          {dcLastSubmitStatus && (
+            <span className="font-mono text-emerald-300 font-bold truncate">
+              {dcLastSubmitStatus}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

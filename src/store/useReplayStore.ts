@@ -12,6 +12,14 @@ import {
 import { ocheCamService } from '../services/ocheCamService';
 import { soundEngine } from '../games/utils/soundEngine';
 import { useGameStore } from './useGameStore';
+import { useOnlineMatchStore } from './useOnlineMatchStore';
+
+export function isDartCounterClippingDisabled(): boolean {
+  const activeView = useGameStore.getState().activeView;
+  if (activeView === 'dartcounter') return true;
+  const om = useOnlineMatchStore.getState();
+  return Boolean(om.isActive && om.source === 'dartcounter');
+}
 
 export const DEFAULT_REPLAY_SAVE_DIR = 'C:\\Users\\callu\\Desktop\\Media\\darts-autoclipper';
 
@@ -63,6 +71,8 @@ interface ReplayStoreState {
   isSavingLastClip: boolean;
   /** Non-null during the ~2.2s "CLIP SAVED!" broadcast confirmation before auto-resuming game */
   savedConfirmation: SavedClipConfirmation | null;
+  /** True while cameras/clipping were automatically paused for Target DartCounter stability */
+  pausedForDartCounter: boolean;
 
   /* [DEV-TEST: REMOVE WHEN DONE] One-shot debug trigger to clip the very next dart */
   devCaptureNextDartArmed: boolean;
@@ -70,6 +80,8 @@ interface ReplayStoreState {
 
   // Actions
   setConnectedRemotes: (count: number) => void;
+  pauseForDartCounter: () => void;
+  resumeFromDartCounter: () => void;
   refreshCameras: () => Promise<void>;
   loadSavedClips: () => Promise<void>;
   startCamera: (override?: {
@@ -150,11 +162,44 @@ export const useReplayStore = create<ReplayStoreState>()(
       pendingSaveBundle: null,
       isSavingLastClip: false,
       savedConfirmation: null,
+      pausedForDartCounter: false,
 
       devCaptureNextDartArmed: false,
       lastCaptureBanner: null,
 
       setConnectedRemotes: (connectedRemotes) => set({ connectedRemotes }),
+
+      pauseForDartCounter: () => {
+        const s = get();
+        const wasRunning =
+          s.cameraEnabled ||
+          s.status === 'buffering' ||
+          s.status === 'starting' ||
+          s.status === 'capturing' ||
+          ocheCamService.isRunning();
+        ocheCamService.stop();
+        set({
+          pausedForDartCounter: s.pausedForDartCounter || wasRunning || s.autoStartCamera,
+          cameraEnabled: false,
+          status: 'idle',
+          activeCameraLabel: null,
+          boardFeedActive: false,
+          devCaptureNextDartArmed: false,
+          activeOverlayClip: null,
+          lastCaptureBanner: null,
+          errorMessage: null,
+          boardFeedError: null,
+        });
+      },
+
+      resumeFromDartCounter: () => {
+        const s = get();
+        if (!s.pausedForDartCounter) return;
+        set({ pausedForDartCounter: false });
+        if (s.autoStartCamera && !isDartCounterClippingDisabled()) {
+          void get().startCamera();
+        }
+      },
 
       refreshCameras: async () => {
         try {
@@ -366,6 +411,10 @@ export const useReplayStore = create<ReplayStoreState>()(
       },
 
       triggerActionReplay: async (meta) => {
+        // Clipping is permanently disabled during Target DartCounter sessions for stability
+        if (isDartCounterClippingDisabled()) {
+          return null;
+        }
         if (!ocheCamService.isRunning()) {
           return null;
         }

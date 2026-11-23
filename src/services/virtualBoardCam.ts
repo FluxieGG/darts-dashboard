@@ -1,11 +1,108 @@
+import { DartCoords } from '../types/darts';
+
 /**
- * Dedicated GPU-Accelerated Virtual Straight-On Board Camera (Clips Only).
+ * Dedicated GPU-Accelerated Single-Camera Straight-On Board Renderer (Clips Only).
  *
  * Consumes Autodarts Desktop's lightweight RAW 3-camera strip (3840×720 from `/api/streams/live` —
  * ZERO `?warp=true` CPU load on Autodarts Desktop so auto-scoring stays 100% fast & unaffected!)
- * and warps + blends all 3 mounted camera angles on the browser GPU via WebGL (<0.2ms/frame)
- * into ONE seamless 900×900 straight-on front-facing dartboard view exclusively for clips.
+ * and warps each of the 3 mounted camera angles INDIVIDUALLY onto its own crisp 900×900 upright
+ * straight-on board panel inside a single 2700×900 WebGL atlas (<0.3ms/frame).
+ *
+ * ZERO multi-camera averaging/blending — each clip uses ONLY the single camera closest to the
+ * dart that triggered the clip, eliminating triple-camera ghosting & parallax blur!
  */
+
+export type BoardCameraIndex = 0 | 1 | 2;
+
+export interface BoardCameraChoice {
+  camIndex: BoardCameraIndex;
+  positionLabel: 'TOP' | 'RIGHT' | 'LEFT';
+  badgeText: string;
+  segments: readonly number[];
+}
+
+/**
+ * Exact camera-to-segment ownership derived from the calibrated 3-camera homography Jacobians:
+ *   - Cam 0 (TOP):   9, 12, 5, 20, 1, 18, 4  (clockwise 297° → 63°, plus Bullseye default)
+ *   - Cam 1 (RIGHT): 13, 6, 10, 15, 2, 17, 3 (clockwise 63° → 189°)
+ *   - Cam 2 (LEFT):  19, 7, 16, 8, 11, 14    (clockwise 189° → 297°)
+ */
+export const BOARD_CAMERAS: readonly [BoardCameraChoice, BoardCameraChoice, BoardCameraChoice] = [
+  {
+    camIndex: 0,
+    positionLabel: 'TOP',
+    badgeText: 'BOARD CAM • TOP',
+    segments: [9, 12, 5, 20, 1, 18, 4],
+  },
+  {
+    camIndex: 1,
+    positionLabel: 'RIGHT',
+    badgeText: 'BOARD CAM • RIGHT',
+    segments: [13, 6, 10, 15, 2, 17, 3],
+  },
+  {
+    camIndex: 2,
+    positionLabel: 'LEFT',
+    badgeText: 'BOARD CAM • LEFT',
+    segments: [19, 7, 16, 8, 11, 14],
+  },
+];
+
+const RIGHT_SEGMENTS = new Set<number>(BOARD_CAMERAS[1].segments);
+const LEFT_SEGMENTS = new Set<number>(BOARD_CAMERAS[2].segments);
+const TOP_SEGMENTS = new Set<number>(BOARD_CAMERAS[0].segments);
+
+/**
+ * Picks the single Autodarts board camera closest to the triggering dart.
+ *
+ * Priority:
+ *  1. Exact normalized Autodarts dart `(x, y)` coordinates (when outside the bull ring `r >= 0.12`)
+ *  2. Parsed segment number (`1..20`) from `segmentName` (e.g. `D16`, `T13`, `S3`, `T20`)
+ *  3. Bullseye / 25 -> Cam 0 (TOP, centered & glare-free); otherwise `fallbackCam` (last dart's cam)
+ */
+export function selectClosestBoardCamera(
+  coords?: DartCoords,
+  segmentName?: string,
+  fallbackCam: BoardCameraIndex = 0
+): BoardCameraChoice {
+  // 1. Use exact normalized dart coordinates (bull-centered, +x right, +y up)
+  if (coords && Number.isFinite(coords.x) && Number.isFinite(coords.y)) {
+    const r = Math.hypot(coords.x, coords.y);
+    if (r >= 0.12) {
+      // Clockwise degrees from 12 o'clock (20 = 0°, 6 = 90°, 3 = 180°, 11 = 270°)
+      let cwDeg = (Math.atan2(coords.x, coords.y) * 180) / Math.PI;
+      if (cwDeg < 0) cwDeg += 360;
+
+      if (cwDeg >= 63 && cwDeg < 189) {
+        return BOARD_CAMERAS[1]; // RIGHT: segments 13..3
+      }
+      if (cwDeg >= 189 && cwDeg < 297) {
+        return BOARD_CAMERAS[2]; // LEFT: segments 19..14
+      }
+      return BOARD_CAMERAS[0]; // TOP: segments 9..4
+    }
+    // Bullseye / 25 center shot -> Top camera gives the cleanest straight-on center view
+    return BOARD_CAMERAS[0];
+  }
+
+  // 2. Fall back to segment name parsing (e.g. "T20", "D16", "S13", "6")
+  if (segmentName) {
+    const cleaned = segmentName.trim().toUpperCase();
+    if (cleaned === 'BULL' || cleaned === 'DBULL' || cleaned === '25' || cleaned === 'SBULL') {
+      return BOARD_CAMERAS[0];
+    }
+    const match = cleaned.match(/^[SDT]?(\d{1,2})$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (RIGHT_SEGMENTS.has(num)) return BOARD_CAMERAS[1];
+      if (LEFT_SEGMENTS.has(num)) return BOARD_CAMERAS[2];
+      if (TOP_SEGMENTS.has(num)) return BOARD_CAMERAS[0];
+    }
+  }
+
+  // 3. Fallback to most recently active dart camera (useful for manual "Clip That!" after takeout)
+  return BOARD_CAMERAS[fallbackCam] ?? BOARD_CAMERAS[0];
+}
 
 // Exact sub-pixel inverse homographies: straight-on board UV (u, v in [0,1]) -> raw cam UV (x, y in [0,1])
 // Stored in row-major order [h0, h1, h2, h3, h4, h5, h6, h7, h8]
@@ -14,11 +111,11 @@ const CAM_HOMOGRAPHIES_ROW_MAJOR: readonly [
   readonly number[],
   readonly number[],
 ] = [
-  // Cam 0 (left third of 3840×720 raw strip)
+  // Cam 0 (left third of 3840×720 raw strip — TOP camera, closest to 9..4)
   [-1.216085, 1.021104, 1.112749, -0.06489, -0.97306, 1.327567, 0.302177, 1.601617, 1.0],
-  // Cam 1 (middle third of 3840×720 raw strip)
+  // Cam 1 (middle third of 3840×720 raw strip — RIGHT camera, closest to 13..3)
   [-0.025786, -0.515693, 0.556664, 0.210288, 0.01765, 0.178651, -0.457534, -0.315525, 1.0],
-  // Cam 2 (right third of 3840×720 raw strip)
+  // Cam 2 (right third of 3840×720 raw strip — LEFT camera, closest to 19..14)
   [0.765635, 0.450154, -0.095509, -0.512012, 0.214572, 0.597406, 0.800031, -0.53438, 1.0],
 ];
 
@@ -41,6 +138,8 @@ const VERTEX_SHADER_SRC = `
   }
 `;
 
+// Renders all 3 cameras INDIVIDUALLY side-by-side into a (3*size) x size atlas in one draw call.
+// Each panel samples ONLY ONE camera — zero cross-camera averaging, zero ghosting, razor sharp!
 const FRAGMENT_SHADER_SRC = `
   precision highp float;
   uniform sampler2D u_rawStrip;
@@ -49,33 +148,33 @@ const FRAGMENT_SHADER_SRC = `
   uniform mat3 u_h2;
   varying vec2 v_uv;
 
-  vec4 sampleCam(mat3 H, float sliceOffset, vec2 uv) {
+  const vec3 MATTE_BG = vec3(0.043, 0.059, 0.090); // #0B0F17
+
+  vec3 sampleSingleCam(mat3 H, float sliceOffset, vec2 uv) {
     vec3 p = H * vec3(uv, 1.0);
-    if (abs(p.z) < 0.0001) return vec4(0.0);
+    if (abs(p.z) < 0.0001) return MATTE_BG;
     vec2 c = p.xy / p.z;
-    // Soft feather inside [0.015, 0.985] so camera frame borders blend invisibly
     float edgeX = min(c.x, 1.0 - c.x);
     float edgeY = min(c.y, 1.0 - c.y);
     float edge = min(edgeX, edgeY);
-    if (edge <= 0.004) return vec4(0.0);
-    float weight = smoothstep(0.004, 0.035, edge);
+    if (edge <= 0.004) return MATTE_BG;
+    float mask = smoothstep(0.004, 0.022, edge);
     vec2 stripUv = vec2((sliceOffset + c.x) / 3.0, c.y);
     vec3 col = texture2D(u_rawStrip, stripUv).rgb;
-    return vec4(col * weight, weight);
+    return mix(MATTE_BG, col, mask);
   }
 
   void main() {
-    vec4 s0 = sampleCam(u_h0, 0.0, v_uv);
-    vec4 s1 = sampleCam(u_h1, 1.0, v_uv);
-    vec4 s2 = sampleCam(u_h2, 2.0, v_uv);
-
-    float totalW = s0.a + s1.a + s2.a;
-    if (totalW > 0.001) {
-      vec3 fused = (s0.rgb + s1.rgb + s2.rgb) / totalW;
-      gl_FragColor = vec4(fused, 1.0);
+    float x3 = v_uv.x * 3.0;
+    vec3 col;
+    if (x3 < 1.0) {
+      col = sampleSingleCam(u_h0, 0.0, vec2(x3, v_uv.y));
+    } else if (x3 < 2.0) {
+      col = sampleSingleCam(u_h1, 1.0, vec2(x3 - 1.0, v_uv.y));
     } else {
-      gl_FragColor = vec4(0.043, 0.059, 0.090, 1.0); // #0B0F17 matte canvas
+      col = sampleSingleCam(u_h2, 2.0, vec2(x3 - 2.0, v_uv.y));
     }
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
@@ -99,7 +198,7 @@ export class VirtualBoardCamera {
 
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = this.size;
+      canvas.width = this.size * 3;
       canvas.height = this.size;
       const gl = canvas.getContext('webgl', {
         alpha: false,
@@ -185,7 +284,7 @@ export class VirtualBoardCamera {
         toColMajorMat3(CAM_HOMOGRAPHIES_ROW_MAJOR[2])
       );
 
-      gl.viewport(0, 0, this.size, this.size);
+      gl.viewport(0, 0, this.size * 3, this.size);
 
       this.canvas = canvas;
       this.gl = gl;
@@ -201,7 +300,8 @@ export class VirtualBoardCamera {
   }
 
   /**
-   * Renders one straight-on 3-in-1 fused dartboard frame on the GPU from Autodarts' raw 3840×720 strip.
+   * Renders all 3 individual crisp straight-on board cameras into the (3*size) x size atlas
+   * in a single GPU draw call from Autodarts' raw 3840×720 strip.
    */
   public render(rawStripBitmap: ImageBitmap): HTMLCanvasElement | null {
     if (rawStripBitmap.width < rawStripBitmap.height * 2.4) return null;
@@ -216,6 +316,10 @@ export class VirtualBoardCamera {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rawStripBitmap);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return this.canvas;
+  }
+
+  public getPanelSize(): number {
+    return this.size;
   }
 
   public getCanvas(): HTMLCanvasElement | null {

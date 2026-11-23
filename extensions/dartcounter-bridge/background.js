@@ -1,11 +1,11 @@
-// Autodarts <-> Target DartCounter MV3 Background Service Worker
+// Autodarts <-> Target DartCounter MV3 Background Service Worker (v1.3.0)
 // Bridges local Kiosk Vite SSE relay (http://127.0.0.1:5173/api/dartcounter/*)
-// with the content script running on https://app.dartcounter.net/*
+// with the content script + MAIN-world Angular bridge running on https://app.dartcounter.net/*
 
 const DEFAULT_SETTINGS = {
   kioskUrl: 'http://127.0.0.1:5173',
   playerName: 'Callum',
-  mode: 'auto', // 'auto' | 'confirm' | 'read-only'
+  mode: 'confirm', // 'auto' | 'confirm' | 'read-only'
   paused: false,
 };
 
@@ -14,6 +14,7 @@ let kioskConnected = false;
 let latestScrapedState = null;
 let latestSubmitResult = null;
 let streamAbortController = null;
+let streamConnecting = false;
 let reconnectTimer = null;
 
 async function loadSettings() {
@@ -33,7 +34,7 @@ async function saveSettings(partial) {
   } catch {
     // ignore storage errors
   }
-  broadcastToDartCounterTabs({ type: 'bridge_status', kioskConnected, settings });
+  void broadcastToDartCounterTabs({ type: 'bridge_status', kioskConnected, settings });
 }
 
 function getBaseUrl() {
@@ -69,7 +70,7 @@ async function postJson(pathname, payload) {
 }
 
 function scheduleReconnect(delayMs = 3000) {
-  if (reconnectTimer) return;
+  if (reconnectTimer || streamConnecting || streamAbortController) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     void connectKioskStream();
@@ -78,22 +79,32 @@ function scheduleReconnect(delayMs = 3000) {
 
 /**
  * Uses streaming fetch() + ReadableStream to consume SSE from the Kiosk Vite server
- * cleanly inside an MV3 Service Worker without relying on EventSource availability.
+ * cleanly inside an MV3 Service Worker without opening duplicate connections.
  */
-async function connectKioskStream() {
+async function connectKioskStream(forceReset = false) {
+  if (streamConnecting && !forceReset) return;
+  if (streamAbortController && !forceReset) return;
+
+  streamConnecting = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   if (streamAbortController) {
     try {
       streamAbortController.abort();
     } catch {
       // ignore
     }
+    streamAbortController = null;
   }
 
-  await loadSettings();
   const abort = new AbortController();
   streamAbortController = abort;
 
   try {
+    await loadSettings();
     const res = await fetch(`${getBaseUrl()}/api/dartcounter/stream?role=extension`, {
       method: 'GET',
       cache: 'no-store',
@@ -104,6 +115,7 @@ async function connectKioskStream() {
       throw new Error(`HTTP ${res.status}`);
     }
 
+    streamConnecting = false;
     kioskConnected = true;
     void broadcastToDartCounterTabs({ type: 'bridge_status', kioskConnected, settings });
 
@@ -133,6 +145,7 @@ async function connectKioskStream() {
   } catch {
     // Expected during reconnect or when Kiosk server is offline
   } finally {
+    streamConnecting = false;
     if (streamAbortController === abort) {
       streamAbortController = null;
       kioskConnected = false;
@@ -185,7 +198,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false;
 
   if (msg.type === 'content_heartbeat') {
-    if (!streamAbortController && !reconnectTimer) {
+    if (!streamAbortController && !streamConnecting && !reconnectTimer) {
       void connectKioskStream();
     }
     sendResponse({ ok: true, kioskConnected, settings });
@@ -195,7 +208,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'dc_state_update') {
     latestScrapedState = msg.state;
     void postJson('/api/dartcounter/state', msg.state).then((ok) => {
-      if (ok && !kioskConnected && !streamAbortController) {
+      if (ok && !kioskConnected && !streamAbortController && !streamConnecting) {
         void connectKioskStream();
       }
     });
@@ -236,7 +249,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await postJson('/api/dartcounter/config', { mode: msg.partial.mode });
       }
       if (msg.partial && msg.partial.kioskUrl) {
-        void connectKioskStream();
+        void connectKioskStream(true);
       }
       sendResponse({ ok: true, kioskConnected, settings });
     })();
@@ -244,7 +257,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'popup_reconnect') {
-    void connectKioskStream();
+    void connectKioskStream(true);
     sendResponse({ ok: true });
     return false;
   }
@@ -285,16 +298,32 @@ function ensureKeepaliveAlarm() {
 
 chrome.alarms?.onAlarm.addListener((alarm) => {
   if (alarm.name === 'dc-keepalive') {
-    if (!streamAbortController && !reconnectTimer) {
+    if (!streamAbortController && !streamConnecting && !reconnectTimer) {
       void connectKioskStream();
     }
     void broadcastToDartCounterTabs({ type: 'force_scrape' });
   }
 });
 
+async function refreshExistingDartCounterTabs() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['https://app.dartcounter.net/*', 'https://*.dartcounter.net/*'],
+    });
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.reload(tab.id).catch(() => {});
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   ensureKeepaliveAlarm();
   void loadSettings().then(() => connectKioskStream());
+  void refreshExistingDartCounterTabs();
 });
 
 chrome.runtime.onStartup.addListener(() => {

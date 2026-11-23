@@ -4,6 +4,7 @@ import { DartThrow } from '../types/darts';
 import {
   DartCounterBridgeMode,
   DartCounterLiveMatchState,
+  DartCounterOnlineFriend,
   DartCounterPendingInvite,
   DartCounterPendingVisit,
 } from '../types/dartCounter';
@@ -64,10 +65,13 @@ interface OnlineMatchState {
   // Target DartCounter Chrome/Edge Extension Bridge State
   dcConnected: boolean;
   dcMode: DartCounterBridgeMode;
+  dcMatchUrl: string | null;
   dcPendingVisit: DartCounterPendingVisit | null;
   dcLastSubmitStatus: string | null;
   dcLastControlStatus: string | null;
   dcPendingInvites: DartCounterPendingInvite[];
+  dcOnlineFriends: DartCounterOnlineFriend[];
+  dcOutgoingInviteTo: string | null;
   /** Dedicated full-screen Demolition-style 501 broadcast arena on the vertical Kiosk TV */
   isFullscreenKiosk: boolean;
 
@@ -119,11 +123,14 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
       history: [],
 
       dcConnected: false,
-      dcMode: 'auto',
+      dcMode: 'confirm',
+      dcMatchUrl: null,
       dcPendingVisit: null,
       dcLastSubmitStatus: null,
       dcLastControlStatus: null,
       dcPendingInvites: [],
+      dcOnlineFriends: [],
+      dcOutgoingInviteTo: null,
       isFullscreenKiosk: false,
 
       startMatch: (opts) => {
@@ -403,9 +410,14 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         const incomingInvites = Array.isArray(dc.pendingInvites)
           ? dc.pendingInvites
           : s.dcPendingInvites;
+        const incomingFriends = Array.isArray(dc.onlineFriends)
+          ? dc.onlineFriends
+          : s.dcOnlineFriends;
+        const outgoingInviteTo =
+          dc.outgoingInviteTo !== undefined ? dc.outgoingInviteTo : s.dcOutgoingInviteTo;
 
         if (!dc.isMatchActive) {
-          // Always keep pending friend invites synced even when on the DartCounter lobby!
+          // Always keep online friends & pending friend invites synced even when on the DartCounter lobby!
           if (s.isActive && s.source === 'dartcounter') {
             set({
               isActive: false,
@@ -413,15 +425,23 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
               opponentRemaining: null,
               opponentAvg: null,
               isPlayerTurn: true,
+              dcMatchUrl: null,
               dcPendingVisit: null,
               dcLastSubmitStatus: null,
               dcPendingInvites: incomingInvites,
+              dcOnlineFriends: incomingFriends,
+              dcOutgoingInviteTo: outgoingInviteTo,
               isFullscreenKiosk: false,
               lastBanner: null,
               matchWinner: null,
             });
-          } else if (Array.isArray(dc.pendingInvites)) {
-            set({ dcPendingInvites: incomingInvites });
+          } else {
+            set({
+              dcMatchUrl: null,
+              dcPendingInvites: incomingInvites,
+              dcOnlineFriends: incomingFriends,
+              dcOutgoingInviteTo: outgoingInviteTo,
+            });
           }
           return;
         }
@@ -496,7 +516,10 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
           isActive: true,
           source: 'dartcounter',
           dcConnected: true,
+          dcMatchUrl: typeof dc.url === 'string' && dc.url.trim() ? dc.url.trim() : s.dcMatchUrl,
           dcPendingInvites: incomingInvites,
+          dcOnlineFriends: incomingFriends,
+          dcOutgoingInviteTo: outgoingInviteTo,
           startScore,
           outRule,
           legsToWin: legsToWin || s.legsToWin || 3,
@@ -528,6 +551,19 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
     }),
     {
       name: 'autodarts_online_match_v1',
+      version: 2,
+      migrate: (persistedState: unknown, version: number) => {
+        const state = (persistedState as Record<string, unknown>) || {};
+        if (version < 2) {
+          // Upgrade existing kiosks to iPad Confirm mode by default for DartCounter
+          return {
+            ...state,
+            dcMode: 'confirm',
+            isFullscreenKiosk: false,
+          };
+        }
+        return state;
+      },
       storage: createJSONStorage(() => ({
         getItem: (name) => localStorage.getItem(name),
         setItem: (name, value) => {

@@ -14,6 +14,89 @@ import { useGameStore } from '../store/useGameStore';
 import { gameEventBus } from './gameEventBus';
 import { devLogger } from './devLogger';
 
+interface CachedDartThrow {
+  name: string;
+  score: number;
+  multiplier: number;
+}
+
+function isOneDartDoubleOutScore(rem: number): boolean {
+  return rem === 50 || (rem >= 2 && rem <= 40 && rem % 2 === 0);
+}
+
+/**
+ * Counts how many darts in a visit were thrown while the player was sitting on a 1-dart double finish (50 or even 2..40).
+ * Used when DartCounter pops <app-darts-for-throwout-dialog> ("Darts used on a double").
+ */
+function countDartsAtDouble(
+  turnStartRem: number,
+  throwsList: Array<{ name: string; score: number }>
+): number {
+  let rem = turnStartRem;
+  let count = 0;
+  for (const dart of throwsList) {
+    if (isOneDartDoubleOutScore(rem)) {
+      count++;
+    }
+    rem -= dart.score;
+    if (rem <= 1) break;
+  }
+  return count;
+}
+
+/**
+ * Deterministically evaluates a visit against the turn-start remaining score and outRule.
+ * Essential because useOnlineMatchSync updates useOnlineMatchStore (resetting remaining / setting matchWinner)
+ * BEFORE useDartCounterBridge's gameEventBus listener runs on the winning checkout dart.
+ */
+function evaluateVisitForDartCounter(
+  turnStartRem: number,
+  outRule: 'double' | 'straight',
+  throwsList: CachedDartThrow[]
+): {
+  effectiveScore: number;
+  isBust: boolean;
+  isCheckout: boolean;
+  dartsUsed: number;
+  dartsAtDouble: number;
+} {
+  let rem = turnStartRem;
+  let scored = 0;
+  let isBust = false;
+  let isCheckout = false;
+  let dartsUsed = 0;
+
+  for (const dart of throwsList) {
+    dartsUsed++;
+    const after = rem - dart.score;
+    const isDoubleFinish =
+      dart.multiplier === 2 || dart.name === 'DBull' || dart.name === 'Bull';
+    const validOut = outRule === 'straight' ? true : isDoubleFinish;
+
+    if (after === 0 && validOut) {
+      scored += dart.score;
+      rem = 0;
+      isCheckout = true;
+      break;
+    }
+    if (after < 0 || (outRule === 'double' && (after === 1 || after === 0))) {
+      isBust = true;
+      scored = 0;
+      break;
+    }
+    scored += dart.score;
+    rem = after;
+  }
+
+  return {
+    effectiveScore: isBust ? 0 : scored,
+    isBust,
+    isCheckout,
+    dartsUsed,
+    dartsAtDouble: countDartsAtDouble(turnStartRem, throwsList.slice(0, dartsUsed)),
+  };
+}
+
 export async function pushDartCounterConfig(
   partial: Partial<DartCounterBridgeConfig>
 ): Promise<boolean> {
@@ -72,34 +155,65 @@ export async function sendDartCounterControl(
   }
 }
 
-export async function forceSendCurrentVisitToDartCounter(): Promise<boolean> {
+let lastDispatchedVisit: DartCounterPendingVisit | null = null;
+
+export async function forceSendCurrentVisitToDartCounter(
+  overrideScore?: number
+): Promise<boolean> {
   const live = useLiveBoardStore.getState();
   const match = useOnlineMatchStore.getState();
   if (match.dcPendingVisit) {
-    return confirmAndSendPendingDartCounterVisit();
+    return confirmAndSendPendingDartCounterVisit(overrideScore);
   }
-  if (live.currentVisitThrows.length === 0) {
+  if (live.currentVisitThrows.length === 0 && typeof overrideScore !== 'number') {
     match.setDartCounterLastSubmit('No darts on board to send');
     return false;
   }
-  const throwsList = live.currentVisitThrows;
-  const totalScore = throwsList.reduce((sum, t) => sum + (t.bouncer ? 0 : t.score), 0);
+  const throwsList: CachedDartThrow[] = live.currentVisitThrows.map((t) => ({
+    name: t.segment.name,
+    score: t.bouncer ? 0 : t.score,
+    multiplier: t.bouncer ? 0 : t.segment.multiplier,
+  }));
+  const evalRes = evaluateVisitForDartCounter(
+    match.turnStartRemaining,
+    match.outRule,
+    throwsList
+  );
+  const clampedOverride =
+    typeof overrideScore === 'number' && Number.isFinite(overrideScore)
+      ? Math.max(0, Math.min(180, Math.round(overrideScore)))
+      : null;
+  const finalScore = clampedOverride !== null ? clampedOverride : evalRes.effectiveScore;
+
   const visit: DartCounterPendingVisit = {
     id: `dc-manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    score: match.isBust ? 0 : totalScore,
-    throws: throwsList.map((t) => t.segment.name),
-    dartsUsed: throwsList.length,
-    isBust: match.isBust,
-    isCheckout: match.remaining === 0 && !match.isBust && totalScore > 0,
+    score: finalScore,
+    throws:
+      throwsList.length > 0
+        ? throwsList.map((t) => t.name)
+        : [String(finalScore)],
+    dartsUsed: Math.max(1, evalRes.dartsUsed || 3),
+    dartsAtDouble: evalRes.dartsAtDouble,
+    isBust: clampedOverride !== null ? clampedOverride === 0 && evalRes.isBust : evalRes.isBust,
+    isCheckout:
+      clampedOverride !== null
+        ? match.isActive && match.turnStartRemaining - clampedOverride === 0
+        : evalRes.isCheckout,
     createdAt: Date.now(),
   };
+  lastDispatchedVisit = visit;
   const { ok, delivered } = await dispatchVisitToDartCounter(visit);
+  if (ok && delivered > 0) {
+    match.setDartCounterLastSubmit(`Sent ${visit.score} to DartCounter`);
+    return true;
+  }
+  match.setDartCounterPendingVisit(visit);
   match.setDartCounterLastSubmit(
-    ok && delivered > 0
-      ? `Sent ${visit.score} to DartCounter`
-      : 'Brave DartCounter tab not reachable'
+    delivered === 0
+      ? 'Brave DartCounter tab not reachable — open app.dartcounter.net/match'
+      : 'Failed sending score to DartCounter'
   );
-  return ok && delivered > 0;
+  return false;
 }
 
 export async function setDartCounterBridgeMode(mode: DartCounterBridgeMode): Promise<void> {
@@ -108,27 +222,46 @@ export async function setDartCounterBridgeMode(mode: DartCounterBridgeMode): Pro
   devLogger.log('REMOTE', 'info', `DartCounter bridge mode → ${mode.toUpperCase()}`);
 }
 
-export async function confirmAndSendPendingDartCounterVisit(): Promise<boolean> {
+export async function confirmAndSendPendingDartCounterVisit(
+  overrideScore?: number
+): Promise<boolean> {
   const store = useOnlineMatchStore.getState();
   const pending = store.dcPendingVisit;
   if (!pending) return false;
 
-  const { ok, delivered } = await dispatchVisitToDartCounter(pending);
+  const clampedOverride =
+    typeof overrideScore === 'number' && Number.isFinite(overrideScore)
+      ? Math.max(0, Math.min(180, Math.round(overrideScore)))
+      : null;
+
+  const visitToSend: DartCounterPendingVisit =
+    clampedOverride !== null && clampedOverride !== pending.score
+      ? {
+          ...pending,
+          id: `dc-edited-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          score: clampedOverride,
+          isBust: clampedOverride === 0 && pending.isBust,
+          isCheckout: store.isActive && store.turnStartRemaining - clampedOverride === 0,
+        }
+      : pending;
+
+  lastDispatchedVisit = visitToSend;
+  const { ok, delivered } = await dispatchVisitToDartCounter(visitToSend);
   if (ok && delivered > 0) {
     store.setDartCounterPendingVisit(null);
-    store.setDartCounterLastSubmit(`Sending ${pending.score} to DartCounter...`);
+    store.setDartCounterLastSubmit(`Sending ${visitToSend.score} to DartCounter...`);
     devLogger.log(
       'BOARD',
       'success',
-      `Sent visit (${pending.score}) to DartCounter Extension`,
-      pending.throws.join(' • ')
+      `Confirmed & sent visit (${visitToSend.score}) to DartCounter Extension`,
+      visitToSend.throws.join(' • ')
     );
     return true;
   }
 
   store.setDartCounterLastSubmit(
     delivered === 0
-      ? 'No DartCounter browser tab connected — open app.dartcounter.net'
+      ? 'No DartCounter browser tab connected — open app.dartcounter.net/match'
       : 'Failed dispatching score to DartCounter'
   );
   return false;
@@ -145,10 +278,10 @@ export function discardPendingDartCounterVisit(): void {
  *
  * Bridges the local Vite `/api/dartcounter/*` SSE relay with:
  * - Option A: Auto-syncing live match scores, opponent remaining, legs, turn indicator,
- *   pending friend invites, PDC checkout routes & auto-clipping from `app.dartcounter.net`.
+ *   online friends list, pending friend invites, PDC checkout routes & auto-clipping from `app.dartcounter.net`.
  * - Option B: Auto-scoring Autodarts visits into DartCounter Web (works on both Dashboard
  *   and dedicated DartCounter Kiosk views, even while Brave sits un-throttled behind the Kiosk!)
- * - Remote Control: Starting DartBot games & accepting/declining friend invites from the iPad.
+ * - Remote Control: Starting DartBot games (Lv 1-20), seeing/challenging online friends & accepting invites from the iPad.
  */
 export function useDartCounterBridge(): void {
   useEffect(() => {
@@ -210,7 +343,24 @@ export function useDartCounterBridge(): void {
     es.addEventListener('dc_submit_result', (ev) => {
       try {
         const result = JSON.parse((ev as MessageEvent).data) as DartCounterSubmitResult;
-        useOnlineMatchStore.getState().setDartCounterLastSubmit(result.message);
+        const om = useOnlineMatchStore.getState();
+        om.setDartCounterLastSubmit(result.message);
+        // If score entry failed (e.g. "Waiting for your turn in DartCounter...") in iPad Confirm mode,
+        // restore the pending visit so the player can tap Confirm & Send again without losing their score!
+        if (
+          !result.ok &&
+          om.dcMode === 'confirm' &&
+          !om.dcPendingVisit &&
+          lastDispatchedVisit &&
+          lastDispatchedVisit.id === result.visitId
+        ) {
+          om.setDartCounterPendingVisit({
+            ...lastDispatchedVisit,
+            id: `dc-retry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          });
+        } else if (result.ok && lastDispatchedVisit && lastDispatchedVisit.id === result.visitId) {
+          lastDispatchedVisit = null;
+        }
         devLogger.log(
           'BOARD',
           result.ok ? 'success' : 'warn',
@@ -238,7 +388,15 @@ export function useDartCounterBridge(): void {
     // Listen to live Autodarts throws & visit completions -> Option B Auto-Score / Confirm Queue
     let takeoutAutoTimer: number | null = null;
     let submittedCurrentVisit = false;
-    let currentVisitThrowsCache: Array<{ name: string; score: number }> = [];
+    let currentVisitThrowsCache: CachedDartThrow[] = [];
+    let trackedTurnStartRemaining = useOnlineMatchStore.getState().turnStartRemaining;
+
+    // Keep trackedTurnStartRemaining synced whenever a visit is NOT actively in progress
+    const unsubOnlineStore = useOnlineMatchStore.subscribe((nextState) => {
+      if (currentVisitThrowsCache.length === 0 && !nextState.matchWinner) {
+        trackedTurnStartRemaining = nextState.turnStartRemaining;
+      }
+    });
 
     const clearTakeoutTimer = () => {
       if (takeoutAutoTimer !== null) {
@@ -248,49 +406,73 @@ export function useDartCounterBridge(): void {
     };
 
     const enqueueOrSubmitVisit = (
-      throwsList: Array<{ name: string; score: number }>,
-      triggerLabel: string
+      throwsList: CachedDartThrow[],
+      triggerLabel: string,
+      allowUpdatePending = false
     ) => {
-      if (submittedCurrentVisit) return;
       if (throwsList.length === 0) return;
 
       const activeView = useGameStore.getState().activeView;
       if (activeView !== 'dashboard' && activeView !== 'dartcounter') return;
 
       const match = useOnlineMatchStore.getState();
-      if (!match.dcConnected) return;
       if (match.dcMode === 'read-only') return;
-      if (!match.isActive || match.source !== 'dartcounter') return;
-      if (match.matchWinner) return;
+
+      const isDartCounterMatch = match.isActive && match.source === 'dartcounter';
+      const isDartCounterView = activeView === 'dartcounter';
+
+      // In iPad Confirm mode on the DartCounter tab, ALWAYS queue the visit to the iPad
+      // (even if the extension's match-state poll briefly lagged) so the user can review & send!
+      // In Auto-Log mode, strictly require an active connected DartCounter match.
+      if (match.dcMode === 'auto') {
+        if (!match.dcConnected || !isDartCounterMatch) return;
+      } else {
+        if (!isDartCounterView && !isDartCounterMatch) return;
+      }
+
+      if (submittedCurrentVisit && !(allowUpdatePending && match.dcMode === 'confirm' && match.dcPendingVisit)) {
+        return;
+      }
+
+      const rawTotal = throwsList.reduce((sum, t) => sum + t.score, 0);
+      const evalRes = isDartCounterMatch
+        ? evaluateVisitForDartCounter(trackedTurnStartRemaining, match.outRule, throwsList)
+        : {
+            effectiveScore: Math.max(0, Math.min(180, rawTotal)),
+            isBust: false,
+            isCheckout: false,
+            dartsUsed: throwsList.length,
+            dartsAtDouble: 0,
+          };
+
+      // Do NOT skip if this visit IS the match-winning checkout (useOnlineMatchSync already set matchWinner!)
+      if (isDartCounterMatch && match.matchWinner && !evalRes.isCheckout) return;
 
       submittedCurrentVisit = true;
       clearTakeoutTimer();
 
-      const totalScore = throwsList.reduce((sum, t) => sum + t.score, 0);
-      const isBust = match.isBust;
-      const isCheckout = match.remaining === 0 && !isBust && totalScore > 0;
-      const effectiveScore = isBust ? 0 : totalScore;
-
       const pendingVisit: DartCounterPendingVisit = {
         id: `dc-visit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        score: effectiveScore,
+        score: evalRes.effectiveScore,
         throws: throwsList.map((t) => t.name),
-        dartsUsed: throwsList.length,
-        isBust,
-        isCheckout,
+        dartsUsed: evalRes.dartsUsed,
+        dartsAtDouble: evalRes.dartsAtDouble,
+        isBust: evalRes.isBust,
+        isCheckout: evalRes.isCheckout,
         createdAt: Date.now(),
       };
 
       if (match.dcMode === 'auto') {
+        lastDispatchedVisit = pendingVisit;
         void dispatchVisitToDartCounter(pendingVisit).then(({ ok, delivered }) => {
           if (ok && delivered > 0) {
             useOnlineMatchStore
               .getState()
-              .setDartCounterLastSubmit(`Auto-sent ${effectiveScore} (${triggerLabel})`);
+              .setDartCounterLastSubmit(`Auto-sent ${evalRes.effectiveScore} (${triggerLabel})`);
             devLogger.log(
               'BOARD',
               'success',
-              `Auto-scored ${effectiveScore} into DartCounter (${triggerLabel})`,
+              `Auto-scored ${evalRes.effectiveScore} into DartCounter (${triggerLabel})`,
               pendingVisit.throws.join(' • ')
             );
           }
@@ -309,44 +491,76 @@ export function useDartCounterBridge(): void {
         }
         currentVisitThrowsCache = [
           ...currentVisitThrowsCache.slice(0, event.dartIndex),
-          { name: event.dart.segment.name, score: event.dart.bouncer ? 0 : event.dart.score },
+          {
+            name: event.dart.segment.name,
+            score: event.dart.bouncer ? 0 : event.dart.score,
+            multiplier: event.dart.bouncer ? 0 : event.dart.segment.multiplier,
+          },
         ];
 
         const match = useOnlineMatchStore.getState();
+        const evalRes = evaluateVisitForDartCounter(
+          trackedTurnStartRemaining,
+          match.outRule,
+          currentVisitThrowsCache
+        );
         const finishedVisit =
           currentVisitThrowsCache.length >= 3 ||
-          (match.isActive && match.source === 'dartcounter' && (match.isBust || match.remaining === 0));
+          (match.isActive &&
+            match.source === 'dartcounter' &&
+            (evalRes.isBust || evalRes.isCheckout));
 
         if (finishedVisit && !submittedCurrentVisit) {
           clearTakeoutTimer();
           const snapshotThrows = [...currentVisitThrowsCache];
+          const label = evalRes.isCheckout
+            ? 'checkout'
+            : evalRes.isBust
+            ? 'bust'
+            : '3-dart visit';
           takeoutAutoTimer = window.setTimeout(() => {
             takeoutAutoTimer = null;
-            enqueueOrSubmitVisit(snapshotThrows, '3-dart visit');
-          }, 950);
+            enqueueOrSubmitVisit(snapshotThrows, label);
+          }, 600);
         }
       } else if (event.type === 'dart_corrected') {
         currentVisitThrowsCache = event.visitThrows.map((t) => ({
           name: t.segment.name,
           score: t.bouncer ? 0 : t.score,
+          multiplier: t.bouncer ? 0 : t.segment.multiplier,
         }));
-        if (!submittedCurrentVisit && currentVisitThrowsCache.length >= 3) {
+        const match = useOnlineMatchStore.getState();
+        const evalRes = evaluateVisitForDartCounter(
+          trackedTurnStartRemaining,
+          match.outRule,
+          currentVisitThrowsCache
+        );
+        const isPendingConfirmUpdate = Boolean(
+          match.dcMode === 'confirm' && match.dcPendingVisit && currentVisitThrowsCache.length > 0
+        );
+        if (
+          isPendingConfirmUpdate ||
+          (!submittedCurrentVisit &&
+            (currentVisitThrowsCache.length >= 3 || evalRes.isBust || evalRes.isCheckout))
+        ) {
           clearTakeoutTimer();
           const snapshotThrows = [...currentVisitThrowsCache];
           takeoutAutoTimer = window.setTimeout(() => {
             takeoutAutoTimer = null;
-            enqueueOrSubmitVisit(snapshotThrows, 'corrected visit');
-          }, 950);
+            enqueueOrSubmitVisit(snapshotThrows, 'corrected visit', true);
+          }, 450);
         }
       } else if (event.type === 'visit_completed') {
-        const throwsList = event.throws.map((t) => ({
+        const throwsList: CachedDartThrow[] = event.throws.map((t) => ({
           name: t.segment.name,
           score: t.bouncer ? 0 : t.score,
+          multiplier: t.bouncer ? 0 : t.segment.multiplier,
         }));
         enqueueOrSubmitVisit(throwsList, 'takeout');
         submittedCurrentVisit = false;
         currentVisitThrowsCache = [];
         clearTakeoutTimer();
+        trackedTurnStartRemaining = useOnlineMatchStore.getState().turnStartRemaining;
       }
     });
 
@@ -354,7 +568,7 @@ export function useDartCounterBridge(): void {
       clearTakeoutTimer();
       es.close();
       unsubBus();
+      unsubOnlineStore();
     };
   }, []);
 }
-

@@ -123,6 +123,7 @@ export interface RemoteKioskState {
     matchWinner: 'player' | 'opponent' | null;
     dcConnected: boolean;
     dcMode: 'auto' | 'confirm' | 'read-only';
+    dcMatchUrl: string | null;
     dcLastSubmitStatus: string | null;
     dcLastControlStatus: string | null;
     dcPendingInvites: Array<{
@@ -131,6 +132,14 @@ export interface RemoteKioskState {
       summary: string;
       detectedAt: number;
     }>;
+    dcOnlineFriends: Array<{
+      userId: number | string;
+      name: string;
+      status: string;
+      avg?: number | null;
+      country?: string | null;
+    }>;
+    dcOutgoingInviteTo: string | null;
     isFullscreenKiosk: boolean;
     dcPendingVisit: {
       id: string;
@@ -253,9 +262,9 @@ export type RemoteCommand =
   | { type: 'online_match_set_score'; remaining: number }
   | { type: 'online_match_set_fullscreen'; enabled?: boolean }
   | { type: 'dc_set_mode'; mode: 'auto' | 'confirm' | 'read-only' }
-  | { type: 'dc_confirm_visit' }
+  | { type: 'dc_confirm_visit'; overrideScore?: number }
   | { type: 'dc_discard_visit' }
-  | { type: 'dc_force_send_visit' }
+  | { type: 'dc_force_send_visit'; overrideScore?: number }
   | { type: 'dc_control'; command: DartCounterControlCommand }
   | { type: 'resync_and_recalibrate' }
   | { type: 'toggle_rules_overlay'; open?: boolean };

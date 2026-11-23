@@ -9,7 +9,7 @@ import { usePlayerStore } from '../store/usePlayerStore';
 import { useLiveBoardStore } from '../store/useLiveBoardStore';
 import { useGameStore } from '../store/useGameStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { useReplayStore } from '../store/useReplayStore';
+import { isDartCounterClippingDisabled, useReplayStore } from '../store/useReplayStore';
 import { useLayoutStore } from '../store/useLayoutStore';
 import { useCareerStore } from '../store/useCareerStore';
 import { useOnlineMatchStore } from '../store/useOnlineMatchStore';
@@ -179,9 +179,12 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       matchWinner: onlineMatchState.matchWinner,
       dcConnected: onlineMatchState.dcConnected,
       dcMode: onlineMatchState.dcMode,
+      dcMatchUrl: onlineMatchState.dcMatchUrl,
       dcLastSubmitStatus: onlineMatchState.dcLastSubmitStatus,
       dcLastControlStatus: onlineMatchState.dcLastControlStatus,
       dcPendingInvites: onlineMatchState.dcPendingInvites,
+      dcOnlineFriends: onlineMatchState.dcOnlineFriends,
+      dcOutgoingInviteTo: onlineMatchState.dcOutgoingInviteTo,
       isFullscreenKiosk: onlineMatchState.isFullscreenKiosk,
       dcPendingVisit: onlineMatchState.dcPendingVisit
         ? {
@@ -351,6 +354,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'trigger_manual_replay': {
+      if (isDartCounterClippingDisabled()) break;
       const replay = useReplayStore.getState();
       const activePlayer = playerStore.getActivePlayer();
       const lastDart = liveStore.currentVisitThrows[liveStore.currentVisitThrows.length - 1];
@@ -565,7 +569,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'dc_confirm_visit':
-      void confirmAndSendPendingDartCounterVisit();
+      void confirmAndSendPendingDartCounterVisit(cmd.overrideScore);
       break;
 
     case 'dc_discard_visit':
@@ -573,7 +577,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'dc_force_send_visit':
-      void forceSendCurrentVisitToDartCounter();
+      void forceSendCurrentVisitToDartCounter(cmd.overrideScore);
       break;
 
     case 'dc_control':
@@ -621,9 +625,13 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
           useReplayStore.getState().loadSavedClips(),
         ]);
 
-        // 3. Re-arm Split-Cam + 3-cam board stream cleanly (unless actively recording a clip)
+        // 3. Re-arm Split-Cam + 3-cam board stream cleanly (unless actively recording or in DartCounter)
         const rs = useReplayStore.getState();
-        if (rs.status !== 'capturing' && (rs.cameraEnabled || rs.autoStartCamera)) {
+        if (
+          !isDartCounterClippingDisabled() &&
+          rs.status !== 'capturing' &&
+          (rs.cameraEnabled || rs.autoStartCamera)
+        ) {
           await rs.startCamera();
         }
       })();

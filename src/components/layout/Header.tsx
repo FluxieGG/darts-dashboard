@@ -17,6 +17,7 @@ import {
   Radio,
   AlertTriangle,
   Camera,
+  VideoOff,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -204,15 +205,24 @@ export const Header: React.FC<HeaderProps> = ({
             </Badge>
           )}
 
-          {hasCameraIssue ? (
+          {isDartCounterTheme || (isOnlineMatchActive && onlineMatchSource === 'dartcounter') ? (
             <Badge
-              variant="amber"
+              variant="slate"
               size="sm"
               className={
                 isDartCounterTheme
-                  ? 'border-amber-400 bg-amber-100 text-amber-800 animate-pulse'
-                  : 'border-amber-400/50 bg-amber-500/15 text-amber-200 animate-pulse'
+                  ? 'bg-slate-100 border-slate-300 text-slate-600'
+                  : 'border-white/10 text-slate-400'
               }
+            >
+              <VideoOff className="w-3 h-3" />
+              CLIPS OFF
+            </Badge>
+          ) : hasCameraIssue ? (
+            <Badge
+              variant="amber"
+              size="sm"
+              className="border-amber-400/50 bg-amber-500/15 text-amber-200 animate-pulse"
             >
               <Camera className="w-3 h-3 text-amber-500" />
               <AlertTriangle className="w-3 h-3 text-rose-500" />
@@ -224,11 +234,7 @@ export const Header: React.FC<HeaderProps> = ({
                 variant={replayStatus === 'capturing' ? 'rose' : 'slate'}
                 size="sm"
                 className={
-                  isDartCounterTheme
-                    ? replayStatus === 'capturing'
-                      ? 'bg-rose-100 border-rose-300 text-rose-700 animate-pulse'
-                      : 'bg-slate-100 border-slate-300 text-slate-700'
-                    : replayStatus === 'capturing'
+                  replayStatus === 'capturing'
                     ? 'animate-pulse'
                     : 'border-rose-500/25 text-rose-200/90'
                 }

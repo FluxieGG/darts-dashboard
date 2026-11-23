@@ -7,6 +7,23 @@ export interface DartCounterPendingInvite {
   detectedAt: number;
 }
 
+export interface DartCounterOnlineFriend {
+  userId: number | string;
+  name: string;
+  status:
+    | 'online'
+    | 'in_lobby'
+    | 'in_queue'
+    | 'spectating'
+    | 'busy'
+    | 'online_game'
+    | 'local_game'
+    | 'offline'
+    | string;
+  avg?: number | null;
+  country?: string | null;
+}
+
 export interface DartCounterLiveMatchState {
   isMatchActive: boolean;
   startScore: 501 | 301 | 701;
@@ -22,6 +39,8 @@ export interface DartCounterLiveMatchState {
   opponentAvg: number | null;
   isPlayerTurn: boolean;
   pendingInvites?: DartCounterPendingInvite[];
+  onlineFriends?: DartCounterOnlineFriend[];
+  outgoingInviteTo?: string | null;
   url?: string;
   updatedAt: number;
 }
@@ -31,6 +50,7 @@ export interface DartCounterPendingVisit {
   score: number;
   throws: string[];
   dartsUsed: number;
+  dartsAtDouble?: number;
   isBust: boolean;
   isCheckout: boolean;
   createdAt: number;
@@ -59,6 +79,16 @@ export type DartCounterControlCommand =
     }
   | { action: 'open_online' }
   | { action: 'open_friends' }
+  | { action: 'refresh_friends' }
+  | {
+      action: 'invite_friend';
+      userId?: number | string;
+      friendName: string;
+      startScore?: 501 | 301 | 701;
+      outRule?: 'double' | 'straight';
+      legsToWin?: number;
+    }
+  | { action: 'cancel_invite' }
   | { action: 'accept_invite'; inviteId?: string; fromName?: string }
   | { action: 'decline_invite'; inviteId?: string; fromName?: string }
   | { action: 'undo_score' }

@@ -46,17 +46,20 @@ export function useOnlineMatchSync(): void {
               : '';
           const clipTitle = `${gameTitle}${vsSuffix} - Game Winning Shot - ${playerName}`;
 
-          // Auto-clip & save the checkout shot!
-          void useReplayStore.getState().triggerActionReplay({
-            playerName,
-            segmentName: event.dart.segment.name,
-            score: event.dart.score,
-            reason: clipTitle,
-            customFileName: clipTitle,
-            coords: event.dart.coords,
-            category: 'game',
-            forceAutoSave: true,
-          });
+          // Auto-clip & save the checkout shot ONLY for non-DartCounter manual online matches
+          // (Clipping is disabled during Target DartCounter sessions for maximum stability)
+          if (match.source !== 'dartcounter' && activeView !== 'dartcounter') {
+            void useReplayStore.getState().triggerActionReplay({
+              playerName,
+              segmentName: event.dart.segment.name,
+              score: event.dart.score,
+              reason: clipTitle,
+              customFileName: clipTitle,
+              coords: event.dart.coords,
+              category: 'game',
+              forceAutoSave: true,
+            });
+          }
 
           // Record into Career Vault Online X01 Leaderboard (uses RAM-only partyLeaderboards in Party Mode!)
           useCareerStore.getState().recordLeaderboardPerformance({

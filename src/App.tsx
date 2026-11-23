@@ -18,7 +18,7 @@ import { useLiveBoardStore } from './store/useLiveBoardStore';
 import { usePlayerStore } from './store/usePlayerStore';
 import { useGameStore } from './store/useGameStore';
 import { useCareerStore } from './store/useCareerStore';
-import { useReplayStore } from './store/useReplayStore';
+import { isDartCounterClippingDisabled, useReplayStore } from './store/useReplayStore';
 import { useOnlineMatchStore } from './store/useOnlineMatchStore';
 import { useReplayAutoTrigger } from './hooks/useReplayAutoTrigger';
 import { useOnlineMatchSync } from './hooks/useOnlineMatchSync';
@@ -127,9 +127,9 @@ const KioskApp: React.FC = () => {
     void hydrateDashboardStateFromDisk().then(() => {
       if (!cancelled) {
         stopSync = startDashboardDiskSync();
-        // Immediately enable Split-Cam on boot (deduplicated with KioskBootScreen so skipping boot never skips cameras!)
+        // Immediately enable Split-Cam on boot (deduplicated with KioskBootScreen; skipped while in DartCounter)
         const replay = useReplayStore.getState();
-        if (replay.autoStartCamera && replay.status === 'idle') {
+        if (replay.autoStartCamera && replay.status === 'idle' && !isDartCounterClippingDisabled()) {
           void replay.startCamera();
         }
       }
@@ -214,6 +214,22 @@ const KioskApp: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [isAutoSimulating, dataMode, autoSimIntervalMs, addSimulatedDart, activePlayerId]);
+
+  const isDartCounterClippingOff =
+    activeView === 'dartcounter' ||
+    (isOnlineMatchActive && onlineMatchSource === 'dartcounter');
+
+  // Automatically disable & pause Oche-Cam / Action Replay clipping whenever in DartCounter
+  // (frees 100% of camera/MediaRecorder CPU & RAM so DartCounter + auto-scoring never lag or crash),
+  // and cleanly resume when returning to Dashboard / Arcade / Practice!
+  useEffect(() => {
+    const replay = useReplayStore.getState();
+    if (isDartCounterClippingOff) {
+      replay.pauseForDartCounter();
+    } else {
+      replay.resumeFromDartCounter();
+    }
+  }, [isDartCounterClippingOff]);
 
   const isDartCounterTheme =
     activeView === 'dartcounter' ||
@@ -338,7 +354,7 @@ const KioskApp: React.FC = () => {
           {isDartCounterTheme ? (
             <span className="flex items-center gap-1.5 text-[#F76505] font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-[#F76505]" />
-              Target DartCounter Live Bridge • Autodarts Auto-Scoring Active
+              Target DartCounter • Autodarts Auto-Scorer Active • Clipping Disabled
             </span>
           ) : isPartyMode ? (
             <span className="flex items-center gap-1.5 text-amber-300/90 font-semibold">
@@ -359,7 +375,7 @@ const KioskApp: React.FC = () => {
         <div>
           <span>
             {isDartCounterTheme
-              ? 'DartCounter Broadcast Arena • Controlled via iPad Oche Deck'
+              ? 'Use app.dartcounter.net/match • Confirm scores via iPad Oche Deck'
               : isPartyMode
               ? 'Vice Party Session • Controlled via iPad Oche Deck'
               : 'Autodarts Broadcast Kiosk • Controlled via iPad Oche Deck'}

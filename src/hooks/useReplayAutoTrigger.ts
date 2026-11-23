@@ -1,26 +1,33 @@
 import { useEffect } from 'react';
 import { gameEventBus } from '../services/gameEventBus';
-import { useReplayStore } from '../store/useReplayStore';
+import { ocheCamService } from '../services/ocheCamService';
+import { isDartCounterClippingDisabled, useReplayStore } from '../store/useReplayStore';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { isInnerBull } from '../games/utils/dartHelpers';
 
 /**
  * Global Oche-Cam Auto-Clipper listener mounted once in App.tsx.
  * Watches every live dart from Autodarts Desktop (or Demo Simulator) across
- * both the Stats Dashboard and all 8 Arcade Games, triggering ~10s clips
- * (~5s pre-roll before impact + ~5s post-roll reaction) saved to disk.
+ * the Stats Dashboard, Solo Drills, and all Arcade Games (DISABLED during DartCounter),
+ * triggering ~10s clips (~5s pre-roll before impact + ~5s post-roll reaction)
+ * from the single board camera closest to the triggering dart.
  */
 export function useReplayAutoTrigger(): void {
   useEffect(() => {
     const unsubscribe = gameEventBus.subscribe((event) => {
       if (event.type !== 'dart_thrown') return;
+      if (isDartCounterClippingDisabled()) return;
+
+      const { dart, visitThrows } = event;
+      // Always track the closest board camera to the latest dart thrown (so manual "Clip (20s)"
+      // taps even after pulling darts still clip from the exact closest board camera!)
+      ocheCamService.noteLastDartImpact(dart.coords, dart.segment.name);
 
       const replay = useReplayStore.getState();
       if (replay.status !== 'buffering') return;
 
       const activePlayer = usePlayerStore.getState().getActivePlayer();
       const playerName = activePlayer.name || 'Player';
-      const { dart, visitThrows } = event;
 
       /* =====================================================================
          [DEV-TEST: REMOVE WHEN DONE]

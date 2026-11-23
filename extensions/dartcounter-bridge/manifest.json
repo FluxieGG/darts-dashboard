@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Autodarts ↔ DartCounter Bridge",
-  "version": "1.2.0",
-  "description": "Links Target DartCounter Web (app.dartcounter.net) to your local Autodarts Kiosk Dashboard for live TV match mirroring, iPad remote control (start games & accept friend invites), checkout routes, auto-clipping, and hands-free Autodarts auto-scoring.",
-  "permissions": ["storage", "alarms"],
+  "version": "1.3.0",
+  "description": "Links Target DartCounter Web (app.dartcounter.net) to your local Autodarts Kiosk Dashboard for live TV match mirroring, iPad remote control (start DartBot 1-20, see online friends, send & accept friend invites), checkout routes, auto-clipping, and hands-free Autodarts auto-scoring.",
+  "permissions": ["storage", "alarms", "tabs", "scripting"],
   "host_permissions": [
     "https://app.dartcounter.net/*",
-    "https://dartcounter.net/*",
+    "https://*.dartcounter.net/*",
     "http://127.0.0.1:5173/*",
     "http://localhost:5173/*"
   ],
@@ -19,8 +19,26 @@
         "https://app.dartcounter.net/*",
         "https://*.dartcounter.net/*"
       ],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://app.dartcounter.net/*",
+        "https://*.dartcounter.net/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-bridge.js"],
+      "matches": [
+        "https://app.dartcounter.net/*",
+        "https://*.dartcounter.net/*"
+      ]
     }
   ],
   "action": {

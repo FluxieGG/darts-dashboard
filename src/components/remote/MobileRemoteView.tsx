@@ -43,7 +43,6 @@ import {
   ChevronUp,
   ChevronDown,
   Maximize2,
-  Minimize2,
   Flame,
   Palette,
   FlaskConical,
@@ -416,39 +415,15 @@ export const MobileRemoteView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Quick Play-on-Kiosk X01 Toggle — ONLY shown when a DartCounter match is loaded */}
+          {/* Quick Jump to DartCounter iPad Confirm Auto-Scorer when a DartCounter match is active */}
           {state?.onlineMatch?.isActive && state.onlineMatch.source === 'dartcounter' && (
             <button
               type="button"
-              onClick={() =>
-                void dispatch(
-                  {
-                    type: 'online_match_set_fullscreen',
-                    enabled: !state.onlineMatch.isFullscreenKiosk,
-                  },
-                  state.onlineMatch.isFullscreenKiosk
-                    ? 'Exited Kiosk X01 View'
-                    : `Playing ${state.onlineMatch.startScore} on Kiosk TV!`
-                )
-              }
-              className={cn(
-                'inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer',
-                state.onlineMatch.isFullscreenKiosk
-                  ? 'bg-emerald-500/25 border-emerald-400/70 text-emerald-200 shadow-[0_0_14px_-2px_rgba(16,185,129,0.55)]'
-                  : 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-400/50 text-emerald-200'
-              )}
+              onClick={() => handleSwitchMode('dartcounter')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-mono font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer bg-[#F76505]/20 hover:bg-[#F76505]/30 border-[#F76505]/60 text-orange-200"
             >
-              {state.onlineMatch.isFullscreenKiosk ? (
-                <>
-                  <Minimize2 className="w-3 h-3" />
-                  <span>Exit {state.onlineMatch.startScore} TV</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>Play on Kiosk</span>
-                </>
-              )}
+              <DartCounterIcon className="w-3 h-3 text-[#FF8A3D]" />
+              <span>DartCounter Confirm</span>
             </button>
           )}
           {state && (
@@ -913,38 +888,14 @@ export const MobileRemoteView: React.FC = () => {
               </div>
             </div>
 
-            {/* Primary CTA: Play on Kiosk (Normal X01 Format with Live DartCounter Data) */}
+            {/* Primary CTA: Open DartCounter Auto-Scorer Confirm Tab */}
             <button
               type="button"
-              onClick={() =>
-                void dispatch(
-                  {
-                    type: 'online_match_set_fullscreen',
-                    enabled: !om.isFullscreenKiosk,
-                  },
-                  om.isFullscreenKiosk
-                    ? 'Exited Kiosk X01 View'
-                    : `Playing ${om.startScore} on Kiosk TV!`
-                )
-              }
-              className={cn(
-                'w-full py-3.5 px-4 rounded-xl border-2 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] transition-all cursor-pointer',
-                om.isFullscreenKiosk
-                  ? 'bg-slate-900 border-emerald-400/65 text-emerald-200'
-                  : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950 shadow-[0_0_24px_rgba(16,185,129,0.4)]'
-              )}
+              onClick={() => handleSwitchMode('dartcounter')}
+              className="w-full py-3.5 px-4 rounded-xl border-2 border-[#F76505] bg-[#F76505] hover:bg-[#E05600] text-white font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] transition-all cursor-pointer shadow-[0_0_24px_rgba(247,101,5,0.4)]"
             >
-              {om.isFullscreenKiosk ? (
-                <>
-                  <Minimize2 className="w-4 h-4" />
-                  <span>Exit Kiosk X01 View</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>Play on Kiosk ({om.startScore})</span>
-                </>
-              )}
+              <DartCounterIcon className="w-4 h-4" />
+              <span>Open DartCounter Auto-Scorer</span>
             </button>
 
             {/* 1-Tap Confirm Banner if a visit is waiting in Confirm mode */}
@@ -989,9 +940,9 @@ export const MobileRemoteView: React.FC = () => {
             <div className="grid grid-cols-3 gap-1 pt-1">
               {(
                 [
-                  { id: 'auto', label: 'Auto-Score' },
                   { id: 'confirm', label: 'iPad Confirm' },
-                  { id: 'read-only', label: 'Sync Only' },
+                  { id: 'auto', label: 'Auto-Log' },
+                  { id: 'read-only', label: 'Off / Manual' },
                 ] as const
               ).map((m) => (
                 <button
@@ -2611,7 +2562,7 @@ export const MobileRemoteView: React.FC = () => {
 
             {/* Right: Camera Warning (if any error) + Party Mode Toggle + Resync + Pairing Badge */}
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              {hasCameraIssue && (
+              {hasCameraIssue && !isDartCounterMode && (
                 <button
                   type="button"
                   onClick={() => setIsCameraIssueModalOpen(true)}

@@ -57,7 +57,7 @@ function attachDartCounterMiddleware(
   let latestSubmitResult: unknown = null;
   let latestControlResult: unknown = null;
   let bridgeConfig: { mode: 'auto' | 'confirm' | 'read-only'; submitOnTakeout: boolean } = {
-    mode: 'auto',
+    mode: 'confirm',
     submitOnTakeout: true,
   };
 
@@ -118,6 +118,7 @@ function attachDartCounterMiddleware(
           config: bridgeConfig,
           matchState: latestMatchState,
           lastSubmitResult: latestSubmitResult,
+          lastControlResult: latestControlResult,
         })
       );
       return;
