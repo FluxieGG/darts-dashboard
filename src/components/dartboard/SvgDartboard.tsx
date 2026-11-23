@@ -168,8 +168,9 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
         viewBox="0 0 400 400"
         width={size}
         height={size}
+        style={{ maxWidth: `${size}px` }}
         onClick={handleSvgClick}
-        className="w-full max-w-[560px] h-auto drop-shadow-[0_12px_30px_rgba(0,0,0,0.85)] touch-none"
+        className="w-full h-auto drop-shadow-[0_12px_30px_rgba(0,0,0,0.85)] touch-none"
       >
         <defs>
           {/* Subtle outer metallic rim gradient */}
@@ -343,7 +344,7 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
               textAnchor="middle"
               dominantBaseline="middle"
               fill="#FFFFFF"
-              className="font-mono text-[15px] font-black tracking-tighter drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]"
+              className="font-mono text-[17px] font-black tracking-tighter drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]"
             >
               {s.num}
             </text>

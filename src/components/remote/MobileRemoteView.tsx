@@ -5,6 +5,7 @@ import { sendRemoteCommand } from '../../services/remoteBridge';
 import { getArcadeGames, getPracticeDrills, getGameDefinition } from '../../games/gameRegistry';
 import { DART_COLOR_OPTIONS, DEFAULT_DART_COLOR, hexToRgbTriplet } from '../../lib/playerThemes';
 import { DevConsoleQrModal } from '../dev/DevConsoleQrModal';
+import { GameCompanionScreen } from './GameCompanionScreen';
 import { Badge } from '../common/Badge';
 import {
   Gamepad2,
@@ -45,6 +46,7 @@ import {
   FlaskConical,
   Target,
   Dices,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -626,24 +628,42 @@ export const MobileRemoteView: React.FC = () => {
       </div>
 
       {/* Contextual Game or Dashboard Utility Row */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className={cn('grid gap-3', activeGame ? 'grid-cols-3' : 'grid-cols-2')}>
         {activeGame ? (
           <>
             <button
               type="button"
-              onClick={() => void dispatch({ type: 'restart_match' }, 'Restarted Match')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-slate-200 hover:bg-white/5 active:scale-[0.97] cursor-pointer"
+              onClick={() =>
+                void dispatch(
+                  { type: 'toggle_rules_overlay' },
+                  state?.isRulesOpen ? 'Closed Rules on TV' : 'Showing How To Play on TV'
+                )
+              }
+              className={cn(
+                'card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold active:scale-[0.97] cursor-pointer transition-colors',
+                state?.isRulesOpen
+                  ? 'border-sky-400/65 bg-sky-500/20 text-sky-200'
+                  : 'text-sky-300 hover:bg-sky-500/10'
+              )}
             >
-              <RotateCcw className="w-4 h-4 text-amber-400" />
-              Restart Game
+              <BookOpen className="w-4 h-4 shrink-0" />
+              <span>{state?.isRulesOpen ? 'Close Rules' : 'How to Play'}</span>
             </button>
             <button
               type="button"
-              onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Games Lobby')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-rose-300 hover:bg-rose-500/10 active:scale-[0.97] cursor-pointer"
+              onClick={() => void dispatch({ type: 'restart_match' }, 'Restarted Match')}
+              className="card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold text-slate-200 hover:bg-white/5 active:scale-[0.97] cursor-pointer"
             >
-              <X className="w-4 h-4" />
-              Exit Game
+              <RotateCcw className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Restart</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Lobby')}
+              className="card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/10 active:scale-[0.97] cursor-pointer"
+            >
+              <X className="w-4 h-4 shrink-0" />
+              <span>Exit</span>
             </button>
           </>
         ) : (
@@ -1991,9 +2011,169 @@ export const MobileRemoteView: React.FC = () => {
   // RIGHT PANEL 4: DISPLAY, LAYOUT, DATA MODE & CAREER VAULT
   // =========================================================================
   const sortedWidgets = [...(state?.layoutWidgets || [])].sort((a, b) => a.order - b.order);
+  const enabledWidgetCount = sortedWidgets.filter((w) => w.enabled).length;
 
   const renderDisplayPanel = () => (
     <div className="space-y-4">
+      {/* Dashboard Modules Customizer (Show / Hide, Reorder & Width) */}
+      <section className="card-matte rounded-2xl p-4 space-y-3 border-emerald-400/30">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <LayoutDashboard className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
+              Dashboard Modules
+            </span>
+            <Badge variant="emerald" size="sm">
+              {enabledWidgetCount}/{sortedWidgets.length} Shown
+            </Badge>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                void dispatch({ type: 'set_all_widgets_enabled', enabled: true }, 'Showing All Modules')
+              }
+              className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-[10px] font-mono font-bold text-emerald-300 cursor-pointer"
+            >
+              Show All
+            </button>
+            <button
+              type="button"
+              onClick={() => void dispatch({ type: 'reset_layout' }, 'Layout Reset to Default')}
+              className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-white/10 border border-white/10 text-[10px] font-mono font-bold text-slate-300 cursor-pointer"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-slate-400 leading-snug">
+          Tap the <strong className="text-slate-200">Hide / Show</strong> icon to toggle modules on the
+          vertical TV, or use <strong className="text-slate-200">▲ / ▼</strong> to change their order.
+        </p>
+
+        <div className="space-y-2">
+          {sortedWidgets.map((w, idx) => (
+            <div
+              key={w.id}
+              className={cn(
+                'flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border transition-all',
+                w.enabled
+                  ? 'bg-slate-900/85 border-white/12 text-white'
+                  : 'bg-slate-950/60 border-white/[0.05] text-slate-500'
+              )}
+            >
+              {/* Left: Order Number + Module Name */}
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={cn(
+                    'w-6 h-6 rounded-lg font-mono text-[10px] font-black flex items-center justify-center shrink-0 border',
+                    w.enabled
+                      ? 'bg-emerald-500/15 border-emerald-400/35 text-emerald-300'
+                      : 'bg-slate-900 border-white/10 text-slate-600'
+                  )}
+                >
+                  {idx + 1}
+                </span>
+                <div className="min-w-0">
+                  <div
+                    className={cn(
+                      'text-xs sm:text-sm font-bold truncate leading-tight',
+                      !w.enabled && 'line-through decoration-slate-600 text-slate-500'
+                    )}
+                  >
+                    {w.title}
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500">
+                    {w.enabled ? (w.colSpan === 2 ? 'Full Width' : 'Half Width') : 'Hidden on TV'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Dedicated Hide/Show Button + Width + Move Up/Down */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'toggle_widget', widgetId: w.id },
+                      w.enabled ? `Hid ${w.title}` : `Showing ${w.title}`
+                    )
+                  }
+                  title={w.enabled ? 'Hide module on TV' : 'Show module on TV'}
+                  className={cn(
+                    'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-black uppercase tracking-wider active:scale-95 transition-all cursor-pointer',
+                    w.enabled
+                      ? 'bg-emerald-500/15 hover:bg-rose-500/20 border-emerald-400/45 hover:border-rose-400/50 text-emerald-200 hover:text-rose-200'
+                      : 'bg-slate-900 hover:bg-emerald-500/20 border-white/15 hover:border-emerald-400/45 text-slate-400 hover:text-emerald-200'
+                  )}
+                >
+                  {w.enabled ? (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 shrink-0" />
+                      <span>Hide</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3.5 h-3.5 shrink-0" />
+                      <span>Show</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    void dispatch(
+                      {
+                        type: 'set_widget_span',
+                        widgetId: w.id,
+                        colSpan: w.colSpan === 2 ? 1 : 2,
+                      },
+                      `${w.title} -> ${w.colSpan === 2 ? 'Half Width' : 'Full Width'}`
+                    )
+                  }
+                  className="px-2 py-1.5 rounded-lg bg-slate-950 border border-white/12 text-[10px] font-mono font-bold text-slate-300 hover:text-white active:scale-95 cursor-pointer"
+                  title="Toggle 1-col / 2-col width"
+                >
+                  {w.colSpan === 2 ? 'WIDE' : 'HALF'}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={idx === 0}
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'move_widget', widgetId: w.id, direction: 'up' },
+                      `Moved ${w.title} up`
+                    )
+                  }
+                  title="Move module up"
+                  className="p-1.5 rounded-lg bg-slate-950 hover:bg-white/10 border border-white/12 text-slate-200 disabled:opacity-25 active:scale-95 cursor-pointer"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={idx === sortedWidgets.length - 1}
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'move_widget', widgetId: w.id, direction: 'down' },
+                      `Moved ${w.title} down`
+                    )
+                  }
+                  title="Move module down"
+                  className="p-1.5 rounded-lg bg-slate-950 hover:bg-white/10 border border-white/12 text-slate-200 disabled:opacity-25 active:scale-95 cursor-pointer"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Heatmap + Objectives + Fullscreen */}
       <section className="card-matte rounded-2xl p-4 space-y-3.5">
         <div className="flex items-center justify-between gap-2">
@@ -2073,86 +2253,6 @@ export const MobileRemoteView: React.FC = () => {
               Reroll Weekly
             </button>
           </div>
-        </div>
-      </section>
-
-      {/* Bento Layout Customizer */}
-      <section className="card-matte rounded-2xl p-4 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-mono uppercase tracking-wider font-black text-white">
-            Bento Widgets
-          </span>
-          <button
-            type="button"
-            onClick={() => void dispatch({ type: 'reset_layout' }, 'Layout Reset to Default')}
-            className="text-[11px] font-mono font-bold text-slate-400 hover:text-emerald-300 cursor-pointer"
-          >
-            Reset Default
-          </button>
-        </div>
-
-        <div className="space-y-1.5">
-          {sortedWidgets.map((w, idx) => (
-            <div
-              key={w.id}
-              className={cn(
-                'flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl border',
-                w.enabled
-                  ? 'bg-slate-900/80 border-white/10 text-white'
-                  : 'bg-slate-950/50 border-white/[0.05] text-slate-500'
-              )}
-            >
-              <button
-                type="button"
-                onClick={() => void dispatch({ type: 'toggle_widget', widgetId: w.id })}
-                className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
-              >
-                {w.enabled ? (
-                  <Eye className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                ) : (
-                  <EyeOff className="w-3.5 h-3.5 text-slate-600 shrink-0" />
-                )}
-                <span className="text-xs font-bold truncate">{w.title}</span>
-              </button>
-
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    void dispatch({
-                      type: 'set_widget_span',
-                      widgetId: w.id,
-                      colSpan: w.colSpan === 2 ? 1 : 2,
-                    })
-                  }
-                  className="px-1.5 py-0.5 rounded bg-slate-950 border border-white/10 text-[10px] font-mono font-bold text-slate-300 hover:text-white cursor-pointer"
-                  title="Toggle 1-col / 2-col width"
-                >
-                  {w.colSpan === 2 ? 'WIDE' : 'HALF'}
-                </button>
-                <button
-                  type="button"
-                  disabled={idx === 0}
-                  onClick={() =>
-                    void dispatch({ type: 'move_widget', widgetId: w.id, direction: 'up' })
-                  }
-                  className="p-1 rounded bg-slate-950 border border-white/10 text-slate-300 disabled:opacity-30 cursor-pointer"
-                >
-                  <ChevronUp className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  disabled={idx === sortedWidgets.length - 1}
-                  onClick={() =>
-                    void dispatch({ type: 'move_widget', widgetId: w.id, direction: 'down' })
-                  }
-                  className="p-1 rounded bg-slate-950 border border-white/10 text-slate-300 disabled:opacity-30 cursor-pointer"
-                >
-                  <ChevronDown className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
 
@@ -2299,7 +2399,8 @@ export const MobileRemoteView: React.FC = () => {
               </div>
             </div>
 
-            {/* Center (Wide iPad Landscape / Desktop lg+): Inline 3-Mode Switcher */}
+            {/* Center (Wide iPad Landscape / Desktop lg+): Inline 3-Mode Switcher (hidden in dedicated Game/Practice Companion) */}
+            {!activeGame && (
             <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
               {(
                 [
@@ -2326,6 +2427,7 @@ export const MobileRemoteView: React.FC = () => {
                 );
               })}
             </div>
+            )}
 
             {/* Right: Party Mode Toggle + Resync + Pairing Badge */}
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
@@ -2378,7 +2480,8 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 2 (iPad Portrait & Phone < lg): Crisp Full-Width 3-Mode Toggle Strip */}
+          {/* Row 2 (iPad Portrait & Phone < lg): Crisp Full-Width 3-Mode Toggle Strip (hidden during dedicated Companion) */}
+          {!activeGame && (
           <div className="lg:hidden grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-900/90 border border-white/10">
             {(
               [
@@ -2405,6 +2508,7 @@ export const MobileRemoteView: React.FC = () => {
               );
             })}
           </div>
+          )}
         </div>
       </header>
 
@@ -2416,127 +2520,149 @@ export const MobileRemoteView: React.FC = () => {
       )}
 
       {/* =====================================================================
-          IPAD / TABLET 2-COLUMN COMMAND DECK (md and above)
+          DEDICATED GAME / PRACTICE IPAD COMPANION SCREEN
+          Takes over whenever any Arcade Game or Practice Drill is active!
          ===================================================================== */}
-      <main className="hidden md:grid max-w-6xl w-full mx-auto px-5 pt-5 grid-cols-12 gap-5 items-start">
-        {/* LEFT COLUMN (7 cols): Live Telemetry + Primary Pads + Quick Throw Pad */}
-        <div className="col-span-7 space-y-4">
-          {renderLiveReadoutCard()}
-          {renderPrimaryActions()}
-          {renderThrowPad()}
-        </div>
+      {state && activeGame && activeGameDef ? (
+        <GameCompanionScreen
+          state={state}
+          activeGame={activeGame}
+          gameDef={activeGameDef}
+          dispatch={dispatch}
+          newPlayerName={newPlayerName}
+          setNewPlayerName={setNewPlayerName}
+          newPlayerColor={newPlayerColor}
+          setNewPlayerColor={setNewPlayerColor}
+          saveNewPlayer={saveNewPlayer}
+          setSaveNewPlayer={setSaveNewPlayer}
+          onAddPlayerSubmit={handleAddPlayerSubmit}
+        />
+      ) : (
+        <>
+          {/* =====================================================================
+              IPAD / TABLET 2-COLUMN COMMAND DECK (md and above)
+             ===================================================================== */}
+          <main className="hidden md:grid max-w-6xl w-full mx-auto px-5 pt-5 grid-cols-12 gap-5 items-start">
+            {/* LEFT COLUMN (7 cols): Live Telemetry + Primary Pads + Quick Throw Pad */}
+            <div className="col-span-7 space-y-4">
+              {renderLiveReadoutCard()}
+              {renderPrimaryActions()}
+              {renderThrowPad()}
+            </div>
 
-        {/* RIGHT COLUMN (5 cols): Context-Aware 1st Tab (Goals / Games / Drills) + Players + Replays + Display */}
-        <div className="col-span-5 space-y-4">
-          <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
-            {(
-              [
-                { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
-                { id: 'players', label: 'Players', icon: Users },
-                { id: 'replays', label: 'Replays', icon: Clapperboard },
-                { id: 'display', label: 'Display', icon: Monitor },
-              ] as const
-            ).map((tab) => {
-              const Icon = tab.icon;
-              const active = tabletRightPanel === tab.id;
-              return (
+            {/* RIGHT COLUMN (5 cols): Context-Aware 1st Tab (Goals / Games / Drills) + Players + Replays + Display */}
+            <div className="col-span-5 space-y-4">
+              <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
+                {(
+                  [
+                    { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
+                    { id: 'players', label: 'Players', icon: Users },
+                    { id: 'replays', label: 'Replays', icon: Clapperboard },
+                    { id: 'display', label: 'Display', icon: Monitor },
+                  ] as const
+                ).map((tab) => {
+                  const Icon = tab.icon;
+                  const active = tabletRightPanel === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setTabletRightPanel(tab.id)}
+                      className={cn(
+                        'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
+                        active
+                          ? currentMode === 'practice' && tab.id === 'mode'
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                          : 'text-slate-400 hover:text-white'
+                      )}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {tabletRightPanel === 'mode' && renderModePanel()}
+              {tabletRightPanel === 'players' && renderPlayersPanel()}
+              {tabletRightPanel === 'replays' && renderReplaysPanel()}
+              {tabletRightPanel === 'display' && renderDisplayPanel()}
+            </div>
+          </main>
+
+          {/* =====================================================================
+              PHONE SINGLE-COLUMN FALLBACK (< md)
+             ===================================================================== */}
+          <main className="md:hidden flex-1 w-full max-w-lg mx-auto px-4 pt-4 space-y-4">
+            {renderLiveReadoutCard()}
+
+            {mobileTab === 'control' && (
+              <div className="space-y-3">
+                {renderPrimaryActions()}
+
                 <button
-                  key={tab.id}
                   type="button"
-                  onClick={() => setTabletRightPanel(tab.id)}
+                  onClick={() => setShowMobileThrowPad((v) => !v)}
                   className={cn(
-                    'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
-                    active
-                      ? currentMode === 'practice' && tab.id === 'mode'
-                        ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
-                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
-                      : 'text-slate-400 hover:text-white'
+                    'w-full card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold cursor-pointer',
+                    showMobileThrowPad ? 'border-emerald-400/50 text-emerald-200' : 'text-slate-200'
                   )}
                 >
-                  <Icon className="w-4 h-4" />
-                  <span>{tab.label}</span>
+                  <Crosshair className="w-4 h-4 text-emerald-400" />
+                  {showMobileThrowPad ? 'Hide Quick Throw Pad' : 'Open Quick Throw / Correction Pad'}
                 </button>
-              );
-            })}
-          </div>
 
-          {tabletRightPanel === 'mode' && renderModePanel()}
-          {tabletRightPanel === 'players' && renderPlayersPanel()}
-          {tabletRightPanel === 'replays' && renderReplaysPanel()}
-          {tabletRightPanel === 'display' && renderDisplayPanel()}
-        </div>
-      </main>
+                {showMobileThrowPad && renderThrowPad()}
+              </div>
+            )}
 
-      {/* =====================================================================
-          PHONE SINGLE-COLUMN FALLBACK (< md)
-         ===================================================================== */}
-      <main className="md:hidden flex-1 w-full max-w-lg mx-auto px-4 pt-4 space-y-4">
-        {renderLiveReadoutCard()}
+            {mobileTab === 'mode' && renderModePanel()}
+            {mobileTab === 'players' && renderPlayersPanel()}
+            {mobileTab === 'replays' && renderReplaysPanel()}
+            {mobileTab === 'display' && renderDisplayPanel()}
+          </main>
 
-        {mobileTab === 'control' && (
-          <div className="space-y-3">
-            {renderPrimaryActions()}
-
-            <button
-              type="button"
-              onClick={() => setShowMobileThrowPad((v) => !v)}
-              className={cn(
-                'w-full card-matte p-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold cursor-pointer',
-                showMobileThrowPad ? 'border-emerald-400/50 text-emerald-200' : 'text-slate-200'
-              )}
-            >
-              <Crosshair className="w-4 h-4 text-emerald-400" />
-              {showMobileThrowPad ? 'Hide Quick Throw Pad' : 'Open Quick Throw / Correction Pad'}
-            </button>
-
-            {showMobileThrowPad && renderThrowPad()}
-          </div>
-        )}
-
-        {mobileTab === 'mode' && renderModePanel()}
-        {mobileTab === 'players' && renderPlayersPanel()}
-        {mobileTab === 'replays' && renderReplaysPanel()}
-        {mobileTab === 'display' && renderDisplayPanel()}
-      </main>
-
-      {/* Phone-Only Fixed Bottom Thumb Bar (< md) */}
-      <nav
-        className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 pt-2"
-        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}
-      >
-        <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
-          {(
-            [
-              { id: 'control', label: 'Control', icon: Sliders },
-              { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
-              { id: 'players', label: 'Players', icon: Users },
-              { id: 'replays', label: 'Replays', icon: Clapperboard },
-              { id: 'display', label: 'Display', icon: Monitor },
-            ] as const
-          ).map((tab) => {
-            const Icon = tab.icon;
-            const active = mobileTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setMobileTab(tab.id)}
-                className={cn(
-                  'flex flex-col items-center justify-center py-2 rounded-xl transition-colors cursor-pointer',
-                  active
-                    ? isPartyMode
-                      ? 'bg-purple-500/25 text-amber-300'
-                      : 'bg-emerald-500/20 text-emerald-300'
-                    : 'text-slate-400'
-                )}
-              >
-                <Icon className="w-4 h-4" />
-                <span className="text-[10px] font-bold mt-1">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+          {/* Phone-Only Fixed Bottom Thumb Bar (< md) */}
+          <nav
+            className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 pt-2"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}
+          >
+            <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
+              {(
+                [
+                  { id: 'control', label: 'Control', icon: Sliders },
+                  { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
+                  { id: 'players', label: 'Players', icon: Users },
+                  { id: 'replays', label: 'Replays', icon: Clapperboard },
+                  { id: 'display', label: 'Display', icon: Monitor },
+                ] as const
+              ).map((tab) => {
+                const Icon = tab.icon;
+                const active = mobileTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setMobileTab(tab.id)}
+                    className={cn(
+                      'flex flex-col items-center justify-center py-2 rounded-xl transition-colors cursor-pointer',
+                      active
+                        ? isPartyMode
+                          ? 'bg-purple-500/25 text-amber-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                        : 'text-slate-400'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="text-[10px] font-bold mt-1">{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        </>
+      )}
 
       {/* Hidden PIN-Protected Dev Console QR Modal (Code: 0161 — 5-tap AD crest) */}
       <DevConsoleQrModal

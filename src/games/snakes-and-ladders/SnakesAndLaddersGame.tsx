@@ -8,7 +8,7 @@ import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
 import { cn } from '../../lib/utils';
-import { Dices, Crown, Target, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
+import { Dices, Crown, Target, Sparkles } from 'lucide-react';
 import {
   advanceTurn,
   applyDartToState,
@@ -129,7 +129,6 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
   );
   const [history, setHistory] = useState<SnakesHistorySnapshot[]>([]);
   const [callout, setCallout] = useState<GameCallout | null>(null);
-  const [showDartboard, setShowDartboard] = useState<boolean>(() => !isBoardConnected);
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -364,82 +363,81 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
   const viewBoxSize = state.gridSize * 100;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 sm:space-y-5">
       {/* TOP SPOTLIGHT BAR (8ft glanceable) */}
       <div
-        className="card-matte rounded-2xl p-4 sm:p-5 border-2 transition-colors"
+        className="card-matte rounded-2xl p-5 sm:p-6 border-2 transition-colors"
         style={{
-          borderColor: `${activePlayerState.player.colorHex}80`,
-          boxShadow: `0 0 28px -8px ${activePlayerState.player.colorHex}55`,
+          borderColor: `${activePlayerState.player.colorHex}85`,
+          boxShadow: `0 0 36px -8px ${activePlayerState.player.colorHex}60`,
         }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3.5 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
             <div
-              className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center font-black text-xl sm:text-2xl text-slate-950 shrink-0 shadow-lg"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-black text-3xl sm:text-4xl text-slate-950 shrink-0 shadow-lg"
               style={{ backgroundColor: activePlayerState.player.colorHex }}
             >
               {activePlayerState.player.avatarInitial}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-emerald-400 font-bold">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm sm:text-base font-mono uppercase tracking-widest text-emerald-400 font-black">
                   Round {state.round} • Active Turn
                 </span>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/[0.06] text-slate-300 border border-white/10">
+                <span className="text-sm sm:text-base font-mono font-bold px-3 py-0.5 rounded-full bg-white/[0.08] text-slate-200 border border-white/15">
                   {state.exactFinish ? 'Exact Finish' : 'Any Overshoot'}
                 </span>
               </div>
-              <h3 className="text-2xl sm:text-3xl font-black text-white tracking-tight truncate">
+              <h3 className="text-4xl sm:text-5xl font-black text-white tracking-tight truncate mt-1 leading-none">
                 {activePlayerState.player.name}
               </h3>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-5 shrink-0">
             <div className="text-right">
-              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
+              <div className="text-sm sm:text-base font-mono font-bold uppercase tracking-wider text-slate-400">
                 Current Square
               </div>
-              <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
-                {activePlayerState.position === 0 ? 'START' : activePlayerState.position}
-                <span className="text-base sm:text-lg text-slate-500">/{state.boardSize}</span>
+              <div className="text-6xl sm:text-7xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
+                {activePlayerState.position === 0 ? 'START' : `SQ ${activePlayerState.position}`}
               </div>
             </div>
-            <div className="h-10 w-px bg-white/10" />
+            <div className="h-14 w-px bg-white/15" />
             <div className="text-right">
-              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
+              <div className="text-sm sm:text-base font-mono font-bold uppercase tracking-wider text-slate-400">
                 To Win
               </div>
-              <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-emerald-400 leading-none">
+              <div className="text-5xl sm:text-6xl font-black font-mono tabular-nums text-emerald-400 leading-none mt-0.5">
                 {remainingToFinish}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Compact Step Value Legend */}
-        <div className="mt-3.5 pt-3 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-2 text-[11px] sm:text-xs font-mono">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <span className="text-slate-400 font-bold uppercase tracking-wider mr-1">Steps:</span>
-            <span className="px-2 py-0.5 rounded-md bg-slate-800/90 border border-white/10 text-slate-200">
+        {/* Big Step Value Guide Strip */}
+        <div className="mt-4 pt-3.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-sm sm:text-base font-mono">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-300 font-black uppercase tracking-wider mr-1">Steps:</span>
+            <span className="px-3 py-1 rounded-lg bg-slate-800/95 border border-white/15 text-slate-100 font-bold">
               Single: 1–5
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/45 text-emerald-200 font-black">
               Double: +2 (3–7)
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/35 text-amber-300 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-amber-500/20 border border-amber-400/45 text-amber-200 font-black">
               Treble: +4 (5–9)
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/35 text-sky-300 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-sky-500/20 border border-sky-400/45 text-sky-200 font-black">
               25: +6
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-purple-500/20 border border-purple-400/45 text-purple-200 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-purple-500/25 border border-purple-400/55 text-purple-100 font-black">
               Bull: +10 Turbo
             </span>
           </div>
-          <span className="text-slate-500 hidden sm:inline">
-            Base = ⌈segment ÷ 4⌉
+          <span className="text-slate-400 font-bold hidden lg:inline">
+            Base = ⌈seg ÷ 4⌉
           </span>
         </div>
       </div>
@@ -447,31 +445,31 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
       {/* CALLOUT BANNER */}
       <CalloutBanner callout={callout} />
 
-      {/* MAIN LAYOUT: Board Centerpiece + Side/Bottom Telemetry */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-        {/* CENTERPIECE: Neon Snakes & Ladders Board */}
-        <div className="xl:col-span-7 card-matte rounded-2xl p-3 sm:p-4 space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-2">
-              <Dices className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-white">
+      {/* MAIN STAGE: Neon Snakes & Ladders Board + Paired Dartboard & Player Progress */}
+      <div className="space-y-5">
+        {/* CENTERPIECE: Large Crisp Neon Snakes & Ladders Board */}
+        <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-2.5">
+              <Dices className="w-6 h-6 text-emerald-400" />
+              <span className="text-lg sm:text-xl font-black uppercase tracking-wider text-white">
                 {state.boardSize}-Square Neon Board
               </span>
             </div>
-            <div className="flex items-center gap-3 text-[11px] font-mono">
-              <span className="flex items-center gap-1 text-emerald-300">
-                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" />
+            <div className="flex items-center gap-4 text-sm sm:text-base font-mono font-bold">
+              <span className="flex items-center gap-2 text-emerald-300">
+                <span className="w-3.5 h-3.5 rounded-sm bg-emerald-400 inline-block" />
                 {ladders.length} Ladders
               </span>
-              <span className="flex items-center gap-1 text-rose-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
+              <span className="flex items-center gap-2 text-rose-300">
+                <span className="w-3.5 h-3.5 rounded-full bg-rose-500 inline-block" />
                 {snakes.length} Snakes
               </span>
             </div>
           </div>
 
           {/* Exact Aspect-Square Board Container */}
-          <div className="relative w-full max-w-[700px] mx-auto aspect-square rounded-xl overflow-hidden border border-white/15 bg-[#0A101B] shadow-[inset_0_0_40px_rgba(0,0,0,0.85)]">
+          <div className="relative w-full max-w-[740px] mx-auto aspect-square rounded-2xl overflow-hidden border-2 border-white/15 bg-[#0A101B] shadow-[inset_0_0_40px_rgba(0,0,0,0.85)]">
             {/* Tile Grid */}
             <div
               className="grid w-full h-full"
@@ -492,57 +490,54 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                   <div
                     key={sq}
                     className={cn(
-                      'relative border-[0.5px] border-white/[0.06] p-1 flex flex-col justify-between select-none transition-colors',
+                      'relative border-[0.5px] border-white/[0.08] p-1 sm:p-1.5 flex flex-col justify-between select-none transition-colors',
                       isFinish
-                        ? 'bg-gradient-to-br from-amber-500/35 via-amber-500/15 to-emerald-500/25 border-amber-400/50'
+                        ? 'bg-gradient-to-br from-amber-500/35 via-amber-500/15 to-emerald-500/25 border-amber-400/60'
                         : link?.type === 'ladder'
-                        ? 'bg-emerald-500/15 border-emerald-400/25'
+                        ? 'bg-emerald-500/18 border-emerald-400/30'
                         : link?.type === 'snake'
-                        ? 'bg-rose-500/15 border-rose-400/25'
+                        ? 'bg-rose-500/18 border-rose-400/30'
                         : isAlt
                         ? 'bg-[#111927]'
                         : 'bg-[#162033]',
-                      isLastFinal && 'ring-1 ring-inset ring-white/50'
+                      isLastFinal && 'ring-2 ring-inset ring-white/60'
                     )}
                   >
-                    <div className="flex items-start justify-between leading-none">
+                    <div className="flex items-start justify-between gap-0.5 leading-none">
                       <span
                         className={cn(
-                          'font-mono font-bold tabular-nums leading-none',
-                          state.gridSize === 10
-                            ? 'text-[10px] sm:text-xs'
-                            : 'text-xs sm:text-sm',
+                          'font-mono font-black tabular-nums leading-none text-sm sm:text-base',
                           isFinish
-                            ? 'text-amber-300 font-black'
+                            ? 'text-amber-300'
                             : link?.type === 'ladder'
-                            ? 'text-emerald-300'
+                            ? 'text-emerald-200'
                             : link?.type === 'snake'
-                            ? 'text-rose-300'
+                            ? 'text-rose-200'
                             : isStart
                             ? 'text-sky-300'
-                            : 'text-slate-400/80'
+                            : 'text-slate-300/90'
                         )}
                       >
                         {sq}
                       </span>
 
                       {isFinish && (
-                        <Crown className="w-3 h-3 sm:w-4 sm:h-4 text-amber-300 shrink-0" />
+                        <Crown className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" />
                       )}
                       {link?.type === 'ladder' && (
-                        <span className="text-[9px] sm:text-[10px] font-mono font-black text-emerald-400/90 leading-none">
+                        <span className="text-xs sm:text-sm font-mono font-black text-emerald-300 leading-none">
                           ▲{link.to}
                         </span>
                       )}
                       {link?.type === 'snake' && (
-                        <span className="text-[9px] sm:text-[10px] font-mono font-black text-rose-400/90 leading-none">
+                        <span className="text-xs sm:text-sm font-mono font-black text-rose-300 leading-none">
                           ▼{link.to}
                         </span>
                       )}
                     </div>
 
                     {isStart && (
-                      <span className="text-[8px] sm:text-[9px] font-mono font-black uppercase tracking-wider text-sky-400/75 leading-none">
+                      <span className="text-xs sm:text-sm font-mono font-black uppercase tracking-wider text-sky-300 leading-none">
                         GO
                       </span>
                     )}
@@ -580,20 +575,18 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                 return (
                   <g
                     key={link.id}
-                    opacity={isTriggered ? 1 : 0.84}
+                    opacity={isTriggered ? 1 : 0.86}
                     filter="url(#snakesLadderGlow)"
                   >
-                    {/* Base anchor pulse ring */}
                     <circle
                       cx={geom.start.cx}
                       cy={geom.start.cy}
                       r={isTriggered ? 20 : 14}
                       fill="#10B981"
-                      fillOpacity={isTriggered ? 0.35 : 0.2}
+                      fillOpacity={isTriggered ? 0.35 : 0.22}
                       stroke="#34D399"
                       strokeWidth="2.5"
                     />
-                    {/* Rungs */}
                     {geom.rungs.map((r, rIdx) => (
                       <line
                         key={rIdx}
@@ -602,18 +595,17 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                         x2={r.x2}
                         y2={r.y2}
                         stroke="#6EE7B7"
-                        strokeWidth={isTriggered ? '5' : '4'}
+                        strokeWidth={isTriggered ? '5.5' : '4.5'}
                         strokeLinecap="round"
                       />
                     ))}
-                    {/* Left & Right Rails */}
                     <line
                       x1={geom.rail1.x1}
                       y1={geom.rail1.y1}
                       x2={geom.rail1.x2}
                       y2={geom.rail1.y2}
                       stroke="#10B981"
-                      strokeWidth={isTriggered ? '7' : '5.5'}
+                      strokeWidth={isTriggered ? '7.5' : '6'}
                       strokeLinecap="round"
                     />
                     <line
@@ -622,11 +614,10 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                       x2={geom.rail2.x2}
                       y2={geom.rail2.y2}
                       stroke="#10B981"
-                      strokeWidth={isTriggered ? '7' : '5.5'}
+                      strokeWidth={isTriggered ? '7.5' : '6'}
                       strokeLinecap="round"
                     />
-                    {/* Top arrival dot */}
-                    <circle cx={geom.end.cx} cy={geom.end.cy} r={8} fill="#34D399" />
+                    <circle cx={geom.end.cx} cy={geom.end.cy} r={8.5} fill="#34D399" />
                   </g>
                 );
               })}
@@ -638,49 +629,44 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                 return (
                   <g
                     key={link.id}
-                    opacity={isTriggered ? 1 : 0.86}
+                    opacity={isTriggered ? 1 : 0.88}
                     filter="url(#snakesCrimsonGlow)"
                   >
-                    {/* Outer glowing body */}
                     <path
                       d={geom.path}
                       fill="none"
                       stroke="#F43F5E"
-                      strokeWidth={isTriggered ? '14' : '11'}
+                      strokeWidth={isTriggered ? '15' : '12'}
                       strokeLinecap="round"
                     />
-                    {/* Inner striped scales */}
                     <path
                       d={geom.path}
                       fill="none"
                       stroke="#FDA4AF"
-                      strokeWidth="4"
+                      strokeWidth="4.5"
                       strokeDasharray="7 11"
                       strokeLinecap="round"
                     />
-                    {/* Tail tip */}
-                    <circle cx={geom.tail.cx} cy={geom.tail.cy} r={5.5} fill="#FB7185" />
-                    {/* Snake head */}
+                    <circle cx={geom.tail.cx} cy={geom.tail.cy} r={6} fill="#FB7185" />
                     <g transform={`translate(${geom.head.cx}, ${geom.head.cy}) rotate(${geom.angleDeg})`}>
                       <ellipse
                         cx="0"
                         cy="0"
-                        rx="14"
-                        ry="11"
+                        rx="15"
+                        ry="12"
                         fill="#E11D48"
                         stroke="#FDA4AF"
                         strokeWidth="2.5"
                       />
-                      {/* Glowing eyes */}
-                      <circle cx="-3" cy="-4.5" r="2.6" fill="#FEF08A" />
-                      <circle cx="-3" cy="4.5" r="2.6" fill="#FEF08A" />
+                      <circle cx="-3" cy="-4.5" r="2.8" fill="#FEF08A" />
+                      <circle cx="-3" cy="4.5" r="2.8" fill="#FEF08A" />
                     </g>
                   </g>
                 );
               })}
             </svg>
 
-            {/* Smoothly Animated Player Tokens */}
+            {/* Oversized Glowing Animated Player Tokens */}
             <div className="absolute inset-0 pointer-events-none">
               {state.players.map((ps, idx) => {
                 if (ps.position <= 0) return null;
@@ -690,12 +676,11 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                 const count = group.length;
                 const isActive = idx === state.activePlayerIndex;
 
-                // Small radial spread when multiple players share a square
                 let offsetX = 0;
                 let offsetY = 0;
                 if (count > 1) {
                   const angle = (slot / count) * Math.PI * 2 - Math.PI / 4;
-                  const radiusPx = state.gridSize === 10 ? 9 : 12;
+                  const radiusPx = state.gridSize === 10 ? 12 : 16;
                   offsetX = Math.cos(angle) * radiusPx;
                   offsetY = Math.sin(angle) * radiusPx;
                 }
@@ -718,19 +703,24 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
                   >
                     {isActive && (
                       <span
-                        className="absolute inset-[-5px] rounded-full animate-ping opacity-55"
+                        className="absolute inset-[-8px] rounded-full animate-ping opacity-65"
                         style={{ backgroundColor: ps.player.colorHex }}
                       />
                     )}
                     <div
                       className={cn(
-                        'relative rounded-full flex items-center justify-center font-black text-slate-950 border-2 shadow-[0_3px_12px_rgba(0,0,0,0.85)]',
+                        'relative rounded-full flex items-center justify-center font-black text-slate-950 border-[3px]',
                         state.gridSize === 10
-                          ? 'w-6 h-6 sm:w-8 sm:h-8 text-[11px] sm:text-xs'
-                          : 'w-7 h-7 sm:w-9 sm:h-9 text-xs sm:text-sm',
-                        isActive ? 'border-white scale-110' : 'border-slate-950/80'
+                          ? 'w-9 h-9 sm:w-11 sm:h-11 text-base sm:text-lg'
+                          : 'w-10 h-10 sm:w-12 sm:h-12 text-lg sm:text-xl',
+                        isActive ? 'border-white scale-115' : 'border-slate-950/90'
                       )}
-                      style={{ backgroundColor: ps.player.colorHex }}
+                      style={{
+                        backgroundColor: ps.player.colorHex,
+                        boxShadow: isActive
+                          ? `0 0 22px ${ps.player.colorHex}, 0 4px 14px rgba(0,0,0,0.9)`
+                          : `0 0 12px ${ps.player.colorHex}80, 0 3px 10px rgba(0,0,0,0.85)`,
+                      }}
                     >
                       {ps.player.avatarInitial}
                     </div>
@@ -742,17 +732,17 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
 
           {/* Start Pad Staging Dock (when any player is still on Square 0) */}
           {startPadPlayers.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/80 border border-white/10">
-              <span className="text-[11px] font-mono uppercase tracking-wider text-sky-400 font-bold">
+            <div className="flex flex-wrap items-center gap-2.5 px-4 py-2.5 rounded-xl bg-slate-900/85 border border-white/10">
+              <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-sky-300 font-black">
                 Start Pad (SQ 0):
               </span>
               {startPadPlayers.map((ps) => (
                 <span
                   key={ps.player.id}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold text-white bg-slate-950/80 border border-white/10"
+                  className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm sm:text-base font-bold text-white bg-slate-950/90 border border-white/15"
                 >
                   <span
-                    className="w-3 h-3 rounded-full"
+                    className="w-3.5 h-3.5 rounded-full"
                     style={{ backgroundColor: ps.player.colorHex }}
                   />
                   {ps.player.name}
@@ -762,156 +752,141 @@ export const SnakesAndLaddersGame: React.FC<GameModuleProps> = ({
           )}
         </div>
 
-        {/* RIGHT / BOTTOM COLUMN: Visit Strip + Scoreboard + Collapsible Click-to-Throw Dartboard */}
-        <div className="xl:col-span-5 space-y-4">
-          {/* 3-Dart Visit Strip */}
-          <div className="card-matte rounded-2xl p-4 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-                Current Visit
-              </span>
-              <span className="text-xs font-mono font-bold text-emerald-400 tabular-nums">
-                +{state.currentVisit.reduce((sum, v) => sum + v.steps, 0)} steps this visit
-              </span>
-            </div>
-            <VisitPillsStrip
-              darts={activeVisitDarts}
-              dartLabels={visitLabels}
-              dartTones={visitTones}
-              boardStatus={boardStatus}
-              turnComplete={state.turnComplete}
-              onManualNextTurn={handleAdvanceTurn}
-            />
-          </div>
-
-          {/* Multiplayer Standings Cards */}
-          <div className="card-matte rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-                Racers ({state.players.length})
-              </span>
-              <span className="text-[11px] font-mono text-slate-500">
-                First to SQ {state.boardSize}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2.5">
-              {state.players.map((ps, idx) => {
-                const isActive = idx === state.activePlayerIndex;
-                const progressPct = Math.min(100, Math.round((ps.position / state.boardSize) * 100));
-                return (
-                  <div
-                    key={ps.player.id}
-                    className={cn(
-                      'rounded-xl p-3 border transition-all',
-                      isActive
-                        ? 'bg-slate-900/95 border-2'
-                        : 'bg-slate-950/60 border-white/[0.08]'
-                    )}
-                    style={
-                      isActive
-                        ? {
-                            borderColor: ps.player.colorHex,
-                            boxShadow: `0 0 18px -6px ${ps.player.colorHex}70`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className="w-8 h-8 rounded-full flex items-center justify-center font-black text-xs text-slate-950 shrink-0"
-                          style={{ backgroundColor: ps.player.colorHex }}
-                        >
-                          {ps.player.avatarInitial}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm sm:text-base font-extrabold text-white truncate">
-                              {ps.player.name}
-                            </span>
-                            {isActive && (
-                              <span className="text-[10px] font-mono font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 uppercase">
-                                Up
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] font-mono text-slate-400">
-                            🪜 {ps.laddersClimbed} • 🐍 {ps.snakesBitten} • {ps.dartsThrown} darts
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <div className="text-2xl font-black font-mono tabular-nums text-white leading-none">
-                          {ps.position}
-                        </div>
-                        <div className="text-[10px] font-mono uppercase text-slate-500">
-                          SQ / {state.boardSize}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Progress bar */}
-                    <div className="mt-2.5 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${progressPct}%`,
-                          backgroundColor: ps.player.colorHex,
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Collapsible Compact SvgDartboard for Live Plot + Offline Click-to-Throw */}
-          <div className="card-matte rounded-2xl overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setShowDartboard((v) => !v)}
-              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-white/[0.03] transition-colors cursor-pointer"
-            >
+        {/* LOWER STAGE: Live SvgDartboard (560px) + Visit Strip & Clean Player Progress Strip */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+          {/* Live Board Plot / Click-to-Throw SvgDartboard */}
+          <div className="lg:col-span-7 card-matte rounded-2xl p-4 sm:p-5 space-y-3 flex flex-col items-center">
+            <div className="w-full flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-purple-400" />
-                <span className="text-xs font-mono uppercase tracking-wider font-bold text-slate-200">
-                  {isBoardConnected ? 'Live Board Plot' : 'Interactive Dartboard (Click to Throw)'}
+                <Target className="w-5 h-5 text-purple-400" />
+                <span className="text-base sm:text-lg font-black uppercase tracking-wider text-white">
+                  {isBoardConnected ? 'Live Board Plot' : 'Interactive Dartboard'}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                {!isBoardConnected && (
-                  <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-purple-300 font-mono">
-                    <Sparkles className="w-3 h-3" /> Tap any bed
-                  </span>
-                )}
-                {showDartboard ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </div>
-            </button>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/20 border border-purple-400/50 text-sm sm:text-base font-mono font-bold text-purple-200">
+                <Sparkles className="w-4 h-4" />
+                Bull +10 • 25 +6
+              </span>
+            </div>
 
-            {showDartboard && (
-              <div className="px-4 pb-4 pt-1 border-t border-white/[0.07]">
-                <div className="max-w-[330px] mx-auto">
-                  <SvgDartboard
-                    size={330}
-                    segmentOverlays={dartboardOverlays}
-                    onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
-                  >
-                    <DartPlotOverlay
-                      sessionThrows={[]}
-                      currentVisitThrows={activeVisitDarts}
-                      mode="dots"
-                    />
-                  </SvgDartboard>
-                </div>
+            <SvgDartboard
+              size={560}
+              segmentOverlays={dartboardOverlays}
+              onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
+            >
+              <DartPlotOverlay
+                sessionThrows={[]}
+                currentVisitThrows={activeVisitDarts}
+                mode="dots"
+              />
+            </SvgDartboard>
+          </div>
+
+          {/* Visit Strip + Clean Player Progress Strip */}
+          <div className="lg:col-span-5 space-y-4">
+            {/* 3-Dart Visit Strip */}
+            <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-slate-300 font-black">
+                  Current Visit
+                </span>
+                <span className="text-sm sm:text-base font-mono font-black text-emerald-400 tabular-nums">
+                  +{state.currentVisit.reduce((sum, v) => sum + v.steps, 0)} steps
+                </span>
               </div>
-            )}
+              <VisitPillsStrip
+                darts={activeVisitDarts}
+                dartLabels={visitLabels}
+                dartTones={visitTones}
+                boardStatus={boardStatus}
+                turnComplete={state.turnComplete}
+                onManualNextTurn={handleAdvanceTurn}
+              />
+            </div>
+
+            {/* Clean Player Progress Strip */}
+            <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-slate-300 font-black">
+                  Racers ({state.players.length})
+                </span>
+                <span className="text-sm sm:text-base font-mono font-bold text-slate-400">
+                  First to SQ {state.boardSize}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {state.players.map((ps, idx) => {
+                  const isActive = idx === state.activePlayerIndex;
+                  const progressPct = Math.min(100, Math.round((ps.position / state.boardSize) * 100));
+                  return (
+                    <div
+                      key={ps.player.id}
+                      className={cn(
+                        'rounded-2xl p-3.5 border-2 transition-all',
+                        isActive
+                          ? 'bg-slate-900/95'
+                          : 'bg-slate-950/65 border-white/[0.08]'
+                      )}
+                      style={
+                        isActive
+                          ? {
+                              borderColor: ps.player.colorHex,
+                              boxShadow: `0 0 22px -6px ${ps.player.colorHex}75`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div
+                            className="w-11 h-11 rounded-full flex items-center justify-center font-black text-lg text-slate-950 shrink-0"
+                            style={{ backgroundColor: ps.player.colorHex }}
+                          >
+                            {ps.player.avatarInitial}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg sm:text-xl font-black text-white truncate">
+                                {ps.player.name}
+                              </span>
+                              {isActive && (
+                                <span className="text-sm font-mono font-black px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 uppercase shrink-0">
+                                  UP
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm font-mono font-bold text-slate-300 tabular-nums">
+                              🪜 {ps.laddersClimbed} • 🐍 {ps.snakesBitten}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
+                            {ps.position}
+                            <span className="text-sm sm:text-base text-slate-400 font-bold">
+                              /{state.boardSize}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="mt-2.5 h-2.5 rounded-full bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${progressPct}%`,
+                            backgroundColor: ps.player.colorHex,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -299,127 +299,140 @@ export const BoardIsLavaGame: React.FC<GameModuleProps> = ({
   }, [state.lavaSegments, state.extinguishedSegments, state.config.bullCoolsLava]);
 
   return (
-    <div className="space-y-4">
-      {/* TOP SPOTLIGHT: Active Thrower + Heat Meter + Visit Strip */}
+    <div className="space-y-4 sm:space-y-5">
+      {/* TOP SPOTLIGHT: Giant Active Thrower + Lives & Score + Heat Meter + Visit Strip */}
       <div
-        className="card-matte rounded-2xl p-4 sm:p-5 border-2 transition-colors"
+        className="card-matte rounded-2xl p-5 sm:p-6 border-2 transition-colors space-y-4"
         style={{
-          borderColor: activePlayer ? `${activePlayer.colorHex}80` : undefined,
-          boxShadow: activePlayer ? `0 0 36px -10px ${activePlayer.colorHex}66` : undefined,
+          borderColor: activePlayer ? `${activePlayer.colorHex}85` : undefined,
+          boxShadow: activePlayer ? `0 0 40px -10px ${activePlayer.colorHex}66` : undefined,
         }}
       >
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
-          {/* Active Player Identity */}
-          <div className="lg:col-span-5 flex items-center gap-3.5 min-w-0">
+        {/* Row 1: Giant Player Identity, Round/Lava Count, Giant Hearts & Score */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
             <div
-              className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center font-black text-2xl sm:text-3xl text-slate-950 shrink-0 shadow-lg"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-black text-3xl sm:text-4xl text-slate-950 shrink-0 shadow-lg"
               style={{ backgroundColor: activePlayer?.colorHex ?? '#F43F5E' }}
             >
               {activePlayer?.avatarInitial ?? '?'}
             </div>
+
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-mono font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/50 text-rose-300">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm sm:text-base font-mono font-black uppercase tracking-widest px-3 py-1 rounded-lg bg-rose-500/20 border border-rose-400/60 text-rose-200 tabular-nums">
                   ROUND {state.round} / {state.maxRounds}
                 </span>
-                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                  {survivorsCount} Alive
+                <span className="text-sm sm:text-base font-mono font-black uppercase tracking-wider px-3 py-1 rounded-lg bg-orange-500/20 border border-orange-400/50 text-orange-200 tabular-nums">
+                  🔥 {state.lavaSegments.length} LAVA
+                </span>
+                <span className="text-sm sm:text-base font-mono font-bold uppercase tracking-wider text-slate-300 tabular-nums">
+                  {survivorsCount} ALIVE
                 </span>
               </div>
-              <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight truncate mt-0.5">
+
+              <h2 className="text-4xl sm:text-5xl font-black text-white tracking-tight truncate mt-1 leading-none">
                 {activePlayer?.name}
               </h2>
-              <div className="flex items-center gap-3 mt-1">
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: activePlayer?.maxLives ?? 3 }).map((_, idx) => {
-                    const filled = idx < (activePlayer?.lives ?? 0);
-                    return (
-                      <Heart
-                        key={idx}
-                        className={cn(
-                          'w-5 h-5 transition-all',
-                          filled
-                            ? 'text-rose-500 fill-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.75)]'
-                            : 'text-slate-700'
-                        )}
-                      />
-                    );
-                  })}
-                </div>
-                <span className="text-lg sm:text-xl font-black font-mono tabular-nums text-emerald-300">
-                  {activePlayer?.score ?? 0} pts
+
+              {/* Giant Lives Hearts Row */}
+              <div className="flex items-center gap-2 mt-2.5">
+                {Array.from({ length: activePlayer?.maxLives ?? 3 }).map((_, idx) => {
+                  const filled = idx < (activePlayer?.lives ?? 0);
+                  return (
+                    <Heart
+                      key={idx}
+                      className={cn(
+                        'w-8 h-8 transition-all',
+                        filled
+                          ? 'text-rose-500 fill-rose-500 drop-shadow-[0_0_12px_rgba(244,63,94,0.85)]'
+                          : 'text-slate-700'
+                      )}
+                    />
+                  );
+                })}
+                <span className="ml-2 text-sm sm:text-base font-mono font-bold text-slate-300 tabular-nums">
+                  {activePlayer?.lives ?? 0} / {activePlayer?.maxLives ?? 3} LIVES
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Heat Escalation Meter */}
-          <div className="lg:col-span-3 bg-slate-900/80 rounded-xl p-3 border border-white/10 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-orange-300">
-                <Flame className="w-4 h-4 text-rose-500 fill-orange-500" />
-                Board Heat
-              </span>
-              <span className={cn('text-xs font-mono font-black uppercase', heat.textClass)}>
-                {heat.label}
-              </span>
+          {/* Giant Score Readout */}
+          <div className="text-right shrink-0 pl-2">
+            <div className="text-sm sm:text-base font-mono font-bold uppercase tracking-widest text-slate-400">
+              SCORE
             </div>
-
-            <div className="h-3 w-full rounded-full bg-slate-950 overflow-hidden border border-white/10">
-              <div
-                className={cn(
-                  'h-full rounded-full bg-gradient-to-r transition-all duration-500',
-                  heat.barClass
-                )}
-                style={{ width: `${heat.percent}%` }}
-              />
+            <div className="text-6xl sm:text-7xl font-black font-mono tabular-nums text-emerald-300 leading-none mt-0.5">
+              {activePlayer?.score ?? 0}
             </div>
+            <div className="text-sm sm:text-base font-mono font-bold text-slate-300 mt-1 tabular-nums">
+              +{state.visitScore} this visit
+            </div>
+          </div>
+        </div>
 
-            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 tabular-nums">
-              <span className="text-rose-300 font-bold">{state.lavaSegments.length} Lava</span>
-              <span className="text-emerald-300 font-bold">{20 - state.lavaSegments.length} Safe</span>
+        {/* Row 2: Full-Width Board Heat Escalation Meter */}
+        <div className="bg-slate-900/85 rounded-xl px-4 py-3 border border-white/10 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-2 text-sm sm:text-base font-black uppercase tracking-wider text-orange-300">
+              <Flame className="w-5 h-5 text-rose-500 fill-orange-500" />
+              Board Heat: <span className={cn('font-mono', heat.textClass)}>{heat.label}</span>
+            </span>
+            <div className="flex items-center gap-4 text-sm sm:text-base font-mono font-black tabular-nums">
+              <span className="text-rose-300">{state.lavaSegments.length} LAVA</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-emerald-300">{20 - state.lavaSegments.length} SAFE</span>
             </div>
           </div>
 
-          {/* 3-Dart Visit Strip */}
-          <div className="lg:col-span-4">
-            <VisitPillsStrip
-              darts={visitDarts}
-              dartLabels={state.visitEntries.map((e) => e.label)}
-              dartTones={state.visitEntries.map((e) => e.tone)}
-              boardStatus={boardStatus}
-              turnComplete={state.turnEndedEarly || state.visitEntries.length >= 3}
+          <div className="h-3.5 w-full rounded-full bg-slate-950 overflow-hidden border border-white/10">
+            <div
+              className={cn(
+                'h-full rounded-full bg-gradient-to-r transition-all duration-500',
+                heat.barClass
+              )}
+              style={{ width: `${heat.percent}%` }}
             />
           </div>
         </div>
+
+        {/* Row 3: 3-Dart Visit Strip */}
+        <VisitPillsStrip
+          darts={visitDarts}
+          dartLabels={state.visitEntries.map((e) => e.label)}
+          dartTones={state.visitEntries.map((e) => e.tone)}
+          boardStatus={boardStatus}
+          turnComplete={state.turnEndedEarly || state.visitEntries.length >= 3}
+        />
       </div>
 
       {/* DRAMATIC CALLOUT BANNER */}
       <CalloutBanner callout={callout} />
 
-      {/* MAIN STAGE: Portrait-First Dartboard + Responsive Landscape Side Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 xl:gap-5 items-start">
+      {/* MAIN STAGE: Portrait-First Giant Dartboard + Responsive Landscape Side Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         {/* CENTERPIECE: Interactive Molten Dartboard */}
-        <div className="xl:col-span-7 card-matte rounded-2xl p-4 sm:p-5 space-y-4">
+        <div className="xl:col-span-7 card-matte rounded-2xl p-5 sm:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Flame className="w-5 h-5 text-rose-400" />
-              <span className="text-sm sm:text-base font-black text-white uppercase tracking-wide">
+            <div className="flex items-center gap-2.5">
+              <Flame className="w-6 h-6 text-rose-400" />
+              <span className="text-lg sm:text-xl font-black text-white uppercase tracking-wide">
                 Dodge The Lava Wedges
               </span>
             </div>
 
             {state.config.bullCoolsLava && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-500/15 border border-sky-400/40 text-sky-200 text-xs font-bold">
-                <Snowflake className="w-3.5 h-3.5 text-sky-300" />
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-sky-500/15 border border-sky-400/50 text-sky-200 text-sm sm:text-base font-bold">
+                <Snowflake className="w-4 h-4 text-sky-300" />
                 <span>Bull / 25 = Cool 1 Lava + 50 pts</span>
               </div>
             )}
           </div>
 
-          <div className="py-1">
+          <div className="flex justify-center py-1">
             <SvgDartboard
-              size={500}
+              size={660}
               segmentOverlays={segmentOverlays}
               dimInactiveSegments={false}
               onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
@@ -433,29 +446,29 @@ export const BoardIsLavaGame: React.FC<GameModuleProps> = ({
           </div>
 
           {/* Active Lava Wedge Summary Strip (8ft glanceable) */}
-          <div className="rounded-xl bg-slate-900/80 border border-white/10 p-3 space-y-2">
-            <div className="flex items-center justify-between text-xs font-mono uppercase tracking-wider">
-              <span className="text-rose-300 font-bold flex items-center gap-1.5">
-                <Flame className="w-3.5 h-3.5 text-orange-400" />
+          <div className="rounded-xl bg-slate-900/85 border border-white/10 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between text-sm sm:text-base font-mono uppercase tracking-wider">
+              <span className="text-rose-300 font-black flex items-center gap-2">
+                <Flame className="w-4 h-4 text-orange-400" />
                 Active Lava ({state.lavaSegments.length})
               </span>
               {!isBoardConnected && (
-                <span className="text-slate-400">Click board to throw</span>
+                <span className="text-slate-400 font-bold">Click board to throw</span>
               )}
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {state.lavaSegments.length > 0 ? (
                 state.lavaSegments.map((num) => (
                   <span
                     key={num}
-                    className="px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400/50 text-rose-200 font-mono font-black text-xs sm:text-sm tabular-nums"
+                    className="px-3 py-1 rounded-lg bg-rose-500/20 border border-rose-400/60 text-rose-100 font-mono font-black text-sm sm:text-base tabular-nums"
                   >
                     🔥 {num}
                   </span>
                 ))
               ) : (
-                <span className="text-xs font-bold text-sky-300 flex items-center gap-1.5">
-                  <Shield className="w-4 h-4" />
+                <span className="text-sm sm:text-base font-bold text-sky-300 flex items-center gap-2">
+                  <Shield className="w-5 h-5" />
                   All lava wedges cooled for this round!
                 </span>
               )}
@@ -463,25 +476,25 @@ export const BoardIsLavaGame: React.FC<GameModuleProps> = ({
           </div>
         </div>
 
-        {/* SCOREBOARD CARDS: 2-col on portrait, side column on xl: */}
-        <div className="xl:col-span-5 space-y-3">
+        {/* SURVIVAL STANDINGS: Big 2-col on portrait, side column on xl: */}
+        <div className="xl:col-span-5 space-y-3.5">
           <div className="flex items-center justify-between px-1">
-            <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-slate-400">
-              Survivors &amp; Scoreboard
+            <h3 className="text-sm sm:text-base font-mono font-black uppercase tracking-widest text-slate-300">
+              Survival Standings
             </h3>
-            <span className="text-xs font-mono text-slate-400 tabular-nums">
+            <span className="text-sm sm:text-base font-mono font-bold text-emerald-300 tabular-nums">
               Visit: +{state.visitScore} pts
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3.5">
             {state.players.map((p, idx) => {
               const isActive = idx === state.activePlayerIndex && !state.isFinished;
               return (
                 <div
                   key={p.id}
                   className={cn(
-                    'card-matte rounded-2xl p-4 border-2 transition-all',
+                    'card-matte rounded-2xl p-4 sm:p-5 border-2 transition-all',
                     p.isEliminated && 'opacity-45 grayscale-[45%] border-rose-900/40',
                     !p.isEliminated && !isActive && 'border-white/10'
                   )}
@@ -489,59 +502,59 @@ export const BoardIsLavaGame: React.FC<GameModuleProps> = ({
                     isActive && !p.isEliminated
                       ? {
                           borderColor: p.colorHex,
-                          boxShadow: `0 0 28px -8px ${p.colorHex}80`,
+                          boxShadow: `0 0 32px -8px ${p.colorHex}85`,
                         }
                       : undefined
                   }
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3.5 min-w-0">
                       <div
-                        className="w-11 h-11 rounded-xl flex items-center justify-center font-black text-lg text-slate-950 shrink-0"
+                        className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center font-black text-xl sm:text-2xl text-slate-950 shrink-0"
                         style={{ backgroundColor: p.isEliminated ? '#475569' : p.colorHex }}
                       >
-                        {p.isEliminated ? <Skull className="w-5 h-5 text-rose-300" /> : p.avatarInitial}
+                        {p.isEliminated ? <Skull className="w-6 h-6 text-rose-300" /> : p.avatarInitial}
                       </div>
 
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span
                             className={cn(
-                              'text-lg sm:text-xl font-black truncate',
+                              'text-xl sm:text-2xl font-black truncate',
                               p.isEliminated ? 'text-slate-400 line-through' : 'text-white'
                             )}
                           >
                             {p.name}
                           </span>
                           {isActive && !p.isEliminated && (
-                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[10px] font-mono font-black uppercase tracking-wider shrink-0">
+                            <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 text-sm font-mono font-black uppercase tracking-wider shrink-0">
                               UP NOW
                             </span>
                           )}
                           {p.isEliminated && (
-                            <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[10px] font-mono font-black uppercase tracking-wider shrink-0">
+                            <span className="px-2.5 py-0.5 rounded-md bg-rose-500/20 border border-rose-500/50 text-rose-300 text-sm font-mono font-black uppercase tracking-wider shrink-0">
                               BURNED RD {p.eliminatedOnRound}
                             </span>
                           )}
                         </div>
 
-                        {/* Hearts Row */}
-                        <div className="flex items-center gap-1.5 mt-1.5">
+                        {/* Large Hearts Row */}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
                           {Array.from({ length: p.maxLives }).map((_, heartIdx) => {
                             const alive = heartIdx < p.lives;
                             return (
                               <Heart
                                 key={heartIdx}
                                 className={cn(
-                                  'w-4 h-4 sm:w-5 sm:h-5 transition-all',
+                                  'w-6 h-6 sm:w-7 sm:h-7 transition-all',
                                   alive
-                                    ? 'text-rose-500 fill-rose-500'
+                                    ? 'text-rose-500 fill-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
                                     : 'text-slate-700'
                                 )}
                               />
                             );
                           })}
-                          <span className="ml-2 text-xs font-mono text-slate-400 tabular-nums">
+                          <span className="ml-2 text-sm sm:text-base font-mono font-bold text-slate-300 tabular-nums">
                             {p.safeHits} safe
                             {p.bullCools > 0 && (
                               <span className="text-sky-300 ml-1.5">• ❄️{p.bullCools}</span>
@@ -556,8 +569,8 @@ export const BoardIsLavaGame: React.FC<GameModuleProps> = ({
                       <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
                         {p.score}
                       </div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-slate-400 mt-1 flex items-center justify-end gap-1">
-                        <Zap className="w-3 h-3 text-amber-400" />
+                      <div className="text-sm font-mono font-bold uppercase tracking-widest text-slate-400 mt-1 flex items-center justify-end gap-1">
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
                         PTS
                       </div>
                     </div>

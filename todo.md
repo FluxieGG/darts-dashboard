@@ -112,12 +112,14 @@ npm run build
 - [x] **Solo Training Mode (`practice-lobby`), 4 Pro Practice Drills & Context-Aware iPad Right Panel** — Added dedicated **Practice** mode alongside **Dashboard** & **Arcade** in the responsive 3-mode iPad header (inline on landscape `lg+`, crisp 3-col pill strip on portrait/phone `< lg`), built 4 live-board solo drills plugged into `GameHost` (**Bob's 27**, **121 Checkout Ladder**, **JDC Challenge**, **99-Dart Scoring Gauntlet**) + Kiosk `PracticeLobby` showcase, and made the iPad right panel's 1st tab context-aware (**Goals** with live Daily & Weekly Objectives on Dashboard, **Games** on Arcade, **Drills** on Practice) with verified Party Mode on/off theme & stat tracking restoration
 
 - [x] **Live Match / Online Game Logger & Dynamic Checkout Assistant** — Real-time `501` / `301` / `701` leg tracker (`useOnlineMatchStore` + `useOnlineMatchSync`) controlled from the iPad Dashboard **Goals** tab (Start/End, Undo, Opp Won Leg, Reset Leg, Mid-Leg Score Sync), modular `LiveMatchWidget` scoreboard strip, live PDC checkout double/treble highlights directly on `DartboardHeatmapWidget`, and automatic `Online 501 - Game Winning Shot` auto-clipping on checkouts
-- [x] **Persistent Per-Game & Per-Drill Leaderboards + Modular Dashboard Widget** — All-time Hall of Fame records persisted in `data/career-vault.json` (`gameLeaderboards`) across all 8 Arcade games, 4 Solo Practice Drills, and Online X01 legs (Party Mode protected), rendered as a movable, toggleable modular `game-leaderboards` widget (`LeaderboardsWidget`) customizable up/down via the iPad **Display** tab
+- [x] **Persistent Per-Game & Per-Drill Leaderboards + Modular Dashboard Widget** — All-time Hall of Fame records persisted in `data/career-vault.json` (`gameLeaderboards`) across all 13 Arcade games, 7 Solo Practice Drills, and Online X01 legs (Party Mode protected), rendered as a movable, toggleable modular `game-leaderboards` widget (`LeaderboardsWidget`) customizable up/down via the iPad **Display** tab
+- [x] **Dedicated iPad Game & Practice Companion Screen + Broadcast "How to Play" Vertical TV Guide** — Launching any of the 13 Arcade Games or 7 Solo Practice Drills automatically switches the iPad (`/?remote=1`) into a dedicated, clutter-free **`GameCompanionScreen`** tailored to that exact game/drill across Setup, Live Match, and Finished phases (custom Oche Cheat Sheet, tailored Quick Throw/Correction Pad, Next Turn & Undo pads, Clip That 20s, Audio toggle, 2-tap safe Restart / Change Rules / **Stop & Exit** controls, and a prominent **`How to Play`** toggle that pops an 8-foot readable rulebook guide directly onto the vertical Kiosk monitor for everyone to read)
+- [x] **1080×1920 Portrait Broadcast Kiosk Redesign Across All 20 Games & Practice Drills** — Removed the hardcoded `560px` cap in `SvgDartboard` (enabling crisp `600–680px` dartboards on 1080px portrait), upgraded `VisitPillsStrip` & `CalloutBanner` for 8-foot glanceability, and redesigned all 13 Arcade games and 7 Solo Practice drills with giant hero typography (`text-7xl`–`text-9xl`), prominent high-contrast telemetry tiles (such as visual dart-pip **Darts Left** counters), and zero unreadable micro-text
 
 ### Up Next — Core Features & Priorities
 - [ ] *(Cleanup when done testing)* Remove temporary `[DEV-TEST: REMOVE WHEN DONE]` next-dart replay trigger once Oche-Cam angle & timing are verified
 
-### Modular Games Roster (All Plugged Into `src/games/gameRegistry.ts`)
+### Modular Games Roster (All 13 Plugged Into `src/games/gameRegistry.ts`)
 - [x] **The Board is Lava** (`board-is-lava`) — Survival party game with erupting lava wedges & bullseye cool-down
 - [x] **Killer** (`killer`) — Flight Club classic: claim wedge, charge lives to Killer, hunt rivals
 - [x] **Snooker** (`snooker`) — Tactical Red/Colour potting with live 147 break tracker & clearance sequence
@@ -126,12 +128,20 @@ npm run build
 - [x] **Snakes & Ladders** (`snakes-and-ladders`) — Visual neon 100-square board race with ladders & snakes
 - [x] **Halve It** (`halve-it`) — High-stakes challenge gauntlet where missing all 3 darts halves your score
 - [x] **Donkey Derby** (`donkey-derby`) — Multi-lane neon racing game where hitting your wedge gallops ahead
+- [x] **Cal's Quest** (`cals-quest`) — D&D Roguelike dungeon crawler (1–6P Co-Op): 5 escalating bosses (3 HP Goblin → 20 HP Elder Dragon), Armor Shields, Minions, Bullseye healing, 6 Roguelike Relics, and Left-Half vs Right-Half dartboard Choose-Your-Path rooms
+- [x] **Darts Golf** (`darts-golf`) — Randomised 9-Hole / 20-Hole Par course (1–6P) with shuffled target segments per hole, Masters emerald scorecard, Eagle/Birdie/Par/Bogey rings, Last-Dart vs Best-Dart rules, and Gimme Bull Par rescue
+- [x] **Battleship Darts** (`battleship`) — Hidden naval fleets across adjacent wedges with Hits/Sunk tracking & Multiplier Sonar Pings
+- [x] **Cricket** (`cricket`) — Classic 20–15 & Bull closing matrix with Standard and Cut-Throat scoring variants
+- [x] **Sniper Bingo** (`sniper-bingo`) — Shuffled 3×3 neon Bingo cards (Classic & Pro Doubles/Trebles; Line & Blackout patterns)
 
-### Modular Solo Practice Drills (All Plugged Into `src/games/gameRegistry.ts`)
+### Modular Solo Practice Drills (All 7 Plugged Into `src/games/gameRegistry.ts`)
 - [x] **Bob's 27** (`bobs-27`) — Classic PDC doubles drill (`D1` → `D20` → `Bull`) with pulsing targets & accuracy tracking
 - [x] **121 Checkout Ladder** (`checkout-121`) — 9-dart Double-Out ladder with live PDC checkout route highlights
 - [x] **JDC Challenge** (`jdc-challenge`) — 3-stage scored routine (Shanghai 10–15, Doubles Gauntlet, Shanghai 15–20) with Belt ranks
 - [x] **99-Dart Scoring Gauntlet** (`scoring-gauntlet`) — Fixed-dart scoring benchmark (`T20` / `T19` / `Bull` / Free) with live 3DA & Ton+ breakdown
+- [x] **Around the Clock Pro** (`around-the-clock`) — Sequential `1 → 20 → Bull` sprint with Any / Doubles / Trebles modes and Turbo Skip (`D=+2`, `T=+3`)
+- [x] **Catch 40** (`catch-40`) — PDC finishing mastery (`61 → 100` or `61 → 80`) with 6 darts per checkout, `+3/+2/+1` speed scoring & live routes
+- [x] **Precision Sniper** (`precision-sniper`) — Surgical target grouping circuits (`T20→T10`, Pro Doubles, Power Core) with Darts-Per-Hit tracking
 
 ### Future Platform Enhancements
 - [ ] Sound volume slider & Pro Voice Caller / Announcer callouts (Web Speech API / MP3 packs) controlled from iPad

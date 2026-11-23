@@ -8,6 +8,7 @@ interface LayoutState {
 
   // Actions
   toggleWidget: (id: WidgetId) => void;
+  setAllWidgetsEnabled: (enabled: boolean) => void;
   moveWidget: (id: WidgetId, direction: 'up' | 'down') => void;
   setColSpan: (id: WidgetId, colSpan: 1 | 2) => void;
   resetLayout: () => void;
@@ -26,6 +27,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const updatedWidgets = current.widgets.map((w) =>
       w.id === id ? { ...w, enabled: !w.enabled } : w
     );
+    const newLayout: DashboardLayout = { widgets: updatedWidgets };
+    saveLayout(newLayout);
+    set({ layout: newLayout });
+  },
+
+  setAllWidgetsEnabled: (enabled: boolean) => {
+    const current = get().layout;
+    const updatedWidgets = current.widgets.map((w) => ({ ...w, enabled }));
     const newLayout: DashboardLayout = { widgets: updatedWidgets };
     saveLayout(newLayout);
     set({ layout: newLayout });

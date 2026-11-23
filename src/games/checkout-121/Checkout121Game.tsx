@@ -179,63 +179,129 @@ export const Checkout121Game: React.FC<GameModuleProps> = ({
   }, [checkoutRoute]);
 
   const clearedCount = state.attempts.filter((a) => a.success).length;
+  const recentAttempts = [...state.attempts].reverse().slice(0, 6);
+  const dartsLeftUrgent = state.dartsLeftInTarget <= 3;
+  const dartsLeftCritical = state.dartsLeftInTarget <= 1;
 
   return (
     <div className="space-y-4">
       <CalloutBanner callout={callout} />
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 xl:gap-5 items-start">
+        {/* Left/Top: Hero Remaining, Darts Left, PDC Route, Visit Strip & Giant Dartboard */}
         <div className="xl:col-span-7 space-y-4">
-          {/* Big Remaining Checkout Hero */}
-          <div className="card-matte rounded-2xl p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4 border-sky-400/35">
-            <div>
-              <div className="text-xs font-mono uppercase tracking-widest text-sky-400 font-bold flex items-center gap-1.5">
-                <Target className="w-4 h-4" />
-                Target {state.attempts.length + 1} of {state.maxTargets} • {state.currentTarget} Checkout
+          {/* Top 2-Column Hero: Remaining Score + Dedicated Huge Darts Left Card */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+            {/* Giant Remaining Score Card */}
+            <div className="sm:col-span-6 card-matte rounded-2xl p-5 sm:p-6 border-sky-400/40 flex flex-col justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-mono uppercase tracking-widest text-sky-300 font-black">
+                <Target className="w-5 h-5 shrink-0 text-sky-400" />
+                <span>
+                  TARGET {state.attempts.length + 1} / {state.maxTargets} • START {state.currentTarget}
+                </span>
               </div>
-              <div className="text-6xl sm:text-7xl font-black font-mono tabular-nums text-white leading-none mt-1">
+              <div className="text-8xl lg:text-9xl font-black font-mono tabular-nums text-white leading-none mt-2 tracking-tight">
                 {state.remaining}
-              </div>
-              <div className="text-xs font-mono text-slate-400 mt-2">
-                Darts Left in Target:{' '}
-                <strong
-                  className={cn(
-                    'text-sm',
-                    state.dartsLeftInTarget <= 3 ? 'text-amber-300' : 'text-emerald-300'
-                  )}
-                >
-                  {state.dartsLeftInTarget} / 9
-                </strong>
               </div>
             </div>
 
-            {/* Live Suggested PDC Checkout Route */}
-            <div className="text-right space-y-2">
-              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
-                Suggested Route
-              </div>
-              {checkoutRoute ? (
-                <div className="flex items-center justify-end gap-2">
-                  {checkoutRoute.map((step, i) => (
-                    <span
-                      key={`${step}-${i}`}
-                      className={cn(
-                        'px-3.5 py-2 rounded-xl font-mono text-lg sm:text-2xl font-black border',
-                        i === 0
-                          ? 'bg-emerald-500/20 border-emerald-400/70 text-emerald-200 shadow-[0_0_20px_rgba(16,185,129,0.35)]'
-                          : 'bg-slate-900 border-white/15 text-slate-200'
-                      )}
-                    >
-                      {step}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="px-4 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-xs font-mono text-slate-400">
-                  Setup to Double
-                </div>
+            {/* Dedicated HUGE DARTS LEFT Card with 9 Visual Dart Pips */}
+            <div
+              className={cn(
+                'sm:col-span-6 card-matte rounded-2xl p-5 sm:p-6 flex flex-col justify-between transition-all',
+                dartsLeftCritical
+                  ? 'border-rose-400/75 shadow-[0_0_28px_-6px_rgba(244,63,94,0.45)]'
+                  : dartsLeftUrgent
+                  ? 'border-amber-400/70 shadow-[0_0_26px_-6px_rgba(245,158,11,0.4)]'
+                  : 'border-emerald-400/40'
               )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className={cn(
+                    'text-sm sm:text-base font-mono uppercase tracking-widest font-black',
+                    dartsLeftCritical
+                      ? 'text-rose-300'
+                      : dartsLeftUrgent
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  )}
+                >
+                  DARTS LEFT
+                </span>
+                <span className="text-sm sm:text-base font-mono font-bold text-slate-400 uppercase">
+                  9-DART LIMIT
+                </span>
+              </div>
+
+              <div className="flex items-baseline gap-2 my-1">
+                <span
+                  className={cn(
+                    'text-5xl sm:text-6xl lg:text-7xl font-black font-mono tabular-nums leading-none',
+                    dartsLeftCritical
+                      ? 'text-rose-400'
+                      : dartsLeftUrgent
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  )}
+                >
+                  {state.dartsLeftInTarget}
+                </span>
+                <span className="text-2xl sm:text-3xl font-black font-mono tabular-nums text-slate-500">
+                  / 9
+                </span>
+              </div>
+
+              {/* 9 Large Visual Dart Pip Indicators */}
+              <div className="grid grid-cols-9 gap-1.5 sm:gap-2 mt-2" aria-label={`${state.dartsLeftInTarget} of 9 darts remaining`}>
+                {Array.from({ length: 9 }).map((_, idx) => {
+                  const isRemaining = idx < state.dartsLeftInTarget;
+                  return (
+                    <div
+                      key={idx}
+                      className={cn(
+                        'h-6 sm:h-7 rounded-lg border transition-all duration-200',
+                        isRemaining
+                          ? dartsLeftCritical
+                            ? 'bg-rose-500 border-rose-300 shadow-[0_0_12px_rgba(244,63,94,0.75)]'
+                            : dartsLeftUrgent
+                            ? 'bg-amber-400 border-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.65)]'
+                            : 'bg-emerald-400 border-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
+                          : 'bg-slate-900/75 border-white/10 opacity-35'
+                      )}
+                    />
+                  );
+                })}
+              </div>
             </div>
+          </div>
+
+          {/* Giant Suggested PDC Checkout Route Bar */}
+          <div className="card-matte rounded-2xl px-5 py-4 sm:px-6 sm:py-4 flex flex-wrap items-center justify-between gap-4 border-emerald-400/35">
+            <div className="text-sm sm:text-base font-mono uppercase tracking-widest text-slate-300 font-black">
+              SUGGESTED PDC ROUTE
+            </div>
+            {checkoutRoute ? (
+              <div className="flex items-center gap-3 flex-wrap">
+                {checkoutRoute.map((step, i) => (
+                  <span
+                    key={`${step}-${i}`}
+                    className={cn(
+                      'px-5 py-3 rounded-2xl font-mono text-3xl sm:text-5xl font-black leading-none border-2 tabular-nums',
+                      i === 0
+                        ? 'bg-emerald-500/25 border-emerald-400 text-white shadow-[0_0_24px_rgba(16,185,129,0.45)]'
+                        : 'bg-slate-900/90 border-sky-400/40 text-sky-200'
+                    )}
+                  >
+                    {step}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="px-5 py-3 rounded-2xl bg-slate-900/80 border border-white/15 text-lg sm:text-2xl font-mono font-black uppercase tracking-wider text-slate-300">
+                Setup to Double
+              </div>
+            )}
           </div>
 
           <VisitPillsStrip
@@ -244,9 +310,9 @@ export const Checkout121Game: React.FC<GameModuleProps> = ({
             turnComplete={state.turnComplete}
           />
 
-          <div className="card-matte rounded-2xl p-4 sm:p-6 flex items-center justify-center">
+          <div className="card-matte rounded-2xl p-3 sm:p-4 flex items-center justify-center">
             <SvgDartboard
-              size={460}
+              size={680}
               segmentOverlays={segmentOverlays}
               dimInactiveSegments={Boolean(checkoutRoute)}
               onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
@@ -260,62 +326,70 @@ export const Checkout121Game: React.FC<GameModuleProps> = ({
           </div>
         </div>
 
-        {/* Right: Ladder Progress & History */}
+        {/* Right/Bottom: Big 2-Col KPIs & Compact 8ft Recent Ladder Log */}
         <div className="xl:col-span-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="card-matte rounded-2xl p-4">
-              <div className="text-[11px] font-mono uppercase text-slate-400 flex items-center gap-1.5">
-                <Trophy className="w-3.5 h-3.5 text-amber-400" />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="card-matte rounded-2xl p-5 border-amber-400/30">
+              <div className="text-sm sm:text-base font-mono uppercase tracking-wider font-black text-slate-300 flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
                 Highest Cleared
               </div>
-              <div className="text-3xl font-black font-mono tabular-nums text-amber-300 mt-1">
+              <div className="text-4xl sm:text-5xl lg:text-6xl font-black font-mono tabular-nums text-amber-300 leading-none mt-2">
                 {state.highestCleared || '—'}
               </div>
             </div>
-            <div className="card-matte rounded-2xl p-4">
-              <div className="text-[11px] font-mono uppercase text-slate-400 flex items-center gap-1.5">
-                <Flame className="w-3.5 h-3.5 text-emerald-400" />
-                Checkouts
+            <div className="card-matte rounded-2xl p-5 border-emerald-400/30">
+              <div className="text-sm sm:text-base font-mono uppercase tracking-wider font-black text-slate-300 flex items-center gap-2">
+                <Flame className="w-5 h-5 text-emerald-400 shrink-0" />
+                Checkouts Cleared
               </div>
-              <div className="text-3xl font-black font-mono tabular-nums text-emerald-300 mt-1">
+              <div className="text-4xl sm:text-5xl lg:text-6xl font-black font-mono tabular-nums text-emerald-300 leading-none mt-2">
                 {clearedCount}
-                <span className="text-base text-slate-500">/{state.attempts.length}</span>
+                <span className="text-2xl sm:text-3xl text-slate-500">/{state.attempts.length}</span>
               </div>
             </div>
           </div>
 
-          <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3">
-            <div className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-              Ladder Log
+          <div className="card-matte rounded-2xl p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm sm:text-base font-mono uppercase tracking-widest text-slate-300 font-black">
+                Recent Ladder Log
+              </div>
+              {state.attempts.length > 0 && (
+                <div className="text-sm sm:text-base font-mono font-bold text-slate-400">
+                  Last {recentAttempts.length} of {state.attempts.length}
+                </div>
+              )}
             </div>
-            {state.attempts.length === 0 ? (
-              <div className="py-8 text-center text-xs font-mono text-slate-500">
-                Check out {state.currentTarget} within 9 darts to climb to {state.currentTarget + 1}!
+            {recentAttempts.length === 0 ? (
+              <div className="py-6 text-center text-base sm:text-lg font-mono font-bold text-slate-400">
+                Check out <span className="text-white font-black">{state.currentTarget}</span> within 9 darts to climb to{' '}
+                <span className="text-emerald-300 font-black">{state.currentTarget + 1}</span>!
               </div>
             ) : (
-              <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-                {[...state.attempts].reverse().map((att, idx) => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2.5">
+                {recentAttempts.map((att, idx) => (
                   <div
-                    key={idx}
+                    key={`${att.target}-${state.attempts.length - idx}`}
                     className={cn(
-                      'p-3 rounded-xl border flex items-center justify-between font-mono text-sm',
+                      'px-4 py-3 rounded-xl border-2 flex items-center justify-between gap-3 font-mono text-lg sm:text-xl',
                       att.success
-                        ? 'bg-emerald-500/12 border-emerald-400/40 text-emerald-200'
-                        : 'bg-rose-500/10 border-rose-400/30 text-rose-300'
+                        ? 'bg-emerald-500/12 border-emerald-400/45 text-emerald-200'
+                        : 'bg-rose-500/12 border-rose-400/40 text-rose-200'
                     )}
                   >
-                    <div className="flex items-center gap-2 font-black">
+                    <div className="flex items-center gap-2.5 font-black tabular-nums">
                       {att.success ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
                       ) : (
-                        <XCircle className="w-4 h-4 text-rose-400" />
+                        <XCircle className="w-6 h-6 text-rose-400 shrink-0" />
                       )}
                       <span>{att.target}</span>
                     </div>
-                    <span className="text-xs">
+                    <span className="text-base sm:text-lg font-extrabold tabular-nums truncate">
                       {att.success
-                        ? `Out in ${att.dartsUsed} (${att.finishSegment})`
-                        : 'Missed (9 darts)'}
+                        ? `${att.dartsUsed} darts (${att.finishSegment})`
+                        : 'Missed (9)'}
                     </span>
                   </div>
                 ))}

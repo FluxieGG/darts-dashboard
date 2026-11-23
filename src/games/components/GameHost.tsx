@@ -15,6 +15,7 @@ import {
   Users,
   Wifi,
   Tablet,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -39,6 +40,7 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
     lastResult,
     matchInstanceKey,
     soundEnabled,
+    isRulesOverlayOpen,
     completeMatch,
     setActiveController,
     setCanUndoActiveGame,
@@ -115,18 +117,18 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
   const canStartMatch = roster.length >= game.minPlayers && roster.length <= game.maxPlayers;
 
   return (
-    <main className="w-full max-w-[1600px] mx-auto px-4 py-4 sm:px-6 sm:py-5 space-y-4">
+    <main className="w-full max-w-[1600px] mx-auto px-4 py-3 sm:px-5 sm:py-4 space-y-4">
       {/* Pure Broadcast Arena Header */}
-      <div className="card-matte rounded-2xl px-4 py-3 sm:px-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-emerald-400 shrink-0">
-            <Icon className="w-5 h-5" />
+      <div className="card-matte rounded-2xl px-4 py-3 sm:px-6 sm:py-3.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-emerald-400 shrink-0">
+            <Icon className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-lg sm:text-xl font-black text-white leading-tight tracking-tight">
+            <h2 className="text-xl sm:text-2xl font-black text-white leading-tight tracking-tight">
               {game.title}
             </h2>
-            <span className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
+            <span className="text-xs sm:text-sm font-mono uppercase tracking-wider text-slate-400 font-bold">
               {matchPhase === 'setup'
                 ? 'Match Lineup & Setup'
                 : matchPhase === 'finished'
@@ -415,6 +417,101 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
             <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-slate-900/90 border border-white/10 text-xs sm:text-sm font-mono text-slate-300">
               <Tablet className="w-4 h-4 text-emerald-400" />
               <span>Tap Play Rematch or Change Game on iPad Oche Deck</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BROADCAST "HOW TO PLAY" RULEBOOK POPUP (Triggered from iPad Companion Screen) */}
+      {isRulesOverlayOpen && (
+        <div className="fixed inset-0 z-50 bg-[#060911]/94 backdrop-blur-lg flex items-center justify-center p-5 sm:p-8 overflow-y-auto animate-in fade-in duration-200">
+          <div className="w-full max-w-3xl card-matte rounded-3xl p-6 sm:p-9 border-sky-400/50 shadow-[0_0_70px_-10px_rgba(56,189,248,0.45)] space-y-6 my-auto">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-5">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-sky-500/15 border border-sky-400/45 flex items-center justify-center text-sky-300 shrink-0 shadow-lg">
+                  <Icon className="w-9 h-9" />
+                </div>
+                <div>
+                  <div className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono uppercase tracking-widest text-sky-400 font-black">
+                    <BookOpen className="w-4 h-4" />
+                    {game.mode === 'practice' ? 'Practice Drill Guide' : 'How To Play'}
+                  </div>
+                  <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight mt-0.5 leading-none">
+                    {game.title}
+                  </h2>
+                  <p className="text-sm sm:text-lg text-slate-300 mt-1.5 font-medium">
+                    {game.tagline}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <Badge variant="sky" size="md">
+                  {game.minPlayers === game.maxPlayers
+                    ? `${game.minPlayers}P Solo`
+                    : `${game.minPlayers}–${game.maxPlayers} Players`}
+                </Badge>
+                <span className="text-[11px] font-mono text-slate-400">
+                  {game.estimatedMinutes} • {game.difficulty}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
+              {game.description}
+            </p>
+
+            {/* Active Match Rules / Selected Settings Summary */}
+            {game.configOptions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {game.configOptions.map((opt) => {
+                  const value = matchConfig[opt.key] ?? opt.defaultValue;
+                  const displayValue =
+                    opt.type === 'toggle'
+                      ? value
+                        ? 'ON'
+                        : 'OFF'
+                      : opt.options?.find((c) => c.value === value)?.label ?? String(value);
+                  return (
+                    <span
+                      key={opt.key}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/12 border border-emerald-400/35 text-xs sm:text-sm font-mono font-bold text-emerald-200"
+                    >
+                      <span className="text-slate-400">{opt.label}:</span>
+                      <span>{displayValue}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Numbered Broadcast Rule Cards (8-foot glanceable for vertical monitor) */}
+            <div className="grid grid-cols-1 gap-3.5">
+              {game.rules.map((step, idx) => (
+                <div
+                  key={step.title}
+                  className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-white/12 flex items-start gap-4"
+                >
+                  <span className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 font-mono font-black text-lg flex items-center justify-center shrink-0">
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-lg sm:text-xl font-black text-white leading-snug">
+                      {step.title.replace(/^\d+\.\s*/, '')}
+                    </div>
+                    <p className="text-sm sm:text-base text-slate-300 mt-1 leading-relaxed">
+                      {step.description}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Passive iPad Close Cue */}
+            <div className="pt-2 flex items-center justify-center">
+              <div className="inline-flex items-center gap-2.5 px-6 py-3 rounded-full bg-slate-900 border border-sky-400/40 text-xs sm:text-base font-mono font-bold text-sky-300 shadow-lg">
+                <Tablet className="w-5 h-5 animate-pulse" />
+                <span>Tap &ldquo;Hide Guide on TV&rdquo; on the iPad to return</span>
+              </div>
             </div>
           </div>
         </div>

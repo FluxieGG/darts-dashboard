@@ -106,9 +106,11 @@ export function loadSavedLayout(): DashboardLayout {
 
     const existingIds = new Set(parsed.widgets.map((w) => w.id));
     const missingWidgets = DEFAULT_LAYOUT.widgets.filter((w) => !existingIds.has(w.id));
-    const merged = [...parsed.widgets, ...missingWidgets];
+    const merged = [...parsed.widgets, ...missingWidgets]
+      .sort((a, b) => a.order - b.order)
+      .map((w, idx) => ({ ...w, order: idx }));
 
-    return { widgets: merged.sort((a, b) => a.order - b.order) };
+    return { widgets: merged };
   } catch {
     return DEFAULT_LAYOUT;
   }

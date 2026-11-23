@@ -118,8 +118,10 @@ function upsertLeaderboardEntry(
     const isBetter =
       Number.isFinite(input.statValue) &&
       (input.lowerIsBetter
-        ? input.statValue > 0 &&
-          (existing.bestStatValue <= 0 || input.statValue < existing.bestStatValue)
+        ? input.gameId === 'darts-golf'
+          ? input.statValue < existing.bestStatValue
+          : input.statValue > 0 &&
+            (existing.bestStatValue <= 0 || input.statValue < existing.bestStatValue)
         : input.statValue > existing.bestStatValue);
 
     prevList[existingIdx] = {

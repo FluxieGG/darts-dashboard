@@ -33,6 +33,8 @@ interface GameStoreState {
   canUndoActiveGame: boolean;
   /** Hex colour of the player whose turn it currently is inside an active game */
   activeTurnPlayerColor: string | null;
+  /** Broadcast "How to Play" rulebook popup overlay controlled from the iPad */
+  isRulesOverlayOpen: boolean;
 
   // User Preferences & History (persisted)
   soundEnabled: boolean;
@@ -48,6 +50,8 @@ interface GameStoreState {
   setActiveController: (controller: GameModuleController | null) => void;
   setCanUndoActiveGame: (canUndo: boolean) => void;
   setActiveTurnPlayerColor: (hex: string | null) => void;
+  setRulesOverlayOpen: (open: boolean) => void;
+  toggleRulesOverlay: () => void;
 
   // Game Socket Lifecycle
   launchGame: (gameId: string, defaultConfig: GameMatchConfig, isPractice?: boolean) => void;
@@ -64,6 +68,7 @@ interface GameStoreState {
   startMatch: () => void;
   pauseMatch: () => void;
   resumeMatch: () => void;
+  returnToSetup: () => void;
   completeMatch: (gameTitle: string, result: GameResult) => void;
   rematch: () => void;
 }
@@ -104,6 +109,9 @@ const PRACTICE_DRILL_IDS = new Set([
   'checkout-121',
   'jdc-challenge',
   'scoring-gauntlet',
+  'around-the-clock',
+  'catch-40',
+  'precision-sniper',
 ]);
 
 export const useGameStore = create<GameStoreState>()(
@@ -121,6 +129,7 @@ export const useGameStore = create<GameStoreState>()(
       activeController: null,
       canUndoActiveGame: false,
       activeTurnPlayerColor: null,
+      isRulesOverlayOpen: false,
 
       soundEnabled: true,
       recentResults: [],
@@ -136,6 +145,7 @@ export const useGameStore = create<GameStoreState>()(
           activeController: null,
           canUndoActiveGame: false,
           activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
         }),
 
       openPracticeLobby: () =>
@@ -147,6 +157,7 @@ export const useGameStore = create<GameStoreState>()(
           activeController: null,
           canUndoActiveGame: false,
           activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
         }),
 
       returnToDashboard: () =>
@@ -158,6 +169,7 @@ export const useGameStore = create<GameStoreState>()(
           activeController: null,
           canUndoActiveGame: false,
           activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
         }),
 
       setSelectedCategory: (selectedCategory) => set({ selectedCategory }),
@@ -169,6 +181,10 @@ export const useGameStore = create<GameStoreState>()(
       setCanUndoActiveGame: (canUndoActiveGame) => set({ canUndoActiveGame }),
 
       setActiveTurnPlayerColor: (activeTurnPlayerColor) => set({ activeTurnPlayerColor }),
+
+      setRulesOverlayOpen: (isRulesOverlayOpen) => set({ isRulesOverlayOpen }),
+
+      toggleRulesOverlay: () => set((s) => ({ isRulesOverlayOpen: !s.isRulesOverlayOpen })),
 
       launchGame: (gameId, defaultConfig, isPractice) => {
         const soloDrill = Boolean(isPractice || PRACTICE_DRILL_IDS.has(gameId));
@@ -191,13 +207,17 @@ export const useGameStore = create<GameStoreState>()(
       },
 
       exitGameToLobby: () => {
+        gameEventBus.resetVisitBuffer();
         const wasPractice = Boolean(get().activeGameId && PRACTICE_DRILL_IDS.has(get().activeGameId!));
         set({
           activeView: wasPractice ? 'practice-lobby' : 'games-lobby',
           activeGameId: null,
           matchPhase: 'setup',
           lastResult: null,
+          activeController: null,
+          canUndoActiveGame: false,
           activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
         });
       },
 
@@ -266,6 +286,7 @@ export const useGameStore = create<GameStoreState>()(
         set((s) => ({
           matchPhase: 'playing',
           lastResult: null,
+          isRulesOverlayOpen: false,
           matchInstanceKey: s.matchInstanceKey + 1,
         }));
       },
@@ -273,6 +294,18 @@ export const useGameStore = create<GameStoreState>()(
       pauseMatch: () => set({ matchPhase: 'paused' }),
 
       resumeMatch: () => set({ matchPhase: 'playing' }),
+
+      returnToSetup: () => {
+        gameEventBus.resetVisitBuffer();
+        set({
+          matchPhase: 'setup',
+          lastResult: null,
+          activeController: null,
+          canUndoActiveGame: false,
+          activeTurnPlayerColor: null,
+          isRulesOverlayOpen: false,
+        });
+      },
 
       completeMatch: (gameTitle, result) => {
         const summary: GameSessionSummary = {
@@ -311,8 +344,11 @@ export const useGameStore = create<GameStoreState>()(
               : parseFloat(String(standing.primaryStatValue).replace(/[^0-9.-]/g, ''));
           const statNum = Number.isFinite(rawNum) ? rawNum : 0;
           const lowerIsBetter =
-            result.gameId === 'demolition' &&
-            standing.primaryStatLabel.toLowerCase().includes('dart');
+            result.gameId === 'darts-golf' ||
+            ((result.gameId === 'demolition' ||
+              result.gameId === 'around-the-clock' ||
+              result.gameId === 'precision-sniper') &&
+              standing.primaryStatLabel.toLowerCase().includes('dart'));
           careerStore.recordLeaderboardPerformance({
             gameId: result.gameId,
             gameTitle,

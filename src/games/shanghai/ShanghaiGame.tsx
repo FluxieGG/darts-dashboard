@@ -308,15 +308,15 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 sm:space-y-5">
       {/* Round Progression Strip */}
-      <div className="card-matte rounded-2xl px-4 py-3">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[11px] font-mono uppercase tracking-wider text-purple-300 font-bold flex items-center gap-1.5">
-            <Crown className="w-3.5 h-3.5" />
+      <div className="card-matte rounded-2xl px-4 sm:px-5 py-3.5">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-purple-300 font-bold flex items-center gap-2">
+            <Crown className="w-4 h-4" />
             Shanghai Escalation ({state.instantWin ? 'Instant Win ON' : '+100 Combo Bonus'})
           </span>
-          <span className="text-xs font-mono font-black text-white tabular-nums">
+          <span className="text-base sm:text-lg font-mono font-black text-white tabular-nums">
             ROUND {state.currentRound} / {state.totalRounds}
           </span>
         </div>
@@ -328,12 +328,12 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
               <div
                 key={num}
                 className={cn(
-                  'shrink-0 min-w-[34px] h-8 px-2 rounded-lg border font-mono text-xs font-black tabular-nums flex items-center justify-center transition-all',
+                  'shrink-0 min-w-[42px] h-10 px-2.5 rounded-xl border-2 font-mono text-sm sm:text-base font-black tabular-nums flex items-center justify-center transition-all',
                   isCurrent
-                    ? 'bg-purple-500/30 border-purple-400 text-white shadow-[0_0_16px_rgba(168,85,247,0.55)] scale-105'
+                    ? 'bg-purple-500/30 border-purple-400 text-white shadow-[0_0_18px_rgba(168,85,247,0.6)] scale-105'
                     : isPast
-                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300/80'
-                    : 'bg-slate-900/70 border-white/10 text-slate-500'
+                    ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300/85'
+                    : 'bg-slate-900/75 border-white/10 text-slate-400'
                 )}
               >
                 {num}
@@ -346,143 +346,140 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
       {/* High-Drama Callout Banner */}
       <CalloutBanner callout={callout} />
 
-      {/* Active Turn Spotlight + Round Target + S/D/T Combo Tracker */}
+      {/* Active Turn Spotlight + Giant TARGET <N> + Big S/D/T Shanghai Tracker */}
       <div
-        className="card-matte rounded-2xl p-4 sm:p-5 border-2 transition-colors"
+        className="card-matte rounded-2xl p-5 sm:p-6 border-2 transition-colors"
         style={{
-          borderColor: `${activePlayer.colorHex}80`,
-          boxShadow: `0 0 32px -10px ${activePlayer.colorHex}55`,
+          borderColor: `${activePlayer.colorHex}85`,
+          boxShadow: `0 0 38px -10px ${activePlayer.colorHex}60`,
         }}
       >
         <div className="flex flex-wrap items-center justify-between gap-4">
-          {/* Active Player Identity */}
-          <div className="flex items-center gap-3.5 min-w-0">
+          {/* Active Player Identity & Score */}
+          <div className="flex items-center gap-4 min-w-0 flex-1">
             <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center font-black text-2xl text-slate-950 shrink-0 shadow-lg"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-black text-3xl sm:text-4xl text-slate-950 shrink-0 shadow-lg"
               style={{ backgroundColor: activePlayer.colorHex }}
             >
               {activePlayer.avatarInitial}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-purple-300 font-bold">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm sm:text-base font-mono uppercase tracking-widest text-purple-300 font-black">
                   Now Throwing
                 </span>
-                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-white/10 text-slate-200">
+                <span className="text-sm sm:text-base font-mono font-black px-2.5 py-0.5 rounded-lg bg-white/10 text-slate-100 tabular-nums">
                   #{rankByPlayerId[activePlayer.id]}
                 </span>
               </div>
-              <div className="text-2xl sm:text-3xl font-black text-white truncate leading-tight">
+              <div className="text-4xl sm:text-5xl font-black text-white truncate leading-none mt-1">
                 {activePlayer.name}
+              </div>
+              <div className="flex flex-wrap items-baseline gap-3 mt-2">
+                <span className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
+                  {activePlayer.score} <span className="text-base sm:text-lg text-slate-400">PTS</span>
+                </span>
+                <span className="text-base sm:text-lg font-mono font-bold text-emerald-400 tabular-nums">
+                  +{state.visitPoints} this visit
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Massive Round Target Readout */}
-          <div className="flex items-center gap-4 sm:gap-6">
-            <div className="text-center px-5 py-2.5 rounded-2xl bg-purple-500/20 border-2 border-purple-400/60 shadow-[0_0_28px_-6px_rgba(168,85,247,0.6)]">
-              <div className="text-[10px] sm:text-xs font-mono uppercase tracking-widest text-purple-200 font-bold flex items-center justify-center gap-1">
-                <Target className="w-3.5 h-3.5" />
-                Target Segment
-              </div>
-              <div className="text-4xl sm:text-6xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
-                {target}
-              </div>
+          {/* Giant Active Round Target (TARGET <N> in text-8xl lg:text-9xl) */}
+          <div className="px-6 sm:px-8 py-3 rounded-2xl bg-purple-500/20 border-2 border-purple-400/75 shadow-[0_0_36px_-6px_rgba(168,85,247,0.7)] flex items-center gap-4 shrink-0">
+            <div className="flex flex-col items-start">
+              <span className="inline-flex items-center gap-1.5 text-sm sm:text-base font-mono font-black uppercase tracking-widest text-purple-200">
+                <Target className="w-5 h-5 text-purple-300" />
+                TARGET
+              </span>
+              <span className="text-sm sm:text-base font-mono font-bold text-purple-200/80 mt-0.5 tabular-nums">
+                RD {state.currentRound}/{state.totalRounds}
+              </span>
             </div>
-
-            <div className="text-right">
-              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-                Total Score
-              </div>
-              <div className="text-4xl sm:text-5xl font-black font-mono tabular-nums text-white leading-none">
-                {activePlayer.score}
-              </div>
-              <div className="text-xs font-mono font-bold text-emerald-400 mt-1 tabular-nums">
-                +{state.visitPoints} this visit
-              </div>
+            <div className="text-8xl lg:text-9xl font-black font-mono tabular-nums text-white leading-none tracking-tight">
+              {target}
             </div>
           </div>
         </div>
 
-        {/* 3 Glowing S / D / T Shanghai Combo Indicator Badges */}
-        <div className="mt-4 pt-4 border-t border-white/10 space-y-2.5">
+        {/* 3 Big Glowing S / D / T Shanghai Tracker Pills */}
+        <div className="mt-5 pt-4 border-t border-white/10 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-mono uppercase tracking-wider font-black text-purple-300 flex items-center gap-1.5">
+            <span className="text-sm sm:text-base font-mono uppercase tracking-wider font-black text-purple-300 flex items-center gap-2">
               {shanghaiThreat ? (
                 <>
-                  <Flame className="w-4 h-4 text-amber-400 animate-bounce" />
+                  <Flame className="w-5 h-5 text-amber-400 animate-bounce" />
                   <span className="text-amber-300">SHANGHAI ON! HIT FINAL BED!</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4" />
-                  Shanghai Combo ({state.instantWin ? 'Instant Victory' : '+100 Bonus'})
+                  <Sparkles className="w-5 h-5" />
+                  Shanghai Tracker ({state.instantWin ? 'Instant Victory' : '+100 Bonus'})
                 </>
               )}
             </span>
-            <span className="text-xs font-mono font-bold text-slate-400 tabular-nums">
+            <span className="text-sm sm:text-base font-mono font-black text-slate-300 tabular-nums">
               {comboCount} / 3 LIT
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-3 gap-3">
             {[
               {
                 key: 'S',
-                label: `SINGLE ${target}`,
+                short: `S${target}`,
                 pts: target,
                 lit: state.visitCombo.hitSingle,
                 litClass:
-                  'bg-sky-500/25 border-sky-400 text-sky-100 shadow-[0_0_24px_-4px_rgba(56,189,248,0.65)]',
+                  'bg-sky-500/30 border-sky-400 text-sky-100 shadow-[0_0_28px_-4px_rgba(56,189,248,0.75)]',
               },
               {
                 key: 'D',
-                label: `DOUBLE ${target}`,
+                short: `D${target}`,
                 pts: target * 2,
                 lit: state.visitCombo.hitDouble,
                 litClass:
-                  'bg-emerald-500/25 border-emerald-400 text-emerald-100 shadow-[0_0_24px_-4px_rgba(16,185,129,0.65)]',
+                  'bg-emerald-500/30 border-emerald-400 text-emerald-100 shadow-[0_0_28px_-4px_rgba(16,185,129,0.75)]',
               },
               {
                 key: 'T',
-                label: `TREBLE ${target}`,
+                short: `T${target}`,
                 pts: target * 3,
                 lit: state.visitCombo.hitTreble,
                 litClass:
-                  'bg-amber-500/25 border-amber-400 text-amber-100 shadow-[0_0_24px_-4px_rgba(245,158,11,0.65)]',
+                  'bg-amber-500/30 border-amber-400 text-amber-100 shadow-[0_0_28px_-4px_rgba(245,158,11,0.75)]',
               },
             ].map((badge) => (
               <div
                 key={badge.key}
                 className={cn(
-                  'rounded-xl border-2 px-3 py-2.5 flex items-center justify-between gap-2 transition-all',
+                  'h-16 sm:h-20 rounded-2xl border-2 px-4 flex items-center justify-between gap-2 transition-all',
                   badge.lit
                     ? badge.litClass
                     : shanghaiThreat
-                    ? 'bg-purple-500/15 border-purple-400/70 text-purple-200 animate-pulse'
-                    : 'bg-slate-900/70 border-white/10 text-slate-400'
+                    ? 'bg-purple-500/20 border-purple-400/80 text-purple-100 animate-pulse'
+                    : 'bg-slate-900/80 border-white/15 text-slate-400'
                 )}
               >
-                <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
                   <span
                     className={cn(
-                      'w-8 h-8 rounded-lg font-mono font-black text-base flex items-center justify-center shrink-0',
+                      'w-10 h-10 sm:w-12 sm:h-12 rounded-xl font-mono font-black text-xl sm:text-2xl flex items-center justify-center shrink-0',
                       badge.lit
                         ? 'bg-white text-slate-950'
-                        : 'bg-white/10 text-slate-300'
+                        : 'bg-white/10 text-slate-200'
                     )}
                   >
-                    {badge.lit ? <Check className="w-5 h-5 stroke-[3]" /> : badge.key}
+                    {badge.lit ? <Check className="w-6 h-6 stroke-[3.5]" /> : badge.key}
                   </span>
-                  <div className="min-w-0">
-                    <div className="text-xs sm:text-sm font-black tracking-tight truncate">
-                      {badge.label}
-                    </div>
-                    <div className="text-[11px] font-mono opacity-80 tabular-nums">
-                      +{badge.pts} pts
-                    </div>
-                  </div>
+                  <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight tabular-nums truncate">
+                    {badge.short}
+                  </span>
                 </div>
+                <span className="text-sm sm:text-base font-mono font-black opacity-90 tabular-nums shrink-0">
+                  +{badge.pts}
+                </span>
               </div>
             ))}
           </div>
@@ -500,23 +497,23 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
         </div>
       </div>
 
-      {/* Main Arena: Dartboard Centerpiece + Scoreboard */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+      {/* Main Arena: Giant Dartboard Centerpiece + Big Leaderboard */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         {/* Interactive Dartboard */}
-        <div className="xl:col-span-7 card-matte rounded-2xl p-4 sm:p-6 flex flex-col items-center">
-          <div className="w-full flex items-center justify-between mb-2">
-            <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-              Active Slice: <span className="text-purple-300 font-black">{target}</span> Only
+        <div className="xl:col-span-7 card-matte rounded-2xl p-5 sm:p-6 flex flex-col items-center">
+          <div className="w-full flex items-center justify-between mb-3">
+            <span className="text-base sm:text-lg font-mono uppercase tracking-wider text-slate-300 font-bold">
+              Active Slice: <span className="text-purple-300 font-black">#{target}</span> Only
             </span>
             {!isBoardConnected && (
-              <span className="text-[11px] font-mono text-amber-300/90">
+              <span className="text-sm sm:text-base font-mono font-bold text-amber-300/90">
                 Click board to simulate throw
               </span>
             )}
           </div>
 
           <SvgDartboard
-            size={480}
+            size={660}
             segmentOverlays={segmentOverlays}
             dimInactiveSegments={true}
             onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
@@ -528,29 +525,29 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
             />
           </SvgDartboard>
 
-          {/* Compact Bed Legend */}
-          <div className="flex flex-wrap items-center justify-center gap-3 mt-3 text-[11px] font-mono text-slate-300">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+          {/* Clear Bed Legend */}
+          <div className="flex flex-wrap items-center justify-center gap-4 mt-4 text-sm sm:text-base font-mono font-bold text-slate-200">
+            <span className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 rounded-full bg-purple-500" />
               Single ({target})
             </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-fuchsia-500" />
+            <span className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 rounded-full bg-fuchsia-500" />
               Double ({target * 2})
             </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <span className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 rounded-full bg-amber-500" />
               Treble ({target * 3})
             </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+            <span className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 rounded-full bg-emerald-500" />
               Combo Hit ✓
             </span>
           </div>
         </div>
 
-        {/* Multiplayer Scoreboard */}
-        <div className="xl:col-span-5 grid grid-cols-2 xl:grid-cols-1 gap-3">
+        {/* Big Multiplayer Leaderboard */}
+        <div className="xl:col-span-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3.5">
           {state.players.map((player, idx) => {
             const isActive = idx === state.activePlayerIndex && !state.isFinished;
             const rank = rankByPlayerId[player.id];
@@ -559,36 +556,36 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
               <div
                 key={player.id}
                 className={cn(
-                  'card-matte rounded-2xl p-4 border-2 transition-all',
-                  isActive ? 'scale-[1.01]' : 'border-white/[0.07] opacity-90'
+                  'card-matte rounded-2xl p-4 sm:p-5 border-2 transition-all',
+                  isActive ? 'scale-[1.01]' : 'border-white/[0.08] opacity-90'
                 )}
                 style={
                   isActive
                     ? {
                         borderColor: player.colorHex,
-                        boxShadow: `0 0 24px -6px ${player.colorHex}70`,
+                        boxShadow: `0 0 28px -6px ${player.colorHex}75`,
                       }
                     : undefined
                 }
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-3.5 min-w-0">
                     <div
-                      className="w-11 h-11 rounded-xl flex items-center justify-center font-black text-lg text-slate-950 shrink-0"
+                      className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center font-black text-xl sm:text-2xl text-slate-950 shrink-0"
                       style={{ backgroundColor: player.colorHex }}
                     >
                       {player.avatarInitial}
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
                         {rank === 1 && player.score > 0 && (
-                          <Crown className="w-4 h-4 text-amber-400 shrink-0" />
+                          <Crown className="w-5 h-5 text-amber-400 shrink-0" />
                         )}
-                        <span className="text-base sm:text-lg font-black text-white truncate">
+                        <span className="text-xl sm:text-2xl font-black text-white truncate">
                           {player.name}
                         </span>
                       </div>
-                      <div className="text-[11px] font-mono text-slate-400 flex items-center gap-2">
+                      <div className="text-sm sm:text-base font-mono font-bold text-slate-300 flex flex-wrap items-center gap-x-2 mt-0.5 tabular-nums">
                         <span>#{rank}</span>
                         <span>•</span>
                         <span>{player.targetHits} hits</span>
@@ -603,11 +600,15 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
                   </div>
 
                   <div className="text-right shrink-0">
-                    <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
+                    <div className="text-4xl sm:text-5xl font-black font-mono tabular-nums text-white leading-none">
                       {player.score}
                     </div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mt-1">
-                      {isActive ? 'UP NOW' : 'PTS'}
+                    <div className="text-sm font-mono font-black uppercase tracking-wider mt-1">
+                      {isActive ? (
+                        <span className="text-emerald-300">UP NOW</span>
+                      ) : (
+                        <span className="text-slate-400">PTS</span>
+                      )}
                     </div>
                   </div>
                 </div>

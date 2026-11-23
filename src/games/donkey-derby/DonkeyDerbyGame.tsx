@@ -299,93 +299,93 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
   const furlongsToWin = Math.max(0, state.trackLength - activeRacer.position);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 sm:space-y-5">
       {/* ACTIVE RACER SPOTLIGHT STRIP (8ft glanceable) */}
       <div
-        className="card-matte rounded-2xl p-4 sm:p-5 border-2 transition-colors"
+        className="card-matte rounded-2xl p-5 sm:p-6 border-2 transition-colors"
         style={{
           borderColor: `${activeRacer.player.colorHex}85`,
-          boxShadow: `0 0 28px -8px ${activeRacer.player.colorHex}55`,
+          boxShadow: `0 0 38px -8px ${activeRacer.player.colorHex}60`,
         }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3.5 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
             <div
-              className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex flex-col items-center justify-center font-black text-slate-950 shrink-0 shadow-lg"
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex flex-col items-center justify-center font-black text-slate-950 shrink-0 shadow-lg"
               style={{ backgroundColor: activeRacer.player.colorHex }}
             >
-              <span className="text-lg sm:text-xl leading-none">🐴</span>
-              <span className="text-[10px] font-mono font-black leading-none mt-0.5">
+              <span className="text-2xl sm:text-3xl leading-none">🐴</span>
+              <span className="text-sm font-mono font-black leading-none mt-1">
                 P{activeRacer.laneNumber}
               </span>
             </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-sky-400 font-bold">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm sm:text-base font-mono uppercase tracking-widest text-sky-400 font-black">
                   Round {state.round} • On The Oche
                 </span>
                 {state.helpRivals && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-400/35">
-                    <AlertTriangle className="w-3 h-3" />
+                  <span className="inline-flex items-center gap-1.5 text-sm font-mono font-black px-3 py-0.5 rounded-full bg-rose-500/20 text-rose-200 border border-rose-400/50">
+                    <AlertTriangle className="w-4 h-4" />
                     Rival Boost ON
                   </span>
                 )}
               </div>
-              <h3 className="text-2xl sm:text-3xl font-black text-white tracking-tight truncate">
+              <h3 className="text-4xl sm:text-5xl font-black text-white tracking-tight truncate mt-1 leading-none">
                 {activeRacer.player.name}
               </h3>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-5">
+          <div className="flex items-center gap-4 sm:gap-6 shrink-0">
             <div
-              className="px-4 py-2 rounded-2xl border-2 text-center"
+              className="px-6 py-3 rounded-2xl border-2 text-center"
               style={{
-                backgroundColor: `${activeRacer.player.colorHex}20`,
+                backgroundColor: `${activeRacer.player.colorHex}25`,
                 borderColor: activeRacer.player.colorHex,
               }}
             >
-              <div className="text-[10px] font-mono uppercase tracking-widest text-slate-200 font-bold">
-                Target Wedge
+              <div className="text-sm sm:text-base font-mono uppercase tracking-widest text-slate-100 font-black">
+                TARGET
               </div>
-              <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
+              <div className="text-6xl sm:text-7xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
                 #{activeRacer.targetSegment}
               </div>
             </div>
 
             <div className="text-right">
-              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
+              <div className="text-sm sm:text-base font-mono font-bold uppercase tracking-wider text-slate-400">
                 To Finish
               </div>
-              <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-emerald-400 leading-none">
+              <div className="text-5xl sm:text-6xl font-black font-mono tabular-nums text-emerald-400 leading-none mt-0.5">
                 {furlongsToWin}
-                <span className="text-sm sm:text-base text-slate-500 ml-1">f</span>
+                <span className="text-xl sm:text-2xl text-slate-400 ml-1">f</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Compact Scoring Legend */}
-        <div className="mt-3.5 pt-3 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-2 text-[11px] sm:text-xs font-mono">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 font-bold">
+        {/* Scoring Legend */}
+        <div className="mt-4 pt-3.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-sm sm:text-base font-mono">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="px-3 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/45 text-emerald-200 font-black">
               Single #{activeRacer.targetSegment}: +1
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/45 text-emerald-200 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-emerald-500/25 border border-emerald-400/55 text-emerald-100 font-black">
               Double: +2
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/45 text-amber-200 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-amber-500/25 border border-amber-400/55 text-amber-100 font-black">
               Treble: +3
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-purple-500/20 border border-purple-400/45 text-purple-200 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-purple-500/25 border border-purple-400/55 text-purple-100 font-black">
               ⚡ Bull: +2
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/35 text-sky-300 font-bold">
+            <span className="px-3 py-1 rounded-lg bg-sky-500/20 border border-sky-400/45 text-sky-200 font-black">
               ⚡ 25: +1
             </span>
           </div>
           {state.helpRivals && (
-            <span className="text-rose-300/90 font-semibold">
+            <span className="text-rose-300 font-bold">
               Hit a rival’s wedge = THEY gallop!
             </span>
           )}
@@ -395,35 +395,35 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
       {/* DRAMATIC CALLOUT BANNER */}
       <CalloutBanner callout={callout} />
 
-      {/* WIDE NEON RACE TRACK CENTERPIECE */}
-      <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3.5">
+      {/* WIDE, BOLD NEON RACE TRACK CENTERPIECE */}
+      <div className="card-matte rounded-2xl p-5 sm:p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Flag className="w-5 h-5 text-sky-400" />
-            <h4 className="text-sm sm:text-base font-black uppercase tracking-wider text-white">
+          <div className="flex items-center gap-2.5">
+            <Flag className="w-6 h-6 text-sky-400" />
+            <h4 className="text-lg sm:text-xl font-black uppercase tracking-wider text-white">
               Neon Derby Track • {state.trackLength} Furlongs
             </h4>
           </div>
-          <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-            <Trophy className="w-4 h-4 text-amber-400" />
-            <span>First across checkered line wins immediately</span>
+          <div className="flex items-center gap-2 text-sm sm:text-base font-mono font-bold text-slate-300">
+            <Trophy className="w-5 h-5 text-amber-400" />
+            <span>First across finish wins!</span>
           </div>
         </div>
 
         {/* Furlong Ruler */}
         <div className="hidden sm:grid grid-cols-12 items-center gap-3 px-1">
-          <div className="col-span-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">
+          <div className="col-span-3 text-sm font-mono uppercase tracking-wider text-slate-400 font-black">
             Racer / Target
           </div>
-          <div className="col-span-7 relative h-5 flex items-center">
+          <div className="col-span-7 relative h-6 flex items-center">
             {furlongMarkers.map((f) => {
               const pct = (f / state.trackLength) * 100;
               return (
                 <span
                   key={f}
                   className={cn(
-                    'absolute -translate-x-1/2 text-[10px] font-mono font-bold tabular-nums',
-                    f === state.trackLength ? 'text-amber-300' : 'text-slate-500'
+                    'absolute -translate-x-1/2 text-sm font-mono font-black tabular-nums',
+                    f === state.trackLength ? 'text-amber-300' : 'text-slate-400'
                   )}
                   style={{ left: `${pct}%` }}
                 >
@@ -432,13 +432,13 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
               );
             })}
           </div>
-          <div className="col-span-2 text-right text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">
-            Pos / Rank
+          <div className="col-span-2 text-right text-sm font-mono uppercase tracking-wider text-slate-400 font-black">
+            Furlongs
           </div>
         </div>
 
-        {/* Horizontal Racing Lanes */}
-        <div className="space-y-2.5">
+        {/* Bold Horizontal Racing Lanes */}
+        <div className="space-y-3">
           {state.racers.map((racer, idx) => {
             const isActive = idx === state.activePlayerIndex;
             const pct = Math.min(100, (racer.position / state.trackLength) * 100);
@@ -451,65 +451,63 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
               <div
                 key={racer.player.id}
                 className={cn(
-                  'rounded-xl p-2.5 sm:p-3 border transition-all',
+                  'rounded-2xl p-3 sm:p-4 border-2 transition-all',
                   isActive
-                    ? 'bg-slate-900/95 border-2'
-                    : 'bg-slate-950/75 border-white/[0.08]'
+                    ? 'bg-slate-900/95'
+                    : 'bg-slate-950/80 border-white/[0.08]'
                 )}
                 style={
                   isActive
                     ? {
                         borderColor: racer.player.colorHex,
-                        boxShadow: `0 0 22px -8px ${racer.player.colorHex}75`,
+                        boxShadow: `0 0 28px -8px ${racer.player.colorHex}80`,
                       }
                     : undefined
                 }
               >
-                <div className="grid grid-cols-12 items-center gap-2.5 sm:gap-3">
-                  {/* Left: Racer Identity & Target Badge */}
-                  <div className="col-span-5 sm:col-span-3 flex items-center gap-2.5 min-w-0">
+                <div className="grid grid-cols-12 items-center gap-3">
+                  {/* Left: Racer Identity & Big Target Badge */}
+                  <div className="col-span-5 sm:col-span-3 flex items-center gap-3 min-w-0">
                     <div
-                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex flex-col items-center justify-center font-black text-slate-950 shrink-0"
+                      className="w-14 h-14 rounded-2xl flex flex-col items-center justify-center font-black text-slate-950 shrink-0 shadow-md"
                       style={{ backgroundColor: racer.player.colorHex }}
                     >
-                      <span className="text-[11px] font-mono leading-none">
+                      <span className="text-xs font-mono font-black leading-none opacity-80">
                         P{racer.laneNumber}
                       </span>
-                      <span className="text-xs font-mono leading-none mt-0.5">
+                      <span className="text-xl sm:text-2xl font-mono font-black leading-none mt-0.5 tabular-nums">
                         #{racer.targetSegment}
                       </span>
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm sm:text-base font-extrabold text-white truncate">
-                          {racer.player.name}
-                        </span>
+                      <div className="text-xl sm:text-2xl font-black text-white truncate leading-tight">
+                        {racer.player.name}
                       </div>
-                      <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
+                      <div className="flex flex-wrap items-center gap-2 text-sm sm:text-base font-mono mt-0.5">
                         <span
-                          className="font-bold"
+                          className="font-black"
                           style={{ color: racer.player.colorHex }}
                         >
                           Target #{racer.targetSegment}
                         </span>
                         {isActive && (
-                          <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[9px] font-black uppercase">
-                            Up
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-sm font-black uppercase">
+                            UP
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Center: Horizontal Neon Track Lane */}
+                  {/* Center: Wide Bold Horizontal Neon Track Lane (h-16 sm:h-20) */}
                   <div className="col-span-7 sm:col-span-7">
-                    <div className="relative h-12 sm:h-14 rounded-xl bg-[#0A101C] border border-white/10 overflow-hidden flex items-center">
+                    <div className="relative h-16 sm:h-20 rounded-2xl bg-[#0A101C] border-2 border-white/10 overflow-hidden flex items-center">
                       {/* Furlong Vertical Grid Lines */}
                       {Array.from({ length: state.trackLength - 1 }, (_, i) => i + 1).map(
                         (tick) => (
                           <div
                             key={tick}
-                            className="absolute top-0 bottom-0 w-px bg-white/[0.06]"
+                            className="absolute top-0 bottom-0 w-px bg-white/[0.08]"
                             style={{ left: `${(tick / state.trackLength) * 100}%` }}
                           />
                         )
@@ -517,11 +515,11 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
 
                       {/* Checkered Finish Strip on Right Edge */}
                       <div
-                        className="absolute top-0 bottom-0 right-0 w-3.5 opacity-90 border-l border-white/30"
+                        className="absolute top-0 bottom-0 right-0 w-5 opacity-95 border-l-2 border-white/40"
                         style={{
                           backgroundImage:
                             'repeating-conic-gradient(#F8FAFC 0% 25%, #0F172A 0% 50%)',
-                          backgroundSize: '8px 8px',
+                          backgroundSize: '10px 10px',
                         }}
                       />
 
@@ -530,38 +528,40 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
                         className="absolute left-0 top-0 bottom-0 transition-all duration-500 ease-out"
                         style={{
                           width: `${pct}%`,
-                          background: `linear-gradient(90deg, ${racer.player.colorHex}18 0%, ${racer.player.colorHex}55 100%)`,
+                          background: `linear-gradient(90deg, ${racer.player.colorHex}22 0%, ${racer.player.colorHex}66 100%)`,
                           borderRight:
-                            pct > 0 ? `2px solid ${racer.player.colorHex}` : undefined,
+                            pct > 0 ? `3px solid ${racer.player.colorHex}` : undefined,
                         }}
                       />
 
-                      {/* Animated Racer Token */}
+                      {/* Oversized Glowing Racer Token */}
                       <div
                         className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out z-10"
                         style={{
-                          left: `clamp(22px, ${pct}%, calc(100% - 24px))`,
+                          left: `clamp(38px, ${pct}%, calc(100% - 42px))`,
                           transform: 'translate(-50%, -50%)',
                         }}
                       >
                         <div
                           className={cn(
-                            'relative flex items-center gap-1 px-2 py-1 rounded-full border-2 shadow-[0_0_16px_rgba(0,0,0,0.85)]',
+                            'relative flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border-[3px]',
                             justBoosted
                               ? 'scale-110 border-white'
                               : isActive
-                              ? 'border-white/90'
+                              ? 'border-white'
                               : 'border-slate-950/90'
                           )}
                           style={{
                             backgroundColor: racer.player.colorHex,
                             boxShadow: justBoosted
-                              ? `0 0 22px ${racer.player.colorHex}`
-                              : `0 2px 10px rgba(0,0,0,0.8)`,
+                              ? `0 0 28px ${racer.player.colorHex}, 0 0 12px #FFFFFF`
+                              : isActive
+                              ? `0 0 22px ${racer.player.colorHex}AA`
+                              : `0 3px 12px rgba(0,0,0,0.85)`,
                           }}
                         >
-                          <span className="text-sm sm:text-base leading-none">🐴</span>
-                          <span className="text-[11px] sm:text-xs font-mono font-black text-slate-950 leading-none">
+                          <span className="text-2xl sm:text-3xl leading-none">🐴</span>
+                          <span className="text-base sm:text-lg font-mono font-black text-slate-950 leading-none tabular-nums">
                             #{racer.targetSegment}
                           </span>
                         </div>
@@ -569,20 +569,20 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
                     </div>
                   </div>
 
-                  {/* Right: Numeric Progress + Rank */}
-                  <div className="col-span-12 sm:col-span-2 flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-1">
-                    <div className="text-lg sm:text-2xl font-black font-mono tabular-nums text-white leading-none">
+                  {/* Right: Big Furlong Count + Rank */}
+                  <div className="col-span-12 sm:col-span-2 flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-1.5">
+                    <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white leading-none">
                       {racer.position}
-                      <span className="text-xs sm:text-sm text-slate-500">
+                      <span className="text-base sm:text-lg text-slate-400 font-bold">
                         /{state.trackLength}
                       </span>
                     </div>
                     <span
                       className={cn(
-                        'text-[10px] font-mono font-black px-2 py-0.5 rounded-full uppercase tracking-wider',
+                        'text-sm font-mono font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider',
                         rank === 1 && racer.position > 0
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-400/40'
-                          : 'bg-white/[0.06] text-slate-400 border border-white/10'
+                          ? 'bg-amber-500/25 text-amber-200 border border-amber-400/60'
+                          : 'bg-white/[0.08] text-slate-300 border border-white/15'
                       )}
                     >
                       {formatOrdinal(rank)}
@@ -595,65 +595,63 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
         </div>
       </div>
 
-      {/* LOWER SECTION: Paired Color-Coded SvgDartboard + Current Visit & Lane Stats */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+      {/* LOWER SECTION: Paired Color-Coded SvgDartboard (580px) + Current Visit & Lane Stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Shared SvgDartboard with Every Racer's Color Wedge + Glowing Bullseye */}
-        <div className="xl:col-span-7 card-matte rounded-2xl p-4 sm:p-5 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="lg:col-span-7 card-matte rounded-2xl p-5 space-y-3 flex flex-col items-center">
+          <div className="w-full flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Target className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-white">
+              <Target className="w-5 h-5 text-emerald-400" />
+              <span className="text-base sm:text-lg font-black uppercase tracking-wider text-white">
                 Color-Coded Target Board
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-400/45 text-[11px] font-mono font-bold text-purple-200">
-                <Zap className="w-3 h-3" />
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/20 border border-purple-400/55 text-sm sm:text-base font-mono font-bold text-purple-200">
+                <Zap className="w-4 h-4" />
                 Bull +2 • 25 +1
               </span>
               {!isBoardConnected && (
-                <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
-                  Click any bed to throw
+                <span className="text-sm font-mono font-bold text-slate-400 hidden sm:inline">
+                  Click to throw
                 </span>
               )}
             </div>
           </div>
 
-          <div className="max-w-[440px] mx-auto">
-            <SvgDartboard
-              size={440}
-              segmentOverlays={segmentOverlays}
-              dimInactiveSegments={true}
-              onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
+          <SvgDartboard
+            size={580}
+            segmentOverlays={segmentOverlays}
+            dimInactiveSegments={true}
+            onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
+          >
+            {/* Subtle lightning badge on Bullseye */}
+            <text
+              x={200}
+              y={201}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill="#FFFFFF"
+              className="text-xs font-black pointer-events-none select-none"
             >
-              {/* Subtle lightning badge on Bullseye */}
-              <text
-                x={200}
-                y={201}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fill="#FFFFFF"
-                className="text-[10px] font-black pointer-events-none select-none"
-              >
-                ⚡
-              </text>
-              <DartPlotOverlay
-                sessionThrows={[]}
-                currentVisitThrows={activeVisitDarts}
-                mode="dots"
-              />
-            </SvgDartboard>
-          </div>
+              ⚡
+            </text>
+            <DartPlotOverlay
+              sessionThrows={[]}
+              currentVisitThrows={activeVisitDarts}
+              mode="dots"
+            />
+          </SvgDartboard>
         </div>
 
         {/* Right Column: 3-Dart Visit Strip + Race Telemetry */}
-        <div className="xl:col-span-5 space-y-4">
-          <div className="card-matte rounded-2xl p-4 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
+        <div className="lg:col-span-5 space-y-4">
+          <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-slate-300 font-black truncate">
                 Current Visit ({activeRacer.player.name})
               </span>
-              <span className="text-xs font-mono font-bold text-sky-400 tabular-nums">
+              <span className="text-sm sm:text-base font-mono font-black text-sky-400 tabular-nums shrink-0">
                 Target #{activeRacer.targetSegment}
               </span>
             </div>
@@ -668,35 +666,35 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
           </div>
 
           {/* Racer Breakdown Cards */}
-          <div className="card-matte rounded-2xl p-4 space-y-2.5">
+          <div className="card-matte rounded-2xl p-4 sm:p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
+              <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-slate-300 font-black">
                 Race Telemetry
               </span>
-              <span className="text-[11px] font-mono text-slate-500">
-                {state.totalDartsThrown} darts thrown
+              <span className="text-sm sm:text-base font-mono font-bold text-slate-400 tabular-nums">
+                {state.totalDartsThrown} darts
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2">
+            <div className="space-y-2.5">
               {state.racers.map((racer) => (
                 <div
                   key={racer.player.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950/65 border border-white/[0.07]"
+                  className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-slate-950/70 border border-white/[0.08]"
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <span
-                      className="w-3 h-3 rounded-full shrink-0"
+                      className="w-4 h-4 rounded-full shrink-0"
                       style={{ backgroundColor: racer.player.colorHex }}
                     />
-                    <span className="text-xs sm:text-sm font-bold text-white truncate">
+                    <span className="text-base sm:text-lg font-black text-white truncate">
                       {racer.player.name}
                     </span>
-                    <span className="text-[11px] font-mono text-slate-400">
+                    <span className="text-sm sm:text-base font-mono font-bold text-slate-400">
                       (#{racer.targetSegment})
                     </span>
                   </div>
-                  <div className="text-[11px] font-mono text-slate-400 shrink-0 tabular-nums">
+                  <div className="text-sm sm:text-base font-mono font-bold text-slate-300 shrink-0 tabular-nums">
                     {racer.selfHits} hits • {racer.bullBoosts}⚡
                     {state.helpRivals && racer.rivalsHelped > 0
                       ? ` • ${racer.rivalsHelped}🎁`

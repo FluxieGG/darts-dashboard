@@ -82,6 +82,7 @@ export interface RemoteKioskState {
     totalDartsThrown: number;
   };
   soundEnabled: boolean;
+  isRulesOpen: boolean;
   heatmapMode: 'dots' | 'density' | 'both';
   isAutoSimulating: boolean;
   layoutWidgets: Array<{
@@ -166,6 +167,7 @@ export type RemoteCommand =
   | { type: 'set_match_config'; key: string; value: string | number | boolean }
   | { type: 'start_match' }
   | { type: 'rematch' }
+  | { type: 'return_to_setup' }
   | { type: 'exit_game' }
   | { type: 'undo_last_action' }
   | { type: 'restart_match' }
@@ -176,6 +178,7 @@ export type RemoteCommand =
   | { type: 'inject_dart'; target: string }
   | { type: 'set_heatmap_mode'; mode: 'dots' | 'density' | 'both' }
   | { type: 'toggle_widget'; widgetId: WidgetId }
+  | { type: 'set_all_widgets_enabled'; enabled: boolean }
   | { type: 'move_widget'; widgetId: WidgetId; direction: 'up' | 'down' }
   | { type: 'set_widget_span'; widgetId: WidgetId; colSpan: 1 | 2 }
   | { type: 'reset_layout' }
@@ -209,4 +212,5 @@ export type RemoteCommand =
   | { type: 'online_match_reset_leg' }
   | { type: 'online_match_undo' }
   | { type: 'online_match_set_score'; remaining: number }
-  | { type: 'resync_and_recalibrate' };
+  | { type: 'resync_and_recalibrate' }
+  | { type: 'toggle_rules_overlay'; open?: boolean };

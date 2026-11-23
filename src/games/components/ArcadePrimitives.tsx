@@ -20,7 +20,7 @@ const CALLOUT_ACCENTS: Record<GameAccent, string> = {
 };
 
 /**
- * High-drama Flight Club / Roxy Ballroom callout banner (auto-dismissed by parent state)
+ * High-drama Flight Club / Roxy Ballroom callout banner (8-foot portrait kiosk glanceable)
  */
 export const CalloutBanner: React.FC<{ callout: GameCallout | null }> = ({ callout }) => {
   if (!callout) return null;
@@ -29,15 +29,15 @@ export const CalloutBanner: React.FC<{ callout: GameCallout | null }> = ({ callo
     <div
       key={callout.id}
       className={cn(
-        'w-full rounded-2xl border-2 px-5 py-3.5 text-center backdrop-blur-md transition-all animate-in fade-in zoom-in-95 duration-200',
+        'w-full rounded-2xl border-2 px-6 py-4 sm:py-5 text-center backdrop-blur-md transition-all animate-in fade-in zoom-in-95 duration-200',
         CALLOUT_ACCENTS[callout.accent]
       )}
     >
-      <div className="text-xl sm:text-3xl font-black tracking-tight uppercase leading-tight text-white">
+      <div className="text-2xl sm:text-4xl lg:text-5xl font-black tracking-tight uppercase leading-tight text-white">
         {callout.title}
       </div>
       {callout.subtitle && (
-        <div className="text-xs sm:text-base font-bold opacity-90 mt-0.5">{callout.subtitle}</div>
+        <div className="text-sm sm:text-xl font-bold opacity-95 mt-1">{callout.subtitle}</div>
       )}
     </div>
   );
@@ -75,8 +75,8 @@ export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
   const showTakeoutPrompt = turnComplete || darts.length >= 3 || boardStatus === 'takeout';
 
   return (
-    <div className="space-y-2.5">
-      <div className="grid grid-cols-3 gap-2.5">
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
         {[0, 1, 2].map((idx) => {
           const dart = darts[idx];
           const tone = dartTones?.[idx] || (dart ? (dart.score === 0 ? 'rose' : 'slate') : undefined);
@@ -86,26 +86,26 @@ export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
             <div
               key={idx}
               className={cn(
-                'relative flex flex-col items-center justify-center h-20 sm:h-24 rounded-xl border-2 transition-all',
+                'relative flex flex-col items-center justify-center h-24 sm:h-32 rounded-2xl border-2 transition-all',
                 dart && tone
                   ? PILL_TONES[tone]
-                  : 'bg-slate-900/50 border-dashed border-white/15 text-slate-600'
+                  : 'bg-slate-900/55 border-dashed border-white/15 text-slate-600'
               )}
             >
-              <span className="absolute top-1.5 left-2 text-[10px] font-mono font-bold opacity-65">
+              <span className="absolute top-2 left-3 text-xs sm:text-sm font-mono font-black opacity-70">
                 D{idx + 1}
               </span>
               {dart ? (
                 <>
-                  <span className="text-2xl sm:text-3xl font-black font-mono leading-none">
+                  <span className="text-3xl sm:text-5xl font-black font-mono leading-none tracking-tight">
                     {dart.segment.name}
                   </span>
-                  <span className="text-[11px] sm:text-xs font-bold mt-1 opacity-90 truncate max-w-[90%]">
+                  <span className="text-xs sm:text-base font-extrabold mt-1.5 opacity-95 truncate max-w-[92%]">
                     {customLabel ?? `${dart.score} pts`}
                   </span>
                 </>
               ) : (
-                <span className="text-2xl font-mono opacity-40">—</span>
+                <span className="text-3xl sm:text-4xl font-mono opacity-35">—</span>
               )}
             </div>
           );
@@ -113,9 +113,9 @@ export const VisitPillsStrip: React.FC<VisitPillsStripProps> = ({
       </div>
 
       {showTakeoutPrompt && (
-        <div className="w-full py-2.5 px-4 rounded-xl bg-amber-500/18 border border-amber-400/55 text-amber-200 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 animate-pulse">
+        <div className="w-full py-3.5 px-5 rounded-2xl bg-amber-500/20 border-2 border-amber-400/65 text-amber-200 font-black text-base sm:text-xl uppercase tracking-wider flex items-center justify-center gap-3 animate-pulse">
           <span>Pull Darts for Next Turn</span>
-          <ArrowRight className="w-4 h-4" />
+          <ArrowRight className="w-6 h-6" />
         </div>
       )}
     </div>

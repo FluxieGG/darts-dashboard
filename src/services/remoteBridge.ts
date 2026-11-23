@@ -127,6 +127,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
       totalDartsThrown: activeStats.totalDartsThrown,
     },
     soundEnabled: gameState.soundEnabled,
+    isRulesOpen: gameState.isRulesOverlayOpen,
     heatmapMode: settingsState.heatmapMode,
     isAutoSimulating: settingsState.isAutoSimulating,
     layoutWidgets: [...layoutState.layout.widgets]
@@ -334,6 +335,10 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       useLayoutStore.getState().toggleWidget(cmd.widgetId);
       break;
 
+    case 'set_all_widgets_enabled':
+      useLayoutStore.getState().setAllWidgetsEnabled(cmd.enabled);
+      break;
+
     case 'move_widget':
       useLayoutStore.getState().moveWidget(cmd.widgetId, cmd.direction);
       break;
@@ -482,6 +487,14 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       useOnlineMatchStore.getState().setRemainingManual(cmd.remaining);
       break;
 
+    case 'toggle_rules_overlay':
+      if (typeof cmd.open === 'boolean') {
+        gameStore.setRulesOverlayOpen(cmd.open);
+      } else {
+        gameStore.toggleRulesOverlay();
+      }
+      break;
+
     case 'resync_and_recalibrate': {
       devLogger.log('BOARD', 'info', 'iPad requested full Resync & Autodarts Camera Recalibration...');
       void (async () => {
@@ -536,7 +549,15 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       }
       break;
 
+    case 'return_to_setup':
+      if (gameStore.activeView === 'game-active') {
+        liveStore.clearCurrentVisit();
+        gameStore.returnToSetup();
+      }
+      break;
+
     case 'exit_game':
+      liveStore.clearCurrentVisit();
       gameStore.exitGameToLobby();
       break;
 

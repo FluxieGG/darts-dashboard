@@ -266,117 +266,133 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* TOP SPOTLIGHT: Active Thrower, Remaining Score, Mode Pill, Visit Strip */}
+      {/* TOP SPOTLIGHT: Active Thrower, Giant Remaining Score, Checkout Route, Visit Strip */}
       <div
-        className="card-matte rounded-2xl p-4 sm:p-5 space-y-4 border-2 transition-colors"
+        className="card-matte rounded-2xl p-5 sm:p-6 space-y-5 border-2 transition-colors"
         style={{
-          borderColor: state.isBust ? '#F43F5E' : `${activePlayer.colorHex}66`,
+          borderColor: state.isBust ? '#F43F5E' : `${activePlayer.colorHex}80`,
           boxShadow: state.isBust
-            ? '0 0 36px -8px rgba(244,63,94,0.65)'
-            : `0 0 32px -12px ${activePlayer.colorHex}66`,
+            ? '0 0 40px -8px rgba(244,63,94,0.7)'
+            : `0 0 38px -10px ${activePlayer.colorHex}66`,
         }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Active Player Identity */}
-          <div className="flex items-center gap-3.5 min-w-0">
-            <div
-              className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center font-black text-xl sm:text-2xl text-slate-950 shrink-0 shadow-lg"
-              style={{ backgroundColor: activePlayer.colorHex }}
-            >
-              {activePlayer.avatarInitial}
+        <div className="flex flex-wrap items-center justify-between gap-5">
+          {/* Left: Active Player Identity + Big Stat Tiles */}
+          <div className="flex flex-col gap-4 min-w-0 flex-1">
+            <div className="flex items-center gap-4 min-w-0">
+              <div
+                className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-black text-3xl sm:text-4xl text-slate-950 shrink-0 shadow-lg"
+                style={{ backgroundColor: activePlayer.colorHex }}
+              >
+                {activePlayer.avatarInitial}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm sm:text-base font-mono uppercase tracking-wider text-sky-400 font-black">
+                    RD {state.round} • {state.startScore}
+                  </span>
+                  <span
+                    className={cn(
+                      'px-3 py-0.5 rounded-lg text-sm font-mono font-black uppercase border',
+                      state.outRule === 'double'
+                        ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+                        : 'bg-sky-500/20 border-sky-400/50 text-sky-200'
+                    )}
+                  >
+                    {state.outRule === 'double' ? 'Double Out' : 'Straight Out'}
+                  </span>
+                </div>
+                <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight truncate leading-tight mt-0.5">
+                  {activePlayer.name}
+                </h2>
+              </div>
             </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-sky-400 font-bold">
-                  Round {state.round} • {state.startScore} Demolition
-                </span>
-                <span
+
+            {/* Big 3DA, Darts Thrown & Live Visit Tiles */}
+            <div className="grid grid-cols-3 gap-3 max-w-xl">
+              <div className="px-4 py-2.5 rounded-xl bg-slate-900/85 border border-white/10">
+                <div className="text-sm font-mono uppercase tracking-wider text-slate-400 font-bold">
+                  3-Dart Avg
+                </div>
+                <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-sky-300 leading-none mt-1">
+                  {activeAvg.toFixed(1)}
+                </div>
+              </div>
+
+              <div className="px-4 py-2.5 rounded-xl bg-slate-900/85 border border-white/10">
+                <div className="text-sm font-mono uppercase tracking-wider text-slate-400 font-bold">
+                  Darts
+                </div>
+                <div className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-slate-100 leading-none mt-1">
+                  {activePlayer.dartsThrown}
+                </div>
+              </div>
+
+              <div className="px-4 py-2.5 rounded-xl bg-slate-900/85 border border-white/10">
+                <div className="text-sm font-mono uppercase tracking-wider text-slate-400 font-bold">
+                  Visit
+                </div>
+                <div
                   className={cn(
-                    'px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase border',
-                    state.outRule === 'double'
-                      ? 'bg-amber-500/15 border-amber-400/40 text-amber-300'
-                      : 'bg-sky-500/15 border-sky-400/40 text-sky-300'
+                    'text-3xl sm:text-4xl font-black font-mono tabular-nums leading-none mt-1',
+                    state.isBust
+                      ? 'text-rose-400'
+                      : state.visitRunningScore >= 100
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
                   )}
                 >
-                  {state.outRule === 'double' ? 'Single In • Double Out' : 'Single In • Straight Out'}
-                </span>
+                  {state.isBust ? 'BUST' : state.visitRunningScore}
+                </div>
               </div>
-              <h2 className="text-2xl sm:text-4xl font-black text-white tracking-tight truncate leading-tight">
-                {activePlayer.name}
-              </h2>
             </div>
           </div>
 
-          {/* Active Stats: Visit Sum, 3DA, Massive Remaining Score */}
-          <div className="flex items-center gap-3 sm:gap-5">
-            <div className="hidden sm:block px-3.5 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-right">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                3-Dart Avg
-              </div>
-              <div className="text-2xl font-black font-mono tabular-nums text-sky-300 leading-none mt-0.5">
-                {activeAvg.toFixed(1)}
-              </div>
+          {/* Right: Giant Active Player Remaining Score */}
+          <div className="text-right shrink-0 pl-2">
+            <div className="text-sm sm:text-base font-mono uppercase tracking-widest text-slate-400 font-bold">
+              Remaining
             </div>
-
-            <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-right">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                Visit
-              </div>
-              <div
-                className={cn(
-                  'text-2xl sm:text-3xl font-black font-mono tabular-nums leading-none mt-0.5',
-                  state.isBust
-                    ? 'text-rose-400'
-                    : state.visitRunningScore >= 100
-                    ? 'text-amber-300'
-                    : 'text-emerald-300'
-                )}
-              >
-                {state.isBust ? 'BUST' : state.visitRunningScore}
-              </div>
-            </div>
-
-            <div className="text-right">
-              <div className="text-[10px] sm:text-xs font-mono uppercase tracking-wider text-slate-400">
-                Remaining
-              </div>
-              <div
-                className={cn(
-                  'text-4xl sm:text-6xl font-black font-mono tabular-nums leading-none mt-0.5',
-                  hasCheckoutHighlight ? 'text-emerald-300' : 'text-white'
-                )}
-              >
-                {activePlayer.score}
-              </div>
+            <div
+              className={cn(
+                'text-8xl lg:text-9xl font-black font-mono tabular-nums leading-none tracking-tight mt-1',
+                hasCheckoutHighlight
+                  ? 'text-emerald-300 drop-shadow-[0_0_24px_rgba(16,185,129,0.55)]'
+                  : state.isBust
+                  ? 'text-rose-400'
+                  : 'text-white'
+              )}
+            >
+              {activePlayer.score}
             </div>
           </div>
         </div>
 
-        {/* LIVE CHECKOUT ROUTE BANNER */}
+        {/* LIVE PDC CHECKOUT ROUTE BANNER */}
         {checkoutRoute ? (
-          <div className="rounded-xl border-2 border-emerald-400/60 bg-emerald-500/15 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-[0_0_24px_-6px_rgba(16,185,129,0.5)]">
-            <div className="flex items-center gap-2">
-              <Zap className="w-5 h-5 text-emerald-300 shrink-0" />
+          <div className="rounded-2xl border-2 border-emerald-400/70 bg-emerald-500/15 px-5 py-4 flex flex-wrap items-center justify-between gap-4 shadow-[0_0_30px_-6px_rgba(16,185,129,0.55)]">
+            <div className="flex items-center gap-3">
+              <Zap className="w-7 h-7 text-emerald-300 shrink-0" />
               <div>
-                <div className="text-xs sm:text-sm font-black uppercase tracking-wider text-emerald-200 leading-tight">
-                  Checkout Route ({activePlayer.score})
+                <div className="text-base sm:text-xl font-black uppercase tracking-wider text-emerald-200 leading-tight">
+                  Checkout Route • {activePlayer.score}
                 </div>
-                <div className="text-[11px] font-mono text-emerald-300/80">
-                  {state.outRule === 'double' ? 'Double or Bullseye to finish' : 'Target highlighted on board'} • {dartsLeft} dart{dartsLeft === 1 ? '' : 's'} in hand
+                <div className="text-sm sm:text-base font-mono text-emerald-200/85">
+                  {state.outRule === 'double' ? 'Finish on Double or Bull' : 'Highlighted on board'} • {dartsLeft} dart{dartsLeft === 1 ? '' : 's'} left
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
               {checkoutRoute.map((step, i) => (
                 <React.Fragment key={`${step}-${i}`}>
-                  {i > 0 && <ArrowRight className="w-4 h-4 text-emerald-400/70" />}
+                  {i > 0 && <ArrowRight className="w-6 h-6 sm:w-7 sm:h-7 text-emerald-300/80" />}
                   <span
                     className={cn(
-                      'px-3 sm:px-4 py-1.5 rounded-lg font-mono font-black text-base sm:text-xl tabular-nums border-2',
+                      'px-5 sm:px-6 py-2 sm:py-2.5 rounded-2xl font-mono font-black text-3xl sm:text-5xl tabular-nums leading-none border-2',
                       i === 0
-                        ? 'bg-emerald-400 text-slate-950 border-white shadow-[0_0_16px_rgba(16,185,129,0.75)]'
-                        : 'bg-slate-950/80 text-sky-200 border-sky-400/40'
+                        ? 'bg-emerald-400 text-slate-950 border-white shadow-[0_0_22px_rgba(16,185,129,0.85)]'
+                        : 'bg-slate-950/85 text-sky-200 border-sky-400/50'
                     )}
                   >
                     {step}
@@ -386,12 +402,14 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
             </div>
           </div>
         ) : state.isBust ? (
-          <div className="rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2.5 flex items-center justify-between gap-2 text-rose-200">
-            <span className="text-xs sm:text-sm font-black uppercase tracking-wider flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-rose-400" />
-              Turn Busted — Score Restored to {activePlayer.turnStartScore}
+          <div className="rounded-2xl border-2 border-rose-400/60 bg-rose-500/15 px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-rose-200">
+            <span className="text-base sm:text-xl font-black uppercase tracking-wider flex items-center gap-2.5">
+              <ShieldAlert className="w-6 h-6 text-rose-400 shrink-0" />
+              Turn Busted — Restored to {activePlayer.turnStartScore}
             </span>
-            <span className="text-xs font-mono opacity-80">Pull darts to continue</span>
+            <span className="text-sm sm:text-base font-mono font-bold opacity-90">
+              Pull darts to continue
+            </span>
           </div>
         ) : null}
 
@@ -408,24 +426,26 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
       {/* DRAMATIC CALLOUT BANNER */}
       <CalloutBanner callout={callout} />
 
-      {/* MAIN ARENA: SvgDartboard + Animated Demolition Score Towers */}
+      {/* MAIN ARENA: SvgDartboard + High-Contrast Demolition Score Towers */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
         {/* Interactive Dartboard with Live Checkout Highlight */}
         <div className="xl:col-span-6 card-matte rounded-2xl p-4 sm:p-5 flex flex-col items-center space-y-3">
-          <div className="w-full flex items-center justify-between text-xs font-mono text-slate-400">
-            <span className="flex items-center gap-1.5 font-bold text-sky-400 uppercase tracking-wider">
-              <Target className="w-4 h-4" />
+          <div className="w-full flex items-center justify-between gap-2 text-sm sm:text-base font-mono text-slate-300">
+            <span className="flex items-center gap-2 font-black text-sky-400 uppercase tracking-wider">
+              <Target className="w-5 h-5" />
               {hasCheckoutHighlight
                 ? `Checkout Guide: Aim ${checkoutRoute?.[0]}`
                 : 'Demolition Target Board'}
             </span>
             {!isBoardConnected && (
-              <span className="text-amber-300/90">Click any bed to test throw</span>
+              <span className="text-sm sm:text-base text-amber-300 font-bold">
+                Click bed to throw
+              </span>
             )}
           </div>
 
           <SvgDartboard
-            size={470}
+            size={660}
             segmentOverlays={segmentOverlays}
             dimInactiveSegments={hasCheckoutHighlight}
             onBoardClick={!isBoardConnected ? injectBoardClickThrow : undefined}
@@ -437,30 +457,30 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
             />
           </SvgDartboard>
 
-          <div className="w-full text-center text-xs sm:text-sm font-mono text-slate-400 pt-1">
+          <div className="w-full text-center text-sm sm:text-base font-mono text-slate-300 pt-1">
             {state.lastEventSummary}
           </div>
         </div>
 
         {/* VERTICAL ANIMATED SCORE TOWERS */}
         <div className="xl:col-span-6 card-matte rounded-2xl p-4 sm:p-5 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[11px] font-mono uppercase tracking-widest text-sky-400 font-bold">
+              <div className="text-sm font-mono uppercase tracking-widest text-sky-400 font-bold">
                 Demolition Arena
               </div>
-              <h3 className="text-lg sm:text-xl font-black text-white">
+              <h3 className="text-xl sm:text-2xl font-black text-white">
                 Score Towers ({state.startScore} → 0)
               </h3>
             </div>
-            <span className="text-xs font-mono text-slate-400">
+            <span className="text-sm sm:text-base font-mono font-bold text-slate-400">
               {state.players.length} Player{state.players.length === 1 ? '' : 's'}
             </span>
           </div>
 
           <div
             className={cn(
-              'grid gap-3',
+              'grid gap-3.5',
               state.players.length === 1
                 ? 'grid-cols-1'
                 : state.players.length === 2
@@ -484,37 +504,37 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
                 <div
                   key={p.id}
                   className={cn(
-                    'rounded-2xl p-3 sm:p-3.5 border-2 flex flex-col justify-between gap-3 transition-all',
+                    'rounded-2xl p-3.5 sm:p-4 border-2 flex flex-col justify-between gap-3 transition-all',
                     isCurrent
                       ? 'bg-slate-900/95 scale-[1.01]'
-                      : 'bg-slate-950/60 border-white/10 opacity-85'
+                      : 'bg-slate-950/65 border-white/10 opacity-90'
                   )}
                   style={
                     isCurrent
                       ? {
                           borderColor: isBustedActive ? '#F43F5E' : p.colorHex,
                           boxShadow: isBustedActive
-                            ? '0 0 26px -6px rgba(244,63,94,0.6)'
-                            : `0 0 24px -8px ${p.colorHex}80`,
+                            ? '0 0 28px -6px rgba(244,63,94,0.65)'
+                            : `0 0 26px -8px ${p.colorHex}85`,
                         }
                       : undefined
                   }
                 >
                   {/* Tower Header */}
-                  <div className="space-y-1 text-center">
-                    <div className="flex items-center justify-center gap-1.5">
+                  <div className="space-y-1.5 text-center">
+                    <div className="flex items-center justify-center gap-2">
                       <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        className="w-3.5 h-3.5 rounded-full shrink-0"
                         style={{ backgroundColor: p.colorHex }}
                       />
-                      <span className="text-xs sm:text-sm font-black text-white truncate">
+                      <span className="text-xl sm:text-2xl font-black text-white truncate">
                         {p.name}
                       </span>
                     </div>
 
                     <div
                       className={cn(
-                        'text-3xl sm:text-4xl font-black font-mono tabular-nums leading-none',
+                        'text-4xl sm:text-5xl font-black font-mono tabular-nums leading-none',
                         p.score === 0
                           ? 'text-emerald-400'
                           : canCheckoutIn3
@@ -525,22 +545,22 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
                       {p.score}
                     </div>
 
-                    <div className="h-4 flex items-center justify-center">
+                    <div className="min-h-[28px] flex items-center justify-center">
                       {p.score === 0 ? (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/50">
-                          DEMOLISHED!
+                        <span className="px-2.5 py-0.5 rounded-full text-sm font-mono font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/50">
+                          ZERO!
                         </span>
                       ) : canCheckoutIn3 ? (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 flex items-center gap-1">
-                          <Flame className="w-2.5 h-2.5" />
+                        <span className="px-2.5 py-0.5 rounded-full text-sm font-mono font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 flex items-center gap-1">
+                          <Flame className="w-4 h-4" />
                           Checkout
                         </span>
                       ) : isCurrent ? (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-sky-500/20 text-sky-300 border border-sky-400/40">
+                        <span className="px-2.5 py-0.5 rounded-full text-sm font-mono font-black uppercase bg-sky-500/20 text-sky-300 border border-sky-400/40">
                           Throwing
                         </span>
                       ) : (
-                        <span className="text-[10px] font-mono text-slate-500 tabular-nums">
+                        <span className="text-sm font-mono font-bold text-slate-400 tabular-nums">
                           {pctDemolished}% down
                         </span>
                       )}
@@ -548,7 +568,7 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
                   </div>
 
                   {/* Animated Vertical Demolition Tower Shaft */}
-                  <div className="relative h-44 sm:h-52 w-full rounded-xl bg-slate-950/90 border border-white/10 overflow-hidden flex items-end p-1">
+                  <div className="relative h-32 sm:h-40 xl:h-52 w-full rounded-xl bg-slate-950/90 border border-white/10 overflow-hidden flex items-end p-1">
                     {/* Structural Floor Guide Lines (25%, 50%, 75%) */}
                     <div className="pointer-events-none absolute inset-x-1 bottom-1/4 border-t border-dashed border-white/10 z-10" />
                     <div className="pointer-events-none absolute inset-x-1 bottom-1/2 border-t border-dashed border-white/15 z-10" />
@@ -591,30 +611,30 @@ export const DemolitionGame: React.FC<GameModuleProps> = ({
 
                     {/* Zero-level baseline badge when completely demolished */}
                     {p.score === 0 && (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs font-mono font-black text-emerald-300 uppercase tracking-widest">
+                      <div className="absolute inset-0 flex items-center justify-center text-base font-mono font-black text-emerald-300 uppercase tracking-widest">
                         ZERO!
                       </div>
                     )}
                   </div>
 
                   {/* Tower Footer Stats: 3DA & Last Visit */}
-                  <div className="grid grid-cols-2 gap-1.5 text-center pt-0.5">
-                    <div className="rounded-lg bg-slate-950/80 border border-white/5 py-1.5 px-1">
-                      <div className="text-[9px] font-mono uppercase text-slate-500">3DA</div>
-                      <div className="text-xs sm:text-sm font-black font-mono tabular-nums text-sky-300">
+                  <div className="grid grid-cols-2 gap-2 text-center pt-0.5">
+                    <div className="rounded-xl bg-slate-950/85 border border-white/10 py-2 px-1.5">
+                      <div className="text-sm font-mono uppercase text-slate-400 font-bold">3DA</div>
+                      <div className="text-lg sm:text-xl font-black font-mono tabular-nums text-sky-300 leading-tight">
                         {avg.toFixed(1)}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-slate-950/80 border border-white/5 py-1.5 px-1">
-                      <div className="text-[9px] font-mono uppercase text-slate-500">Last</div>
+                    <div className="rounded-xl bg-slate-950/85 border border-white/10 py-2 px-1.5">
+                      <div className="text-sm font-mono uppercase text-slate-400 font-bold">Last</div>
                       <div
                         className={cn(
-                          'text-xs sm:text-sm font-black font-mono tabular-nums',
+                          'text-lg sm:text-xl font-black font-mono tabular-nums leading-tight',
                           p.lastVisitWasBust
                             ? 'text-rose-400'
                             : (p.lastVisitScore ?? 0) >= 100
                             ? 'text-amber-300'
-                            : 'text-slate-200'
+                            : 'text-slate-100'
                         )}
                       >
                         {p.lastVisitWasBust
