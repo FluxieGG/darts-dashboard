@@ -23,19 +23,116 @@
   let sessionStartScore = 501;
   let lastMatchUrl = '';
   const submittedVisitIds = new Set();
+  const MAX_SUBMITTED_VISIT_IDS = 200;
+  const inviteFirstSeenMap = new Map();
+  let lastDomInviteScrapeAt = 0;
+  let cachedDomInvites = [];
+  let tornDown = false;
+  let pollIntervalId = null;
+  let mutTimer = null;
+  let observer = null;
   const PENDING_CMD_STORAGE_KEY = '__AD_PENDING_DC_CMD_V2__';
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function rememberSubmittedVisit(id) {
+    if (!id) return;
+    submittedVisitIds.add(id);
+    while (submittedVisitIds.size > MAX_SUBMITTED_VISIT_IDS) {
+      const oldest = submittedVisitIds.values().next().value;
+      submittedVisitIds.delete(oldest);
+    }
+  }
+
+  function onNgSnapshot() {
+    if (tornDown) return;
+    pushStateIfChanged(false);
+  }
+
+  function teardownExtension() {
+    if (tornDown) return;
+    tornDown = true;
+    if (pollIntervalId !== null) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
+    if (mutTimer !== null) {
+      clearTimeout(mutTimer);
+      mutTimer = null;
+    }
+    if (observer) {
+      try {
+        observer.disconnect();
+      } catch {
+        // ignore
+      }
+      observer = null;
+    }
+    try {
+      window.removeEventListener('ad-dc-ng-snapshot', onNgSnapshot);
+    } catch {
+      // ignore
+    }
+  }
+
+  function safeSendMessage(msg, cb) {
+    if (tornDown) return;
+    try {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+        teardownExtension();
+        return;
+      }
+      if (typeof cb === 'function') {
+        chrome.runtime.sendMessage(msg, (resp) => {
+          const err = chrome.runtime?.lastError;
+          if (err) {
+            if (/Extension context invalidated/i.test(err.message || '')) {
+              teardownExtension();
+            }
+            return;
+          }
+          cb(resp);
+        });
+      } else {
+        const res = chrome.runtime.sendMessage(msg);
+        res?.catch?.((err) => {
+          if (/Extension context invalidated/i.test(err?.message || '')) {
+            teardownExtension();
+          }
+        });
+      }
+    } catch (err) {
+      if (/Extension context invalidated/i.test(err?.message || '')) {
+        teardownExtension();
+      }
+    }
+  }
 
   // Ensure MAIN-world Angular bridge is injected even on tabs opened before extension update
   function ensureMainWorldPageBridge() {
+    if (tornDown) return;
     if (document.documentElement?.dataset?.adPageBridgeReady === '1') return;
     try {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+        teardownExtension();
+        return;
+      }
       const script = document.createElement('script');
       script.src = chrome.runtime.getURL('page-bridge.js');
       script.async = false;
       (document.head || document.documentElement).appendChild(script);
       script.onload = () => script.remove();
-    } catch {
-      // ignore
+    } catch (err) {
+      if (/Extension context invalidated/i.test(err?.message || '')) {
+        teardownExtension();
+      }
     }
   }
   ensureMainWorldPageBridge();
@@ -86,6 +183,7 @@
   // =========================================================================
   let hudEl = null;
   let hudCollapsed = false;
+  let lastHudSig = '';
 
   function ensureHud() {
     if (hudEl && document.body.contains(hudEl)) return hudEl;
@@ -111,11 +209,12 @@
     });
     document.body.appendChild(el);
     hudEl = el;
+    lastHudSig = '';
     return el;
   }
 
   function renderHud() {
-    if (!document.body) return;
+    if (tornDown || !document.body) return;
     const el = ensureHud();
     const dotColor = !kioskConnected
       ? '#F43F5E'
@@ -130,12 +229,42 @@
         ? 'SYNC'
         : 'CONFIRM';
 
+    const friendsCount =
+      lastScrapedState?.onlineFriends?.filter((f) =>
+        ['online', 'in_lobby', 'in_queue', 'spectating', 'busy', 'online_game', 'local_game'].includes(
+          f.status
+        )
+      ).length || 0;
+
+    const st = lastScrapedState;
+    const hudSig = hudCollapsed
+      ? `C|${dotColor}|${modeLabel}`
+      : [
+          'E',
+          dotColor,
+          modeLabel,
+          settings.paused ? '1' : '0',
+          st?.isMatchActive ? '1' : '0',
+          st?.playerName ?? '',
+          st?.playerRemaining ?? '',
+          st?.opponentName ?? '',
+          st?.opponentRemaining ?? '',
+          st?.playerLegs ?? '',
+          st?.opponentLegs ?? '',
+          st?.isPlayerTurn ? '1' : '0',
+          friendsCount,
+          lastSubmitMessage,
+        ].join('|');
+
+    if (hudSig === lastHudSig) return;
+    lastHudSig = hudSig;
+
     if (hudCollapsed) {
       el.innerHTML = `
         <div style="display:flex;align-items:center;gap:6px;cursor:pointer;" id="ad-hud-toggle">
           <span style="width:8px;height:8px;border-radius:999px;background:${dotColor};display:inline-block;"></span>
           <strong style="letter-spacing:0.04em;">AD BRIDGE</strong>
-          <span style="color:#F76505;font-weight:700;">${modeLabel}</span>
+          <span style="color:#F76505;font-weight:700;">${escapeHtml(modeLabel)}</span>
         </div>
       `;
       el.querySelector('#ad-hud-toggle')?.addEventListener('click', () => {
@@ -145,18 +274,12 @@
       return;
     }
 
-    const friendsCount = lastScrapedState?.onlineFriends?.filter((f) =>
-      ['online', 'in_lobby', 'in_queue', 'spectating', 'busy', 'online_game', 'local_game'].includes(
-        f.status
-      )
-    ).length || 0;
-
-    const matchLine = lastScrapedState?.isMatchActive
-      ? `${lastScrapedState.playerName}: <strong>${lastScrapedState.playerRemaining}</strong> vs ${lastScrapedState.opponentName}: <strong>${lastScrapedState.opponentRemaining ?? '—'}</strong> (${lastScrapedState.playerLegs}-${lastScrapedState.opponentLegs})`
+    const matchLine = st?.isMatchActive
+      ? `${escapeHtml(st.playerName)}: <strong>${escapeHtml(st.playerRemaining)}</strong> vs ${escapeHtml(st.opponentName)}: <strong>${escapeHtml(st.opponentRemaining ?? '—')}</strong> (${escapeHtml(st.playerLegs)}-${escapeHtml(st.opponentLegs)})`
       : `Ready • ${friendsCount} friend${friendsCount === 1 ? '' : 's'} online`;
 
-    const turnBadge = lastScrapedState?.isMatchActive
-      ? lastScrapedState.isPlayerTurn
+    const turnBadge = st?.isMatchActive
+      ? st.isPlayerTurn
         ? '<span style="color:#34D399;font-weight:700;">YOUR TURN</span>'
         : '<span style="color:#FBBF24;font-weight:700;">OPP TURN</span>'
       : '';
@@ -168,7 +291,7 @@
           <strong style="font-size:11px;letter-spacing:0.05em;">AUTODARTS BRIDGE v1.3</strong>
         </div>
         <div style="display:flex;align-items:center;gap:4px;">
-          <span style="padding:1px 6px;border-radius:6px;background:rgba(247,101,5,0.2);border:1px solid rgba(247,101,5,0.45);color:#FDBA74;font-size:10px;font-weight:700;">${modeLabel}</span>
+          <span style="padding:1px 6px;border-radius:6px;background:rgba(247,101,5,0.2);border:1px solid rgba(247,101,5,0.45);color:#FDBA74;font-size:10px;font-weight:700;">${escapeHtml(modeLabel)}</span>
           <button id="ad-hud-pause" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#E2E8F0;border-radius:6px;padding:1px 6px;cursor:pointer;font-size:10px;">${settings.paused ? 'Resume' : 'Pause'}</button>
           <button id="ad-hud-min" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:12px;padding:0 2px;">–</button>
         </div>
@@ -176,7 +299,7 @@
       <div style="color:#CBD5E1;font-size:10.5px;">${matchLine} ${turnBadge}</div>
       ${
         lastSubmitMessage
-          ? `<div style="color:#38BDF8;font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${lastSubmitMessage}</div>`
+          ? `<div style="color:#38BDF8;font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(lastSubmitMessage)}</div>`
           : ''
       }
     `;
@@ -187,7 +310,7 @@
     });
     el.querySelector('#ad-hud-pause')?.addEventListener('click', () => {
       settings.paused = !settings.paused;
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type: 'popup_update_settings',
         partial: { paused: settings.paused },
       });
@@ -289,6 +412,13 @@
     return Array.from(friendsMap.values());
   }
 
+  function getStableInviteDetectedAt(id, fallbackTs) {
+    if (!inviteFirstSeenMap.has(id)) {
+      inviteFirstSeenMap.set(id, typeof fallbackTs === 'number' ? fallbackTs : Date.now());
+    }
+    return inviteFirstSeenMap.get(id);
+  }
+
   function scrapePendingInvitesFromDomAndNg(ngSnap) {
     const invites = [];
     const seenKeys = new Set();
@@ -299,54 +429,93 @@
         if (inv && inv.fromName) {
           const key = `${inv.fromName.toLowerCase()}`;
           seenKeys.add(key);
-          invites.push(inv);
+          const id = String(inv.id || `ng-inv-${key}`);
+          invites.push({
+            ...inv,
+            id,
+            detectedAt: getStableInviteDetectedAt(id, inv.detectedAt),
+          });
         }
       }
     }
 
-    // 2. DOM Supplement: Scrape any incoming invite dialog or card with Accept & Decline buttons
-    const acceptBtns = getAllClickableButtons().filter((b) => {
-      const t = (b.textContent || '').trim().toLowerCase();
-      return /^(accept|accept\s*invite|accept\s*challenge)$/.test(t);
-    });
+    // 2. DOM Supplement: Avoid expensive queryAllDeep('*') unless a dialog/invite overlay exists,
+    //    and throttle DOM invite fallback scraping to at most once every 1500ms.
+    const hasInviteSurface = Boolean(
+      document.querySelector(
+        'ion-modal, ion-alert, [role="dialog"], [role="alertdialog"], app-incoming-game-invite-dialog, app-game-invite-dialog, .swal2-container, [class*="invite"]'
+      )
+    );
 
-    for (const btn of acceptBtns) {
-      let card = btn.parentElement;
-      for (let d = 0; d < 6 && card && card.parentElement; d++) {
-        const txt = (card.innerText || '').trim();
-        if (
-          txt.length >= 10 &&
-          txt.length <= 320 &&
-          /(invite|challenge|wants\s*to\s*play|501|301|701|decline|reject)/i.test(txt)
-        ) {
-          break;
+    if (!hasInviteSurface) {
+      cachedDomInvites = [];
+    } else {
+      const now = Date.now();
+      if (now - lastDomInviteScrapeAt >= 1500) {
+        lastDomInviteScrapeAt = now;
+        const freshDomInvites = [];
+        const domSeenKeys = new Set();
+        const acceptBtns = getAllClickableButtons().filter((b) => {
+          const t = (b.textContent || '').trim().toLowerCase();
+          return /^(accept|accept\s*invite|accept\s*challenge)$/.test(t);
+        });
+
+        for (const btn of acceptBtns) {
+          let card = btn.parentElement;
+          for (let d = 0; d < 6 && card && card.parentElement; d++) {
+            const txt = (card.textContent || '').trim();
+            if (
+              txt.length >= 10 &&
+              txt.length <= 320 &&
+              /(invite|challenge|wants\s*to\s*play|501|301|701|decline|reject)/i.test(txt)
+            ) {
+              break;
+            }
+            card = card.parentElement;
+          }
+          if (!card) continue;
+          const rawText = (card.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!/(invite|challenge|wants\s*to\s*play|decline|reject)/i.test(rawText)) continue;
+
+          const invMatch = rawText.match(
+            /^(.{2,28}?)\s+(?:invited\s+you|challenges?\s+you|wants\s+to\s+play)/i
+          );
+          const fromName = invMatch
+            ? invMatch[1].trim()
+            : rawText.split(/\s+/)[0]?.slice(0, 24) || 'Friend';
+
+          const key = fromName.toLowerCase();
+          if (domSeenKeys.has(key)) continue;
+          domSeenKeys.add(key);
+
+          const gameMatch = rawText.match(/(501|301|701)[^.\n]{0,40}/i);
+          const summary = gameMatch ? gameMatch[0].trim() : 'Online Match Invite';
+          const id = `dom-inv-${key.replace(/[^a-z0-9]/g, '').slice(0, 18)}`;
+
+          freshDomInvites.push({
+            id,
+            fromName,
+            summary,
+            detectedAt: getStableInviteDetectedAt(id),
+          });
         }
-        card = card.parentElement;
+        cachedDomInvites = freshDomInvites;
       }
-      if (!card) continue;
-      const rawText = (card.innerText || '').replace(/\s+/g, ' ').trim();
-      if (!/(invite|challenge|wants\s*to\s*play|decline|reject)/i.test(rawText)) continue;
 
-      const invMatch = rawText.match(
-        /^(.{2,28}?)\s+(?:invited\s+you|challenges?\s+you|wants\s+to\s+play)/i
-      );
-      const fromName = invMatch
-        ? invMatch[1].trim()
-        : rawText.split(/\s+/)[0]?.slice(0, 24) || 'Friend';
+      for (const domInv of cachedDomInvites) {
+        const key = domInv.fromName.toLowerCase();
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        invites.push(domInv);
+      }
+    }
 
-      const key = fromName.toLowerCase();
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      const gameMatch = rawText.match(/(501|301|701)[^.\n]{0,40}/i);
-      const summary = gameMatch ? gameMatch[0].trim() : 'Online Match Invite';
-
-      invites.push({
-        id: `dom-inv-${key.replace(/[^a-z0-9]/g, '').slice(0, 18)}`,
-        fromName,
-        summary,
-        detectedAt: Date.now(),
-      });
+    // Prune first-seen timestamps for invites that are no longer present
+    const activeIds = new Set(invites.map((i) => i.id));
+    for (const id of inviteFirstSeenMap.keys()) {
+      if (!activeIds.has(id)) {
+        inviteFirstSeenMap.delete(id);
+      }
     }
 
     return invites;
@@ -490,7 +659,7 @@
 
     const pageHeader = (
       document.querySelector('app-page-layout [pagetitle]')?.textContent ||
-      document.body.innerText.slice(0, 450)
+      (document.body?.textContent || '').slice(0, 450)
     ).toLowerCase();
 
     const outRule = /straight\s*out/i.test(pageHeader) ? 'straight' : 'double';
@@ -607,22 +776,37 @@
   }
 
   function pushStateIfChanged(force = false) {
+    if (tornDown) return;
     const state = scrapeDartCounterState();
     lastScrapedState = state;
-    const { updatedAt: _omit, ...comparable } = state;
+    const { updatedAt: _omit, pendingInvites, ...rest } = state;
+    const comparable = {
+      ...rest,
+      pendingInvites: Array.isArray(pendingInvites)
+        ? pendingInvites.map(({ detectedAt: _ts, ...inv }) => inv)
+        : [],
+    };
     const hash = JSON.stringify(comparable);
     if (force || hash !== lastStateHash) {
       lastStateHash = hash;
-      chrome.runtime.sendMessage({ type: 'dc_state_update', state }, (resp) => {
-        if (chrome.runtime.lastError) return;
+      renderHud();
+      safeSendMessage({ type: 'dc_state_update', state }, (resp) => {
         if (resp) {
+          const prevConnected = kioskConnected;
+          const prevMode = settings.mode;
+          const prevPaused = settings.paused;
           kioskConnected = Boolean(resp.kioskConnected);
           if (resp.settings) settings = { ...settings, ...resp.settings };
-          renderHud();
+          if (
+            prevConnected !== kioskConnected ||
+            prevMode !== settings.mode ||
+            prevPaused !== settings.paused
+          ) {
+            renderHud();
+          }
         }
       });
     }
-    renderHud();
   }
 
   // =========================================================================
@@ -651,7 +835,7 @@
   function reportSubmitResult(visitId, ok, score, message) {
     lastSubmitMessage = message;
     renderHud();
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'dc_submit_result',
       result: {
         visitId,
@@ -755,11 +939,11 @@
     }
 
     // 1. Primary: Ask MAIN-world Angular bridge to submit directly to MatchComponent / KeyboardScoreInputComponent
-    const ngRes = await sendPageBridgeCommand('submit_visit', { visit }, 5200);
+    //    Timeout (6000ms) sits cleanly above page-bridge.js's capped 3.5s readiness loop to prevent double-submission.
+    const ngRes = await sendPageBridgeCommand('submit_visit', { visit }, 6000);
     if (ngRes && ngRes.handled && ngRes.ok) {
-      submittedVisitIds.add(visit.id);
+      rememberSubmittedVisit(visit.id);
       reportSubmitResult(visit.id, true, visit.score, ngRes.message);
-      void autoHandlePostSubmitDialogsDom(visit);
       setTimeout(() => pushStateIfChanged(true), 350);
       setTimeout(() => pushStateIfChanged(true), 1200);
       return;
@@ -790,7 +974,7 @@
       'input[inputmode="numeric"], input[type="text"], input[type="number"]'
     );
     if (scoreInput) {
-      submittedVisitIds.add(visit.id);
+      rememberSubmittedVisit(visit.id);
       const nativeSetter = Object.getOwnPropertyDescriptor(
         window.HTMLInputElement.prototype,
         'value'
@@ -834,7 +1018,7 @@
     // Strategy B: <app-numbers-keyboard> on-screen 0-9 keypad + submit-button
     const numbersKb = document.querySelector('app-numbers-keyboard');
     if (numbersKb) {
-      submittedVisitIds.add(visit.id);
+      rememberSubmittedVisit(visit.id);
       const keyBtns = Array.from(numbersKb.querySelectorAll('button.key'));
       for (const ch of scoreStr) {
         const dBtn = keyBtns.find((b) => (b.textContent || '').trim() === ch);
@@ -867,7 +1051,7 @@
   function reportControlResult(action, ok, message) {
     lastSubmitMessage = message;
     renderHud();
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'dc_control_result',
       result: {
         action,
@@ -1149,28 +1333,29 @@
   // =========================================================================
   // MESSAGE LISTENERS + OBSERVERS
   // =========================================================================
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 'bridge_status') {
-      kioskConnected = Boolean(msg.kioskConnected);
-      if (msg.settings) settings = { ...settings, ...msg.settings };
-      renderHud();
-    } else if (msg.type === 'submit_visit' && msg.visit) {
-      if (msg.settings) settings = { ...settings, ...msg.settings };
-      void submitVisitToDartCounter(msg.visit);
-    } else if (msg.type === 'dc_control_command' && msg.command) {
-      void executeControlCommand(msg.command);
-    } else if (msg.type === 'force_scrape') {
-      pushStateIfChanged(true);
-    }
-  });
+  try {
+    chrome.runtime?.onMessage?.addListener((msg) => {
+      if (tornDown || !msg || typeof msg !== 'object') return;
+      if (msg.type === 'bridge_status') {
+        kioskConnected = Boolean(msg.kioskConnected);
+        if (msg.settings) settings = { ...settings, ...msg.settings };
+        renderHud();
+      } else if (msg.type === 'submit_visit' && msg.visit) {
+        if (msg.settings) settings = { ...settings, ...msg.settings };
+        void submitVisitToDartCounter(msg.visit);
+      } else if (msg.type === 'dc_control_command' && msg.command) {
+        void executeControlCommand(msg.command);
+      } else if (msg.type === 'force_scrape') {
+        pushStateIfChanged(true);
+      }
+    });
+  } catch {
+    // ignore
+  }
 
-  window.addEventListener('ad-dc-ng-snapshot', () => {
-    pushStateIfChanged(false);
-  });
+  window.addEventListener('ad-dc-ng-snapshot', onNgSnapshot);
 
-  chrome.runtime.sendMessage({ type: 'content_heartbeat' }, (resp) => {
-    if (chrome.runtime.lastError) return;
+  safeSendMessage({ type: 'content_heartbeat' }, (resp) => {
     if (resp) {
       kioskConnected = Boolean(resp.kioskConnected);
       if (resp.settings) settings = { ...settings, ...resp.settings };
@@ -1181,19 +1366,23 @@
 
   // Resume any pending command that triggered a route navigation reload
   setTimeout(() => {
+    if (tornDown) return;
     const pendingCmd = consumePendingCommandAfterReload();
     if (pendingCmd) {
       void executeControlCommand(pendingCmd);
     }
   }, 650);
 
-  setInterval(() => {
+  pollIntervalId = setInterval(() => {
+    if (tornDown) return;
     ensureMainWorldPageBridge();
     pushStateIfChanged(false);
-    chrome.runtime.sendMessage({ type: 'content_heartbeat' }, (resp) => {
-      if (chrome.runtime.lastError) return;
+    safeSendMessage({ type: 'content_heartbeat' }, (resp) => {
       if (resp) {
-        const changed = kioskConnected !== Boolean(resp.kioskConnected);
+        const changed =
+          kioskConnected !== Boolean(resp.kioskConnected) ||
+          (resp.settings &&
+            (settings.mode !== resp.settings.mode || settings.paused !== resp.settings.paused));
         kioskConnected = Boolean(resp.kioskConnected);
         if (resp.settings) settings = { ...settings, ...resp.settings };
         if (changed) renderHud();
@@ -1201,19 +1390,44 @@
     });
   }, 950);
 
-  let mutTimer = null;
-  const observer = new MutationObserver(() => {
+  function isIgnoredMutation(m) {
+    if (!m) return true;
+    if (m.type === 'attributes' && m.attributeName === 'data-ad-ng-snapshot') {
+      return true;
+    }
+    const target = m.target;
+    if (!target) return true;
+    if (hudEl) {
+      if (target === hudEl) return true;
+      if (target.nodeType === 1 && hudEl.contains(target)) return true;
+      if (target.parentNode && hudEl.contains(target.parentNode)) return true;
+    }
+    if (
+      target.nodeType === 1 &&
+      (target.id === 'ad-dc-bridge-hud' || target.closest?.('#ad-dc-bridge-hud'))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  observer = new MutationObserver((mutations) => {
+    if (tornDown) return;
+    const hasRelevant = mutations.some((m) => !isIgnoredMutation(m));
+    if (!hasRelevant) return;
     if (mutTimer) return;
     mutTimer = setTimeout(() => {
       mutTimer = null;
       pushStateIfChanged(false);
     }, 150);
   });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-  });
+  if (document.documentElement) {
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
 
   renderHud();
 })();

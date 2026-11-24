@@ -37,7 +37,7 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
 
   const stateRef = useRef<SnookerState>(state);
   const turnStartStateRef = useRef<SnookerState>(state);
-  const historyRef = useRef<SnookerState[]>([]);
+  const historyRef = useRef<Array<{ state: SnookerState; turnStartState: SnookerState }>>([]);
   const startedAtRef = useRef<number>(Date.now());
   const hasCompletedRef = useRef<boolean>(false);
   const calloutTimerRef = useRef<number | null>(null);
@@ -115,8 +115,8 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
   );
 
   const handleUndo = useCallback(() => {
-    const prev = historyRef.current.pop();
-    if (!prev) return;
+    const snap = historyRef.current.pop();
+    if (!snap) return;
 
     if (completionTimerRef.current !== null) {
       window.clearTimeout(completionTimerRef.current);
@@ -124,14 +124,12 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
     }
     hasCompletedRef.current = false;
 
-    stateRef.current = prev;
-    if (prev.currentVisitDarts.length === 0) {
-      turnStartStateRef.current = prev;
-    }
-    setState(prev);
+    stateRef.current = snap.state;
+    turnStartStateRef.current = snap.turnStartState;
+    setState(snap.state);
     setHistoryLen(historyRef.current.length);
     setCallout(null);
-    gameEventBus.resetVisitBuffer(prev.currentVisitDarts);
+    gameEventBus.resetVisitBuffer(snap.state.currentVisitDarts);
   }, []);
 
   const handleRestart = useCallback(() => {
@@ -154,7 +152,7 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, historyLen]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(historyLen > 0);
@@ -166,7 +164,7 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
       const current = stateRef.current;
       if (current.isFinished || current.turnComplete) return;
 
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartStateRef.current });
       setHistoryLen(historyRef.current.length);
 
       const { nextState, feedback } = applyDartToState(current, dart);
@@ -207,7 +205,7 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
       if (current.isFinished) return;
       if (current.currentVisitDarts.length === 0 && !current.turnComplete) return;
 
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartStateRef.current });
       setHistoryLen(historyRef.current.length);
 
       const next = advanceTurn(current);
@@ -310,6 +308,8 @@ export const SnookerGame: React.FC<GameModuleProps> = ({
       dotColor: '#A855F7',
     };
   }, [state.targetPhase, clearanceColour]);
+
+  if (!activePlayer) return null;
 
   return (
     <div className="space-y-4">

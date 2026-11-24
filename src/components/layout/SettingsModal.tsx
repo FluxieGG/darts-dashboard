@@ -17,9 +17,7 @@ import {
   Video,
   VideoOff,
   FolderOpen,
-  FlaskConical,
   RefreshCw,
-  Mic,
   Clapperboard,
 } from 'lucide-react';
 import { DataConnectionMode } from '../../types/config';
@@ -35,6 +33,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   isLocalConnected,
 }) => {
+  if (!isOpen) return null;
+  return <SettingsModalContent onClose={onClose} isLocalConnected={isLocalConnected} />;
+};
+
+const SettingsModalContent: React.FC<{
+  onClose: () => void;
+  isLocalConnected: boolean;
+}> = ({ onClose, isLocalConnected }) => {
   const {
     dataMode,
     setDataMode,
@@ -55,20 +61,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     availableCameras,
     autoStartCamera,
     selectedDeviceId,
-    includeAudio,
     saveDir,
     triggers,
-    devCaptureNextDartArmed,
     refreshCameras,
     startCamera,
     stopCamera,
     setAutoStartCamera,
     setSelectedDeviceId,
-    setIncludeAudio,
     setSaveDir,
     updateTrigger,
-    armDevNextDartCapture,
-    cancelDevNextDartCapture,
     openGallery,
   } = useReplayStore();
 
@@ -78,41 +79,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [saveDirInput, setSaveDirInput] = useState(saveDir);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [dirSaved, setDirSaved] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const savedSuccessTimerRef = useRef<number | null>(null);
+  const dirSavedTimerRef = useRef<number | null>(null);
+  const confirmResetTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      void refreshCameras();
-      setSaveDirInput(saveDir);
-      setWsUrlInput(localWsUrl);
-      setHttpUrlInput(localHttpUrl);
-      setClientIdInput(cloudClientId);
-    }
-  }, [isOpen, refreshCameras, saveDir, localWsUrl, localHttpUrl, cloudClientId]);
+    return () => {
+      if (savedSuccessTimerRef.current !== null) {
+        window.clearTimeout(savedSuccessTimerRef.current);
+        savedSuccessTimerRef.current = null;
+      }
+      if (dirSavedTimerRef.current !== null) {
+        window.clearTimeout(dirSavedTimerRef.current);
+        dirSavedTimerRef.current = null;
+      }
+      if (confirmResetTimerRef.current !== null) {
+        window.clearTimeout(confirmResetTimerRef.current);
+        confirmResetTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    void refreshCameras();
+    setSaveDirInput(saveDir);
+    setWsUrlInput(localWsUrl);
+    setHttpUrlInput(localHttpUrl);
+    setClientIdInput(cloudClientId);
+  }, [refreshCameras, saveDir, localWsUrl, localHttpUrl, cloudClientId]);
 
   useEffect(() => {
     const videoEl = previewVideoRef.current;
     if (!videoEl) return;
-    if (isOpen && (camStatus === 'buffering' || camStatus === 'capturing')) {
+    if (camStatus === 'buffering' || camStatus === 'capturing') {
       videoEl.srcObject = ocheCamService.getStream();
     } else {
       videoEl.srcObject = null;
     }
-  }, [isOpen, camStatus]);
-
-  /* [DEV-TEST: REMOVE WHEN DONE] Auto-starts camera if idle and arms next-dart capture */
-  const handleArmDevCapture = async () => {
-    if (devCaptureNextDartArmed) {
-      cancelDevNextDartCapture();
-      return;
-    }
-    if (camStatus !== 'buffering' && camStatus !== 'capturing') {
-      await startCamera();
-    }
-    if (ocheCamService.isRunning()) {
-      armDevNextDartCapture();
-    }
-  };
+    return () => {
+      videoEl.srcObject = null;
+    };
+  }, [camStatus]);
 
   const handleSaveUrls = (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,20 +130,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setLocalHttpUrl(httpUrlInput);
     setCloudClientId(clientIdInput);
     setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2000);
+    if (savedSuccessTimerRef.current !== null) {
+      window.clearTimeout(savedSuccessTimerRef.current);
+    }
+    savedSuccessTimerRef.current = window.setTimeout(() => {
+      setSavedSuccess(false);
+      savedSuccessTimerRef.current = null;
+    }, 2000);
   };
 
   const handleConnectCloud = async () => {
+    setCloudError(null);
     try {
       await cloudService.login();
     } catch (e) {
-      alert((e as Error).message);
+      setCloudError(e instanceof Error ? e.message : 'Failed to connect to Autodarts Cloud.');
     }
   };
 
   return (
     <Modal
-      isOpen={isOpen}
+      isOpen={true}
       onClose={onClose}
       title="Data Sources & Connectivity"
       description="Configure Autodarts Board Manager, Cloud OAuth, and simulator behavior"
@@ -396,7 +413,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onClick={() => {
                   setSaveDir(saveDirInput.trim());
                   setDirSaved(true);
-                  setTimeout(() => setDirSaved(false), 1800);
+                  if (dirSavedTimerRef.current !== null) {
+                    window.clearTimeout(dirSavedTimerRef.current);
+                  }
+                  dirSavedTimerRef.current = window.setTimeout(() => {
+                    setDirSaved(false);
+                    dirSavedTimerRef.current = null;
+                  }, 1800);
                 }}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 text-white cursor-pointer"
               >
@@ -428,17 +451,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </label>
             ))}
 
-            <label className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/60 border border-white/[0.07] text-xs text-slate-200 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeAudio}
-                onChange={(e) => setIncludeAudio(e.target.checked)}
-                className="w-3.5 h-3.5 rounded accent-rose-500 cursor-pointer"
-              />
-              <Mic className="w-3 h-3 text-slate-400" />
-              <span>Mic Audio</span>
-            </label>
-
             <label className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/60 border border-emerald-500/20 text-xs text-emerald-200 cursor-pointer col-span-2 sm:col-span-3">
               <input
                 type="checkbox"
@@ -450,44 +462,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </label>
           </div>
 
-          {/* =================================================================
-              [DEV-TEST: REMOVE WHEN DONE]
-              One-shot Next-Dart Debug Capture (records ANY next dart thrown)
-              ================================================================= */}
-          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/35 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-mono font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                <FlaskConical className="w-3.5 h-3.5" />
-                Dev Test: Capture Next Dart
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  openGallery();
-                }}
-                className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-300 hover:text-sky-200 cursor-pointer"
-              >
-                <Clapperboard className="w-3.5 h-3.5" />
-                Open Gallery
-              </button>
-            </div>
-            <p className="text-[11px] text-amber-100/80 leading-snug">
-              Arms a one-shot debug watch for the very next dart (any bed). Clips ~5s before impact
-              + dart landing spot + ~5s reaction straight to your autoclipper folder.
-            </p>
+          <div className="flex justify-end pt-1">
             <button
               type="button"
-              onClick={() => void handleArmDevCapture()}
-              className={`w-full py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer ${
-                devCaptureNextDartArmed
-                  ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.45)]'
-                  : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-400/50'
-              }`}
+              onClick={() => {
+                onClose();
+                openGallery();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/35 text-xs font-semibold text-sky-300 hover:text-sky-200 transition-colors cursor-pointer"
             >
-              {devCaptureNextDartArmed
-                ? 'ARMED — Close Settings & Throw Any Dart (Click to Cancel)'
-                : 'Arm Next-Dart 10s Debug Capture'}
+              <Clapperboard className="w-3.5 h-3.5" />
+              Open Clip Gallery
             </button>
           </div>
         </div>
@@ -526,34 +511,84 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div className="flex items-center gap-2 pt-2">
               <button
+                type="button"
                 onClick={handleConnectCloud}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/30 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/30 transition-colors cursor-pointer"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Authenticate with Autodarts</span>
               </button>
             </div>
+
+            {cloudError && (
+              <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/35 text-xs text-rose-200">
+                {cloudError}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Session Reset & Danger Zone */}
-        <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+        <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs text-slate-400">
             <ShieldAlert className="w-4 h-4 text-amber-400" />
-            <span>Reset current session stats & throws</span>
+            <span>
+              {confirmReset
+                ? 'Clear current session stats and board coordinates?'
+                : 'Reset current session stats & throws'}
+            </span>
           </div>
-          <button
-            onClick={() => {
-              if (confirm('Clear current session stats and board coordinates?')) {
-                resetActiveStats();
-                onClose();
-              }
-            }}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 transition-colors"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>Reset Session</span>
-          </button>
+          {confirmReset ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmResetTimerRef.current !== null) {
+                    window.clearTimeout(confirmResetTimerRef.current);
+                    confirmResetTimerRef.current = null;
+                  }
+                  setConfirmReset(false);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:bg-white/10 border border-white/15 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmResetTimerRef.current !== null) {
+                    window.clearTimeout(confirmResetTimerRef.current);
+                    confirmResetTimerRef.current = null;
+                  }
+                  setConfirmReset(false);
+                  resetActiveStats();
+                  onClose();
+                }}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500 hover:bg-rose-400 text-white transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Confirm Reset</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmReset(true);
+                if (confirmResetTimerRef.current !== null) {
+                  window.clearTimeout(confirmResetTimerRef.current);
+                }
+                confirmResetTimerRef.current = window.setTimeout(() => {
+                  setConfirmReset(false);
+                  confirmResetTimerRef.current = null;
+                }, 5000);
+              }}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset Session</span>
+            </button>
+          )}
         </div>
       </div>
     </Modal>

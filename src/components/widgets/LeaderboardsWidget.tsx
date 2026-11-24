@@ -36,38 +36,42 @@ export const LeaderboardsWidget: React.FC = () => {
       if (!Array.isArray(entries) || entries.length === 0) continue;
 
       const sorted = [...entries].sort((a, b) => {
+        const aVal = Number.isFinite(a?.bestStatValue) ? a.bestStatValue : 0;
+        const bVal = Number.isFinite(b?.bestStatValue) ? b.bestStatValue : 0;
+        const aWins = Number.isFinite(a?.wins) ? a.wins : 0;
+        const bWins = Number.isFinite(b?.wins) ? b.wins : 0;
         if (a.mode === 'practice' || a.mode === 'online') {
           if (a.lowerIsBetter) {
-            if (a.bestStatValue !== b.bestStatValue) return a.bestStatValue - b.bestStatValue;
-          } else if (a.bestStatValue !== b.bestStatValue) {
-            return b.bestStatValue - a.bestStatValue;
+            if (aVal !== bVal) return aVal - bVal;
+          } else if (aVal !== bVal) {
+            return bVal - aVal;
           }
-          return b.wins - a.wins;
+          return bWins - aWins;
         }
-        if (b.wins !== a.wins) return b.wins - a.wins;
-        return a.lowerIsBetter
-          ? a.bestStatValue - b.bestStatValue
-          : b.bestStatValue - a.bestStatValue;
+        if (bWins !== aWins) return bWins - aWins;
+        return a.lowerIsBetter ? aVal - bVal : bVal - aVal;
       });
 
       cards.push({
         gameId,
-        gameTitle: sorted[0].gameTitle,
-        mode: sorted[0].mode,
+        gameTitle: sorted[0].gameTitle || gameId,
+        mode: sorted[0].mode || 'arcade',
         top: sorted[0],
         runnerUp: sorted[1],
       });
 
       for (const e of entries) {
+        if (!e || !e.playerId) continue;
+        const safeName = e.playerName || 'Player';
         const prev = playerWinMap.get(e.playerId) || {
           playerId: e.playerId,
-          playerName: e.playerName,
-          colorHex: e.colorHex,
+          playerName: safeName,
+          colorHex: e.colorHex || '#10B981',
           wins: 0,
           played: 0,
         };
-        prev.wins += e.wins;
-        prev.played += e.gamesPlayed;
+        prev.wins += Number.isFinite(e.wins) ? e.wins : 0;
+        prev.played += Number.isFinite(e.gamesPlayed) ? e.gamesPlayed : 0;
         prev.colorHex = e.colorHex || prev.colorHex;
         playerWinMap.set(e.playerId, prev);
       }
@@ -128,14 +132,14 @@ export const LeaderboardsWidget: React.FC = () => {
                 >
                   <div
                     className="w-9 h-9 rounded-full flex items-center justify-center font-black text-sm text-slate-950 shrink-0"
-                    style={{ backgroundColor: champ.colorHex }}
+                    style={{ backgroundColor: champ.colorHex || '#10B981' }}
                   >
-                    {champ.playerName.charAt(0).toUpperCase()}
+                    {(champ.playerName || 'Player').charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0">
                     <div className="text-xs sm:text-sm font-black text-white truncate flex items-center gap-1">
                       {idx === 0 && <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-                      <span className="truncate">{champ.playerName}</span>
+                      <span className="truncate">{champ.playerName || 'Player'}</span>
                     </div>
                     <div className="text-[11px] font-mono text-slate-400 tabular-nums">
                       <strong className="text-emerald-300">{champ.wins}W</strong> • {champ.played} played
@@ -175,18 +179,19 @@ export const LeaderboardsWidget: React.FC = () => {
                     <Medal className="w-4 h-4 text-amber-400 shrink-0" />
                     <span
                       className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: card.top.colorHex }}
+                      style={{ backgroundColor: card.top.colorHex || '#10B981' }}
                     />
                     <span className="text-xs sm:text-sm font-bold text-slate-100 truncate">
-                      {card.top.playerName}
+                      {card.top.playerName || 'Player'}
                     </span>
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-xs sm:text-sm font-black font-mono text-emerald-300 tabular-nums">
-                      {card.top.bestStatDisplay}
+                      {card.top.bestStatDisplay ||
+                        (Number.isFinite(card.top.bestStatValue) ? String(card.top.bestStatValue) : '—')}
                     </div>
                     <div className="text-[10px] font-mono text-slate-400">
-                      {card.top.wins > 0 ? `${card.top.wins}W` : card.top.bestStatLabel}
+                      {(card.top.wins ?? 0) > 0 ? `${card.top.wins}W` : card.top.bestStatLabel || 'Record'}
                     </div>
                   </div>
                 </div>
@@ -194,10 +199,13 @@ export const LeaderboardsWidget: React.FC = () => {
                 {/* Runner-Up (if multiplayer / multiple players logged) */}
                 {card.runnerUp && (
                   <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
-                    <span className="truncate">2. {card.runnerUp.playerName}</span>
+                    <span className="truncate">2. {card.runnerUp.playerName || 'Player'}</span>
                     <span className="tabular-nums shrink-0">
-                      {card.runnerUp.bestStatDisplay}
-                      {card.runnerUp.wins > 0 ? ` (${card.runnerUp.wins}W)` : ''}
+                      {card.runnerUp.bestStatDisplay ||
+                        (Number.isFinite(card.runnerUp.bestStatValue)
+                          ? String(card.runnerUp.bestStatValue)
+                          : '—')}
+                      {(card.runnerUp.wins ?? 0) > 0 ? ` (${card.runnerUp.wins}W)` : ''}
                     </span>
                   </div>
                 )}

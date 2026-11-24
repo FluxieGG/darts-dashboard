@@ -1,8 +1,52 @@
+import type { StateStorage } from 'zustand/middleware';
 import { DashboardLayout } from '../types/config';
 
 const STORAGE_KEYS = {
   LAYOUT: 'autodarts_dashboard_layout_v4',
 } as const;
+
+let lastStorageWarnAt = 0;
+const STORAGE_WARN_COOLDOWN_MS = 10_000;
+
+function warnStorageFailure(action: 'getItem' | 'setItem' | 'removeItem', key: string, err: unknown): void {
+  const now = Date.now();
+  if (now - lastStorageWarnAt < STORAGE_WARN_COOLDOWN_MS) return;
+  lastStorageWarnAt = now;
+  const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  console.warn(`[safeLocalStorage] ${action}("${key}") failed: ${reason}`);
+}
+
+/**
+ * Quota- and privacy-mode-safe localStorage adapter for Zustand `createJSONStorage`.
+ * Never throws on QuotaExceededError or blocked storage; logs rate-limited warnings.
+ */
+export const safeLocalStorage: StateStorage = {
+  getItem: (name: string): string | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return window.localStorage.getItem(name);
+    } catch (err) {
+      warnStorageFailure('getItem', name, err);
+      return null;
+    }
+  },
+  setItem: (name: string, value: string): void => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(name, value);
+    } catch (err) {
+      warnStorageFailure('setItem', name, err);
+    }
+  },
+  removeItem: (name: string): void => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.removeItem(name);
+    } catch (err) {
+      warnStorageFailure('removeItem', name, err);
+    }
+  },
+};
 
 export const DEFAULT_LAYOUT: DashboardLayout = {
   widgets: [
@@ -132,8 +176,8 @@ export function normalizeLayout(
 
 export function loadSavedLayout(): DashboardLayout {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.LAYOUT);
-    if (!raw) return DEFAULT_LAYOUT;
+    const raw = safeLocalStorage.getItem(STORAGE_KEYS.LAYOUT);
+    if (!raw || typeof raw !== 'string') return DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as DashboardLayout;
     return normalizeLayout(parsed);
   } catch {
@@ -143,7 +187,7 @@ export function loadSavedLayout(): DashboardLayout {
 
 export function saveLayout(layout: DashboardLayout): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(layout));
+    safeLocalStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(layout));
   } catch (e) {
     console.error('Failed to save layout to localStorage', e);
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   DevConsoleCommand,
   DevHealthSnapshot,
@@ -16,7 +16,35 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { getGameDefinition } from '../games/gameRegistry';
 import { ocheCamService } from './ocheCamService';
 
+function safeFormatArg(arg: unknown): string {
+  if (typeof arg === 'string') return arg;
+  if (arg instanceof Error) {
+    return arg.message ? `${arg.name}: ${arg.message}` : arg.name;
+  }
+  if (
+    arg === null ||
+    arg === undefined ||
+    typeof arg === 'number' ||
+    typeof arg === 'boolean' ||
+    typeof arg === 'bigint' ||
+    typeof arg === 'symbol'
+  ) {
+    return String(arg);
+  }
+  try {
+    const json = JSON.stringify(arg);
+    return json !== undefined ? json : String(arg);
+  } catch {
+    try {
+      return String(arg);
+    } catch {
+      return '[Unserializable]';
+    }
+  }
+}
+
 class DevLoggerService {
+  private static readonly MAX_QUEUE_SIZE = 200;
   private queue: DevLogEntry[] = [];
   private flushTimer: number | null = null;
   private errorCount = 0;
@@ -40,6 +68,9 @@ class DevLoggerService {
       detail,
     };
     this.queue.push(entry);
+    if (this.queue.length > DevLoggerService.MAX_QUEUE_SIZE) {
+      this.queue.splice(0, this.queue.length - DevLoggerService.MAX_QUEUE_SIZE);
+    }
     this.scheduleFlush();
   }
 
@@ -64,6 +95,9 @@ class DevLoggerService {
       }).catch(() => {
         // ignore transient network errors
       });
+      if (this.queue.length > 0) {
+        this.scheduleFlush();
+      }
     }, 120);
   }
 }
@@ -138,6 +172,11 @@ export function useKioskDevBridge(
   connectedRemotes: number
 ): { connectedDevs: number } {
   const [connectedDevs, setConnectedDevs] = useState(0);
+  const isLocalConnectedRef = useRef(isLocalConnected);
+  isLocalConnectedRef.current = isLocalConnected;
+  const connectedRemotesRef = useRef(connectedRemotes);
+  connectedRemotesRef.current = connectedRemotes;
+  const pushHealthRef = useRef<((force?: boolean) => void) | null>(null);
 
   // Log board connection state changes cleanly
   useEffect(() => {
@@ -150,20 +189,39 @@ export function useKioskDevBridge(
     );
   }, [isLocalConnected]);
 
-  // Main instrumentation & dev SSE bridge
+  // Trigger health refresh whenever board connection or remote count changes
+  useEffect(() => {
+    pushHealthRef.current?.();
+  }, [isLocalConnected, connectedRemotes]);
+
+  // Main instrumentation & dev SSE bridge (mounted ONCE)
   useEffect(() => {
     devLogger.log('SYS', 'info', 'Kiosk dev telemetry bridge armed');
 
     let healthTimer: number | null = null;
     let latestDevCount = 0;
+    let hasInitialHealthPush = false;
+    let pendingForce = false;
 
-    const pushHealth = () => {
+    const pushHealth = (force = false) => {
+      if (force) {
+        pendingForce = true;
+      }
+      if (!pendingForce && latestDevCount === 0 && hasInitialHealthPush) {
+        return;
+      }
       if (healthTimer !== null) return;
       healthTimer = window.setTimeout(() => {
         healthTimer = null;
+        const shouldForce = pendingForce;
+        pendingForce = false;
+        if (!shouldForce && latestDevCount === 0 && hasInitialHealthPush) {
+          return;
+        }
+        hasInitialHealthPush = true;
         const snapshot = buildHealthSnapshot(
-          isLocalConnected,
-          connectedRemotes,
+          isLocalConnectedRef.current,
+          connectedRemotesRef.current,
           latestDevCount
         );
         fetch('/api/dev/health', {
@@ -174,7 +232,8 @@ export function useKioskDevBridge(
       }, 150);
     };
 
-    pushHealth();
+    pushHealthRef.current = pushHealth;
+    pushHealth(true);
 
     // 1. Subscribe to live dartboard event bus
     const unsubBus = gameEventBus.subscribe((ev) => {
@@ -262,6 +321,7 @@ export function useKioskDevBridge(
     let prevBoardFeedError = useReplayStore.getState().boardFeedError;
     let prevClipCount = useReplayStore.getState().clips.length;
     let prevLastClipId = useReplayStore.getState().lastRecordedClip?.id ?? null;
+    let hasSeenInitialClipHydration = prevClipCount > 0;
     const unsubReplay = useReplayStore.subscribe((s) => {
       if (s.status !== prevCamStatus) {
         devLogger.log(
@@ -281,16 +341,33 @@ export function useKioskDevBridge(
         prevBoardFeedError = s.boardFeedError;
       }
       if (s.lastRecordedClip && s.lastRecordedClip.id !== prevLastClipId) {
-        devLogger.log(
-          'CAMERA',
-          'success',
-          `Captured ${s.lastRecordedClip.durationSec}s clip: ${s.lastRecordedClip.segmentName}`,
-          s.lastRecordedClip.isSavedToDisk
-            ? `Auto-saved → ${s.lastRecordedClip.filePath}`
-            : 'Held in RAM — awaiting iPad Save tap'
-        );
+        const promotedFromUnsaved =
+          Boolean(prevLastClipId?.startsWith('unsaved-')) && Boolean(s.lastRecordedClip.isSavedToDisk);
+        if (promotedFromUnsaved) {
+          devLogger.log(
+            'CAMERA',
+            'success',
+            `Saved clip to disk: ${s.lastRecordedClip.filename}`,
+            s.lastRecordedClip.filePath
+          );
+        } else {
+          devLogger.log(
+            'CAMERA',
+            'success',
+            `Captured ${s.lastRecordedClip.durationSec}s clip: ${s.lastRecordedClip.segmentName}`,
+            s.lastRecordedClip.isSavedToDisk
+              ? `Auto-saved → ${s.lastRecordedClip.filePath}`
+              : 'Held in RAM — awaiting iPad Save tap'
+          );
+        }
         prevLastClipId = s.lastRecordedClip.id;
-      } else if (s.clips.length > prevClipCount) {
+      } else if (
+        hasSeenInitialClipHydration &&
+        prevClipCount > 0 &&
+        s.clips.length === prevClipCount + 1 &&
+        s.clips[0] &&
+        s.lastRecordedClip?.id === s.clips[0].id
+      ) {
         const newest = s.clips[0];
         devLogger.log(
           'CAMERA',
@@ -298,6 +375,9 @@ export function useKioskDevBridge(
           `Saved clip to disk: ${newest.filename}`,
           newest.filePath
         );
+      }
+      if (!hasSeenInitialClipHydration && s.clips.length > 0) {
+        hasSeenInitialClipHydration = true;
       }
       prevClipCount = s.clips.length;
       pushHealth();
@@ -317,13 +397,21 @@ export function useKioskDevBridge(
     const origWarn = console.warn;
     console.error = (...args: unknown[]) => {
       origError.apply(console, args);
-      const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ').slice(0, 220);
-      devLogger.log('SYS', 'error', `console.error: ${text}`);
+      try {
+        const text = args.map(safeFormatArg).join(' ').slice(0, 220);
+        devLogger.log('SYS', 'error', `console.error: ${text}`);
+      } catch {
+        // Never allow telemetry logging to throw inside console.error
+      }
     };
     console.warn = (...args: unknown[]) => {
       origWarn.apply(console, args);
-      const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ').slice(0, 220);
-      devLogger.log('SYS', 'warn', `console.warn: ${text}`);
+      try {
+        const text = args.map(safeFormatArg).join(' ').slice(0, 220);
+        devLogger.log('SYS', 'warn', `console.warn: ${text}`);
+      } catch {
+        // Never allow telemetry logging to throw inside console.warn
+      }
     };
 
     const handleWindowError = (event: ErrorEvent) => {
@@ -337,13 +425,17 @@ export function useKioskDevBridge(
 
     // 4. Listen for Dev Console SSE presence & diagnostic commands
     const es = new EventSource('/api/dev/stream?role=kiosk');
-    es.onopen = () => pushHealth();
+    es.onopen = () => pushHealth(true);
     es.addEventListener('presence', (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { connectedDevs?: number };
-        latestDevCount = data.connectedDevs || 0;
-        setConnectedDevs(latestDevCount);
-        pushHealth();
+        const nextCount = data.connectedDevs || 0;
+        const prevCount = latestDevCount;
+        latestDevCount = nextCount;
+        setConnectedDevs(nextCount);
+        if (nextCount > 0 && nextCount !== prevCount) {
+          pushHealth(true);
+        }
       } catch {
         // ignore
       }
@@ -354,10 +446,10 @@ export function useKioskDevBridge(
         switch (cmd.type) {
           case 'ping':
             devLogger.log('SYS', 'success', 'PONG — Kiosk live & responsive');
-            pushHealth();
+            pushHealth(true);
             break;
           case 'force_health':
-            pushHealth();
+            pushHealth(true);
             break;
           case 'restart_cameras':
             devLogger.log('CAMERA', 'info', 'Dev Console requested Split-Cam restart...');
@@ -383,9 +475,14 @@ export function useKioskDevBridge(
       }
     });
 
-    const periodicHealth = window.setInterval(pushHealth, 5000);
+    const periodicHealth = window.setInterval(() => {
+      if (latestDevCount > 0) {
+        pushHealth();
+      }
+    }, 5000);
 
     return () => {
+      pushHealthRef.current = null;
       es.close();
       unsubBus();
       unsubGame();
@@ -397,9 +494,9 @@ export function useKioskDevBridge(
       window.removeEventListener('error', handleWindowError);
       window.removeEventListener('unhandledrejection', handleRejection);
       window.clearInterval(periodicHealth);
-      if (healthTimer !== null) clearTimeout(healthTimer);
+      if (healthTimer !== null) window.clearTimeout(healthTimer);
     };
-  }, [isLocalConnected, connectedRemotes]);
+  }, []);
 
   return { connectedDevs };
 }

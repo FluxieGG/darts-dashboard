@@ -190,7 +190,13 @@ export function applyDartToState(
   state: SnookerState,
   dart: DartThrow
 ): { nextState: SnookerState; feedback: SnookerDartFeedback } {
-  if (state.isFinished || state.turnComplete || state.currentVisitDarts.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.currentVisitDarts.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.currentPlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', ignored: true } };
   }
 
@@ -442,7 +448,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: SnookerState): SnookerState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.currentPlayerIndex]) {
+    return state;
+  }
 
   const isSolo = state.players.length === 1;
   const nextIndex = (state.currentPlayerIndex + 1) % state.players.length;
@@ -513,10 +521,11 @@ export function buildGameResult(state: SnookerState, startedAt: number): GameRes
   }
   highlights.push(`${state.totalReds}-Red Frame Cleared`);
 
-  const headline =
-    state.players.length === 1
-      ? `${winner.name} clears the table with ${winner.score} pts!`
-      : `${winner.name} wins the frame (${winner.score} pts)!`;
+  const headline = !winner
+    ? 'Snooker frame complete!'
+    : state.players.length === 1
+    ? `${winner.name} clears the table with ${winner.score} pts!`
+    : `${winner.name} wins the frame (${winner.score} pts)!`;
 
   return {
     gameId: 'snooker',

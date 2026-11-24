@@ -16,8 +16,6 @@ import {
   Square,
   Undo2,
   RotateCcw,
-  Volume2,
-  VolumeX,
   ArrowRight,
   Users,
   UserPlus,
@@ -48,7 +46,6 @@ import {
   FlaskConical,
   Target,
   Dices,
-  BookOpen,
   AlertTriangle,
   Camera,
 } from 'lucide-react';
@@ -58,6 +55,7 @@ type MobileTab = 'control' | 'mode' | 'players' | 'replays' | 'display';
 type TabletRightPanel = 'mode' | 'players' | 'replays' | 'display';
 type AppMode = 'dashboard' | 'arcade' | 'practice' | 'dartcounter';
 type ClipFilter = 'all' | ReplayClipCategory;
+type SavedClipItem = NonNullable<RemoteKioskState['recentClips']>[number];
 
 const QUICK_TARGETS = ['T20', 'S20', 'T19', 'T18', 'D20', 'D16', 'Bull', '25', 'Miss'] as const;
 const BOARD_NUMBERS = [20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1] as const;
@@ -69,6 +67,31 @@ const TRIGGER_ITEMS: Array<{ key: keyof ReplayTriggerSettings; label: string }> 
   { key: 'on140Plus', label: '140+ / 180' },
   { key: 'autoShowOverlay', label: 'Auto-Pop TV' },
 ];
+
+const formatNum = (value: unknown, digits = 1, fallback = '0.0'): string =>
+  typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : fallback;
+
+function useIsDesktopOrTablet(): boolean {
+  const [matches, setMatches] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(min-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => setMatches(e.matches);
+    setMatches(mql.matches);
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    }
+    mql.addListener(onChange);
+    return () => mql.removeListener(onChange);
+  }, []);
+
+  return matches;
+}
 
 /**
  * iPad-First Oche Command Deck (and responsive Phone Remote) at `/?remote=1`.
@@ -90,29 +113,55 @@ export const MobileRemoteView: React.FC = () => {
   const [saveNewPlayer, setSaveNewPlayer] = useState<boolean>(true);
   const [editingColorPlayerId, setEditingColorPlayerId] = useState<string | null>(null);
 
+  const isDesktopOrTablet = useIsDesktopOrTablet();
   const [throwMult, setThrowMult] = useState<'S' | 'D' | 'T'>('S');
   const [showMobileThrowPad, setShowMobileThrowPad] = useState(false);
   const [clipFilter, setClipFilter] = useState<ClipFilter>('all');
-  const [diskClips, setDiskClips] = useState<RemoteKioskState['recentClips']>([]);
+  const [diskClips, setDiskClips] = useState<SavedClipItem[]>([]);
   const [loadingClips, setLoadingClips] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [isDevQrOpen, setIsDevQrOpen] = useState(false);
   const [isCameraIssueModalOpen, setIsCameraIssueModalOpen] = useState(false);
 
-  // Quick Online Match card (clean DartCounter Red/Green status pill + Play on Kiosk CTA)
-
   const eventSourceRef = useRef<EventSource | null>(null);
   const lastEventAtRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const lastWakeAtRef = useRef<number>(0);
   const devTapCountRef = useRef(0);
   const devTapTimerRef = useRef<number | null>(null);
-  const hasAutoPoppedCameraErrorRef = useRef(false);
+  const toastTimerRef = useRef<number | null>(null);
+  const dispatchResyncTimerRef = useRef<number | null>(null);
+  const manualResyncTimerRef = useRef<number | null>(null);
+  const deleteClipTimerRef = useRef<number | null>(null);
+  const lastSeenErrorEpochRef = useRef<number>(0);
+  const lastClipSignalRef = useRef<string | null>(null);
+
+  const clearTimerRef = (ref: React.MutableRefObject<number | null>) => {
+    if (ref.current !== null) {
+      window.clearTimeout(ref.current);
+      ref.current = null;
+    }
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      clearTimerRef(reconnectTimerRef);
+      clearTimerRef(devTapTimerRef);
+      clearTimerRef(toastTimerRef);
+      clearTimerRef(dispatchResyncTimerRef);
+      clearTimerRef(manualResyncTimerRef);
+      clearTimerRef(deleteClipTimerRef);
+    };
+  }, []);
 
   // Secret 5-tap on AD crest opens the PIN 0161 Dev Debug Console QR modal
   const handleSecretCrestTap = () => {
     devTapCountRef.current += 1;
-    if (devTapTimerRef.current !== null) {
-      window.clearTimeout(devTapTimerRef.current);
-    }
+    clearTimerRef(devTapTimerRef);
     if (devTapCountRef.current >= 5) {
       devTapCountRef.current = 0;
       setIsDevQrOpen(true);
@@ -120,15 +169,27 @@ export const MobileRemoteView: React.FC = () => {
     }
     devTapTimerRef.current = window.setTimeout(() => {
       devTapCountRef.current = 0;
+      devTapTimerRef.current = null;
     }, 2500);
   };
 
+  const applyMonotonicState = useCallback((incoming: RemoteKioskState) => {
+    setState((prev) => {
+      if (prev && (incoming.updatedAt ?? 0) < (prev.updatedAt ?? 0)) {
+        return prev;
+      }
+      return incoming;
+    });
+  }, []);
+
   const pullSavedClipsFromServer = useCallback(async () => {
+    if (!isMountedRef.current) return;
     setLoadingClips(true);
     try {
       const res = await fetch('/api/replays/list', { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok || !isMountedRef.current) return;
       const data = await res.json();
+      if (!isMountedRef.current) return;
       if (data?.ok && Array.isArray(data.clips)) {
         setDiskClips(
           data.clips.map((c: Record<string, unknown>) => ({
@@ -150,29 +211,31 @@ export const MobileRemoteView: React.FC = () => {
     } catch {
       // ignore offline error
     } finally {
-      setLoadingClips(false);
+      if (isMountedRef.current) setLoadingClips(false);
     }
   }, []);
 
   const pullLatestState = useCallback(async () => {
     try {
       const res = await fetch('/api/remote/state', { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok || !isMountedRef.current) return;
       const data = await res.json();
+      if (!isMountedRef.current) return;
       if (data?.ok) {
         setConnected(true);
         setKioskOnline((data.connectedKiosks || 0) > 0 || Boolean(data.state));
         if (data.state) {
-          setState(data.state as RemoteKioskState);
+          applyMonotonicState(data.state as RemoteKioskState);
           lastEventAtRef.current = Date.now();
         }
       }
     } catch {
-      setConnected(false);
+      if (isMountedRef.current) setConnected(false);
     }
-  }, []);
+  }, [applyMonotonicState]);
 
   const connectStream = useCallback(() => {
+    clearTimerRef(reconnectTimerRef);
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -182,19 +245,36 @@ export const MobileRemoteView: React.FC = () => {
     eventSourceRef.current = es;
 
     es.onopen = () => {
+      if (!isMountedRef.current) return;
+      reconnectAttemptRef.current = 0;
       setConnected(true);
       lastEventAtRef.current = Date.now();
       void pullLatestState();
     };
 
     es.onerror = () => {
+      if (!isMountedRef.current) return;
       setConnected(false);
+      if (es.readyState === EventSource.CLOSED && eventSourceRef.current === es) {
+        eventSourceRef.current = null;
+        if (document.visibilityState === 'hidden') return;
+        const attempt = reconnectAttemptRef.current;
+        reconnectAttemptRef.current = Math.min(attempt + 1, 5);
+        const delayMs = Math.min(15000, 1000 * Math.pow(2, attempt));
+        clearTimerRef(reconnectTimerRef);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          if (isMountedRef.current && document.visibilityState !== 'hidden') {
+            connectStream();
+          }
+        }, delayMs);
+      }
     };
 
     es.addEventListener('state', (ev) => {
       try {
         const snapshot = JSON.parse((ev as MessageEvent).data) as RemoteKioskState;
-        setState(snapshot);
+        applyMonotonicState(snapshot);
         setConnected(true);
         setKioskOnline(true);
         lastEventAtRef.current = Date.now();
@@ -212,46 +292,79 @@ export const MobileRemoteView: React.FC = () => {
         // ignore
       }
     });
-  }, [pullLatestState]);
+  }, [pullLatestState, applyMonotonicState]);
 
   useEffect(() => {
     void pullLatestState();
     void pullSavedClipsFromServer();
     connectStream();
 
-    // iPadOS Safari sleep/wake recovery: immediately refresh state & reopen SSE stream
-    const handleWake = () => {
+    // iPadOS Safari sleep/wake recovery: debounced force-close & reopen SSE stream + refresh state
+    const triggerWakeRecovery = () => {
+      const now = Date.now();
+      if (now - lastWakeAtRef.current < 400) return;
+      lastWakeAtRef.current = now;
+      reconnectAttemptRef.current = 0;
+      void pullLatestState();
+      void pullSavedClipsFromServer();
+      connectStream();
+    };
+
+    const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void pullLatestState();
-        void pullSavedClipsFromServer();
-        if (!eventSourceRef.current || eventSourceRef.current.readyState === EventSource.CLOSED) {
-          connectStream();
-        }
+        triggerWakeRecovery();
       }
     };
 
-    // Lightweight 3s safety poll if SSE has been silent (prevents stale iPad Safari screens)
+    const handlePageShow = () => {
+      if (document.visibilityState === 'visible') {
+        triggerWakeRecovery();
+      }
+    };
+
+    const handleOnline = () => {
+      triggerWakeRecovery();
+    };
+
+    // Lightweight 3s safety poll while foregrounded if SSE has been silent
     const safetyInterval = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       if (Date.now() - lastEventAtRef.current > 4000) {
         void pullLatestState();
       }
     }, 3000);
 
-    document.addEventListener('visibilitychange', handleWake);
-    window.addEventListener('focus', handleWake);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('online', handleOnline);
 
     return () => {
+      clearTimerRef(reconnectTimerRef);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       window.clearInterval(safetyInterval);
-      document.removeEventListener('visibilitychange', handleWake);
-      window.removeEventListener('focus', handleWake);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('online', handleOnline);
     };
-  }, [connectStream, pullLatestState]);
+  }, [connectStream, pullLatestState, pullSavedClipsFromServer]);
+
+  // On-demand clip fetching whenever clipsRevision or replayClipCount changes
+  const clipsRevision = state?.clipsRevision;
+  const replayClipCount = state?.replayClipCount;
+  useEffect(() => {
+    if (clipsRevision === undefined && replayClipCount === undefined) return;
+    const signal = `${clipsRevision ?? ''}:${replayClipCount ?? ''}`;
+    if (lastClipSignalRef.current === signal) return;
+    lastClipSignalRef.current = signal;
+    void pullSavedClipsFromServer();
+  }, [clipsRevision, replayClipCount, pullSavedClipsFromServer]);
 
   const flashToast = (msg: string) => {
     setToast(msg);
-    window.setTimeout(() => {
+    clearTimerRef(toastTimerRef);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
       setToast((prev) => (prev === msg ? null : prev));
     }, 1600);
   };
@@ -269,7 +382,9 @@ export const MobileRemoteView: React.FC = () => {
       flashToast(ok ? feedbackLabel : 'Kiosk unreachable — check Wi-Fi');
     }
     // Pull fresh state right after command so iPad UI updates instantaneously even if SSE lagged
-    window.setTimeout(() => {
+    clearTimerRef(dispatchResyncTimerRef);
+    dispatchResyncTimerRef.current = window.setTimeout(() => {
+      dispatchResyncTimerRef.current = null;
       void pullLatestState();
     }, 120);
   };
@@ -284,15 +399,21 @@ export const MobileRemoteView: React.FC = () => {
   const handleManualResync = async () => {
     setSyncing(true);
     flashToast('Recalibrating Autodarts cameras & resyncing...');
-    await sendRemoteCommand({ type: 'resync_and_recalibrate' });
-    connectStream();
-    await Promise.all([pullLatestState(), pullSavedClipsFromServer()]);
-    window.setTimeout(() => {
-      void pullLatestState();
-      void pullSavedClipsFromServer();
-      setSyncing(false);
-      flashToast('Cameras Recalibrated & Kiosk Synced!');
-    }, 1800);
+    try {
+      await sendRemoteCommand({ type: 'resync_and_recalibrate' });
+      connectStream();
+      await Promise.all([pullLatestState(), pullSavedClipsFromServer()]);
+    } finally {
+      clearTimerRef(manualResyncTimerRef);
+      manualResyncTimerRef.current = window.setTimeout(() => {
+        manualResyncTimerRef.current = null;
+        if (!isMountedRef.current) return;
+        void pullLatestState();
+        void pullSavedClipsFromServer();
+        setSyncing(false);
+        flashToast('Cameras Recalibrated & Kiosk Synced!');
+      }, 1800);
+    }
   };
 
   const handleAddPlayerSubmit = (e: React.FormEvent) => {
@@ -375,13 +496,21 @@ export const MobileRemoteView: React.FC = () => {
       state?.replayBoardFeedError
   );
 
-  // On the FIRST camera error detected by the Kiosk, automatically pop up the iPad camera warning modal
+  // Auto-open the iPad camera warning modal whenever a new camera error epoch occurs
   useEffect(() => {
-    if (hasCameraIssue && !hasAutoPoppedCameraErrorRef.current) {
-      hasAutoPoppedCameraErrorRef.current = true;
+    if (!hasCameraIssue) return;
+    const epoch =
+      typeof state?.replayErrorEpoch === 'number' && Number.isFinite(state.replayErrorEpoch)
+        ? state.replayErrorEpoch
+        : 0;
+    if (epoch > lastSeenErrorEpochRef.current) {
+      lastSeenErrorEpochRef.current = epoch;
+      setIsCameraIssueModalOpen(true);
+    } else if (epoch === 0 && lastSeenErrorEpochRef.current === 0) {
+      lastSeenErrorEpochRef.current = 0.5;
       setIsCameraIssueModalOpen(true);
     }
-  }, [hasCameraIssue]);
+  }, [hasCameraIssue, state?.replayErrorEpoch]);
 
   const remoteStyle = activeTintHex
     ? ({
@@ -400,17 +529,17 @@ export const MobileRemoteView: React.FC = () => {
           <span
             className="w-3 h-3 rounded-full shrink-0"
             style={{
-              backgroundColor: activeTintHex || state?.activePlayer.dartColor || DEFAULT_DART_COLOR,
+              backgroundColor: activeTintHex || state?.activePlayer?.dartColor || DEFAULT_DART_COLOR,
             }}
           />
           <span className="text-xs sm:text-sm font-mono uppercase tracking-wider text-slate-200 font-black truncate">
             {activeGame
-              ? `${activeGame.title} • ${activeGame.phase.toUpperCase()}`
+              ? `${activeGame.title} • ${(activeGame.phase || 'live').toUpperCase()}`
               : state?.activeView === 'practice-lobby'
               ? 'Solo Training Mode'
               : state?.activeView === 'games-lobby'
               ? 'Tech Darts Arcade Showcase'
-              : `${state?.activePlayer.name || 'Player'} • Stats Dashboard`}
+              : `${state?.activePlayer?.name || 'Player'} • Stats Dashboard`}
           </span>
         </div>
 
@@ -428,7 +557,7 @@ export const MobileRemoteView: React.FC = () => {
           )}
           {state && (
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/35 text-xs font-mono font-black text-emerald-300 tabular-nums">
-              3DA {state.statsSnapshot.threeDartAvg.toFixed(1)}
+              3DA {formatNum(state?.statsSnapshot?.threeDartAvg, 1)}
             </span>
           )}
           <Badge
@@ -453,7 +582,7 @@ export const MobileRemoteView: React.FC = () => {
       {/* Live 3-Dart Visit Pills + Total */}
       <div className="grid grid-cols-4 gap-2.5">
         {[0, 1, 2].map((idx) => {
-          const dart = state?.currentVisitThrows[idx];
+          const dart = state?.currentVisitThrows?.[idx];
           return (
             <div
               key={idx}
@@ -497,14 +626,14 @@ export const MobileRemoteView: React.FC = () => {
         <div
           className={cn(
             'rounded-2xl p-3.5 border-2 space-y-3 transition-all',
-            state.hasActiveReplayOverlay
+            state?.hasActiveReplayOverlay
               ? 'bg-rose-950/35 border-rose-400/65 shadow-[0_0_28px_-4px_rgba(244,63,94,0.45)]'
-              : state.lastRecording?.isSaved
+              : state?.lastRecording?.isSaved
               ? 'bg-emerald-500/10 border-emerald-400/35'
               : 'bg-emerald-500/15 border-emerald-400/75 shadow-[0_0_24px_-4px_rgba(16,185,129,0.45)]'
           )}
         >
-          {state.lastRecording && (
+          {state?.lastRecording && (
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs font-mono uppercase tracking-wider font-black text-emerald-300 flex items-center gap-1.5">
@@ -521,8 +650,8 @@ export const MobileRemoteView: React.FC = () => {
                   )}
                 </div>
                 <div className="text-sm font-bold text-white truncate mt-0.5">
-                  {state.lastRecording.playerName} • {state.lastRecording.reason} (
-                  {state.lastRecording.durationSec.toFixed(1)}s)
+                  {state.lastRecording.playerName || 'Player'} • {state.lastRecording.reason || 'Clip'} (
+                  {formatNum(state.lastRecording?.durationSec, 1)}s)
                 </div>
               </div>
 
@@ -545,7 +674,7 @@ export const MobileRemoteView: React.FC = () => {
             </div>
           )}
 
-          {state.hasActiveReplayOverlay && (
+          {state?.hasActiveReplayOverlay && (
             <div className="pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-mono uppercase text-slate-400 flex items-center gap-1 mr-0.5">
@@ -615,113 +744,47 @@ export const MobileRemoteView: React.FC = () => {
         </button>
       </div>
 
-      {/* Action Replay Trigger + Audio Strip */}
+      {/* Action Replay Trigger */}
+      <button
+        type="button"
+        disabled={!camBuffering || camCapturing}
+        onClick={() =>
+          void dispatch(
+            { type: 'trigger_manual_replay' },
+            'Recording 20s Clip (15s back + 5s)!'
+          )
+        }
+        className={cn(
+          'w-full p-3.5 rounded-2xl border flex items-center justify-center gap-2 text-xs sm:text-sm font-black transition-all active:scale-[0.97]',
+          camCapturing
+            ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
+            : camBuffering
+            ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
+            : 'card-matte opacity-45 text-slate-500 cursor-not-allowed'
+        )}
+      >
+        <Clapperboard className="w-4 h-4" />
+        <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (20s)'}</span>
+      </button>
+
+      {/* Dashboard Utility Row */}
       <div className="grid grid-cols-2 gap-3">
         <button
           type="button"
-          disabled={!camBuffering || camCapturing}
-          onClick={() =>
-            void dispatch(
-              { type: 'trigger_manual_replay' },
-              'Recording 20s Clip (15s back + 5s)!'
-            )
-          }
-          className={cn(
-            'p-3.5 rounded-2xl border flex items-center justify-center gap-2 text-xs sm:text-sm font-black transition-all active:scale-[0.97]',
-            camCapturing
-              ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
-              : camBuffering
-              ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
-              : 'card-matte opacity-45 text-slate-500 cursor-not-allowed'
-          )}
+          onClick={() => void dispatch({ type: 'clear_visit' }, 'Cleared Current Visit')}
+          className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-slate-200 hover:bg-white/5 active:scale-[0.97] cursor-pointer"
         >
-          <Clapperboard className="w-4 h-4" />
-          <span>{camCapturing ? 'Capturing 5s...' : 'Clip That! (20s)'}</span>
+          <RotateCcw className="w-4 h-4 text-sky-400" />
+          Clear Visit
         </button>
-
         <button
           type="button"
-          onClick={() =>
-            void dispatch(
-              { type: 'toggle_sound' },
-              state?.soundEnabled ? 'Sound Muted' : 'Sound Unmuted'
-            )
-          }
-          className="card-matte p-3.5 rounded-2xl flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-slate-200 active:scale-[0.97] cursor-pointer"
+          onClick={() => void dispatch({ type: 'reset_session' }, 'Session Stats Reset')}
+          className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-rose-300 hover:bg-rose-500/10 active:scale-[0.97] cursor-pointer"
         >
-          {state?.soundEnabled ? (
-            <>
-              <Volume2 className="w-4 h-4 text-sky-400" />
-              <span>Audio On</span>
-            </>
-          ) : (
-            <>
-              <VolumeX className="w-4 h-4 text-rose-400" />
-              <span className="text-rose-300">Muted</span>
-            </>
-          )}
+          <Trash2 className="w-4 h-4" />
+          Reset Session
         </button>
-      </div>
-
-      {/* Contextual Game or Dashboard Utility Row */}
-      <div className={cn('grid gap-3', activeGame ? 'grid-cols-3' : 'grid-cols-2')}>
-        {activeGame ? (
-          <>
-            <button
-              type="button"
-              onClick={() =>
-                void dispatch(
-                  { type: 'toggle_rules_overlay' },
-                  state?.isRulesOpen ? 'Closed Rules on TV' : 'Showing How To Play on TV'
-                )
-              }
-              className={cn(
-                'card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold active:scale-[0.97] cursor-pointer transition-colors',
-                state?.isRulesOpen
-                  ? 'border-sky-400/65 bg-sky-500/20 text-sky-200'
-                  : 'text-sky-300 hover:bg-sky-500/10'
-              )}
-            >
-              <BookOpen className="w-4 h-4 shrink-0" />
-              <span>{state?.isRulesOpen ? 'Close Rules' : 'How to Play'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'restart_match' }, 'Restarted Match')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold text-slate-200 hover:bg-white/5 active:scale-[0.97] cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Restart</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Lobby')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/10 active:scale-[0.97] cursor-pointer"
-            >
-              <X className="w-4 h-4 shrink-0" />
-              <span>Exit</span>
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'clear_visit' }, 'Cleared Current Visit')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-slate-200 hover:bg-white/5 active:scale-[0.97] cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4 text-sky-400" />
-              Clear Visit
-            </button>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'reset_session' }, 'Session Stats Reset')}
-              className="card-matte p-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-rose-300 hover:bg-rose-500/10 active:scale-[0.97] cursor-pointer"
-            >
-              <Trash2 className="w-4 h-4" />
-              Reset Session
-            </button>
-          </>
-        )}
       </div>
     </div>
   );
@@ -859,7 +922,7 @@ export const MobileRemoteView: React.FC = () => {
                   {om.remaining}
                 </div>
                 <div className="text-[10px] font-mono text-slate-400 mt-1">
-                  3DA {om.legThreeDartAvg.toFixed(1)} • {om.dartsInLeg} darts
+                  3DA {formatNum(om?.legThreeDartAvg, 1)} • {om?.dartsInLeg ?? 0} darts
                 </div>
               </div>
 
@@ -907,9 +970,9 @@ export const MobileRemoteView: React.FC = () => {
                       Ready for DartCounter
                     </div>
                     <div className="text-sm font-black text-white truncate">
-                      {om.dcPendingVisit.isBust ? 'BUST (0)' : `${om.dcPendingVisit.score} pts`}{' '}
+                      {om.dcPendingVisit.isBust ? 'BUST (0)' : `${om.dcPendingVisit.score ?? 0} pts`}{' '}
                       <span className="text-xs font-mono font-normal text-slate-300">
-                        ({om.dcPendingVisit.throws.join(' • ')})
+                        ({(om.dcPendingVisit.throws ?? []).join(' • ')})
                       </span>
                     </div>
                   </div>
@@ -926,12 +989,12 @@ export const MobileRemoteView: React.FC = () => {
                   onClick={() =>
                     void dispatch(
                       { type: 'dc_confirm_visit' },
-                      `Sent ${om.dcPendingVisit!.score} to DartCounter!`
+                      `Sent ${om.dcPendingVisit?.score ?? 0} to DartCounter!`
                     )
                   }
                   className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider cursor-pointer"
                 >
-                  Send {om.dcPendingVisit.score} to DartCounter
+                  Send {om.dcPendingVisit.score ?? 0} to DartCounter
                 </button>
               </div>
             )}
@@ -1047,7 +1110,11 @@ export const MobileRemoteView: React.FC = () => {
                           ? 'bg-gradient-to-r from-emerald-500 to-sky-400'
                           : 'bg-gradient-to-r from-purple-500 to-amber-400'
                       )}
-                      style={{ width: `${Math.min(100, Math.round(obj.pct))}%` }}
+                      style={{
+                        width: `${
+                          Number.isFinite(obj.pct) ? Math.min(100, Math.max(0, Math.round(obj.pct))) : 0
+                        }%`,
+                      }}
                     />
                   </div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 tabular-nums">
@@ -1055,7 +1122,9 @@ export const MobileRemoteView: React.FC = () => {
                       {obj.current} / {obj.target} {obj.unitLabel}
                     </span>
                     <span className={obj.completed ? 'text-emerald-300 font-bold' : ''}>
-                      {obj.completed ? 'COMPLETE' : `${Math.round(obj.pct)}%`}
+                      {obj.completed
+                        ? 'COMPLETE'
+                        : `${Number.isFinite(obj.pct) ? Math.round(obj.pct) : 0}%`}
                     </span>
                   </div>
                 </div>
@@ -1087,144 +1156,9 @@ export const MobileRemoteView: React.FC = () => {
 
   const renderPracticeDrillsPanel = () => {
     const drills = getPracticeDrills();
-    const isPracticeGame = activeGame?.mode === 'practice';
 
     return (
       <div className="space-y-4">
-        {/* ACTIVE SOLO DRILL SETUP */}
-        {isPracticeGame && activeGame && activeGame.phase === 'setup' && (
-          <section className="card-matte rounded-2xl p-4 sm:p-5 border-sky-400/50 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <h2 className="text-base sm:text-lg font-black text-white">
-                  {activeGame.title} — Drill Setup
-                </h2>
-                <p className="text-xs text-slate-400 font-mono">
-                  Solo Training • {activeGame.roster[0]?.name || state?.activePlayer.name || 'Player'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Solo Drills')}
-                className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 cursor-pointer"
-              >
-                All Drills
-              </button>
-            </div>
-
-            {activeGameDef && (
-              <p className="text-xs text-slate-300/90 leading-relaxed">
-                {activeGameDef.description}
-              </p>
-            )}
-
-            {/* Dynamic Drill Config Options */}
-            {activeGameDef && activeGameDef.configOptions.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-white/10">
-                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-                  Drill Settings
-                </div>
-                {activeGameDef.configOptions.map((opt) => {
-                  const currentVal = activeGame.matchConfig?.[opt.key] ?? opt.defaultValue;
-                  return (
-                    <div
-                      key={opt.key}
-                      className="p-2.5 rounded-xl bg-slate-900/70 border border-white/[0.07] space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-white">{opt.label}</span>
-                        {opt.type === 'toggle' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void dispatch({
-                                type: 'set_match_config',
-                                key: opt.key,
-                                value: !currentVal,
-                              })
-                            }
-                            className={cn(
-                              'w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer',
-                              currentVal ? 'bg-sky-500' : 'bg-slate-700'
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                'w-5 h-5 rounded-full bg-white transition-transform',
-                                currentVal ? 'translate-x-5' : 'translate-x-0'
-                              )}
-                            />
-                          </button>
-                        )}
-                      </div>
-                      {opt.type === 'select' && opt.options && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {opt.options.map((choice) => (
-                            <button
-                              key={String(choice.value)}
-                              type="button"
-                              onClick={() =>
-                                void dispatch({
-                                  type: 'set_match_config',
-                                  key: opt.key,
-                                  value: choice.value,
-                                })
-                              }
-                              className={cn(
-                                'px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
-                                currentVal === choice.value
-                                  ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
-                                  : 'bg-slate-950/60 border-white/10 text-slate-400 hover:text-white'
-                              )}
-                            >
-                              {choice.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'start_match' }, `Started ${activeGame.title}!`)}
-              className="w-full py-4 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-[0_0_24px_rgba(56,189,248,0.35)]"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              Start {activeGame.title}
-            </button>
-          </section>
-        )}
-
-        {/* SOLO DRILL COMPLETE CARD */}
-        {isPracticeGame && activeGame && activeGame.phase === 'finished' && (
-          <section className="card-matte rounded-2xl p-5 border-sky-400/50 text-center space-y-3">
-            <Trophy className="w-9 h-9 text-sky-400 mx-auto" />
-            <div className="text-lg font-black text-white">
-              {activeGame.winnerHeadline || `${activeGame.title} Complete`}
-            </div>
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => void dispatch({ type: 'rematch' }, 'Restarted Drill!')}
-                className="py-3 rounded-xl bg-sky-400 text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
-              >
-                Run Again
-              </button>
-              <button
-                type="button"
-                onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Solo Drills')}
-                className="py-3 rounded-xl bg-slate-900 border border-white/15 text-white font-bold text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
-              >
-                All Drills
-              </button>
-            </div>
-          </section>
-        )}
-
         {/* ALL SOLO TRAINING DRILLS GRID */}
         <div className="space-y-2.5">
           <div className="text-[11px] font-mono uppercase tracking-wider text-sky-300 font-bold flex items-center gap-1.5 px-1">
@@ -1270,276 +1204,39 @@ export const MobileRemoteView: React.FC = () => {
 
   const renderGamesPanel = () => {
     const arcadeGames = getArcadeGames();
-    const isArcadeGame = activeGame?.mode !== 'practice';
 
     return (
       <div className="space-y-4">
-        {/* ACTIVE ARCADE GAME SETUP */}
-        {isArcadeGame && activeGame && activeGame.phase === 'setup' && (
-        <section className="card-matte rounded-2xl p-4 sm:p-5 border-emerald-400/45 space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base sm:text-lg font-black text-white">
-                {activeGame.title} — Setup
-              </h2>
-              <p className="text-xs text-slate-400 font-mono">
-                {activeGame.roster.length} / {activeGame.maxPlayers} players (min{' '}
-                {activeGame.minPlayers})
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Games Lobby')}
-              className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 cursor-pointer"
-            >
-              Change Game
-            </button>
-          </div>
-
-          {/* Active Roster Chips */}
-          <div className="flex flex-wrap gap-2">
-            {activeGame.roster.map((p) => (
-              <span
-                key={p.id}
-                className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-full bg-slate-900 border border-white/15 text-xs font-bold text-white"
-              >
-                <span
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{ backgroundColor: p.colorHex }}
-                />
-                {p.name}
-                <button
-                  type="button"
-                  onClick={() =>
-                    void dispatch(
-                      { type: 'remove_roster_player', playerId: p.id },
-                      `Removed ${p.name}`
-                    )
-                  }
-                  className="p-0.5 text-slate-400 hover:text-rose-400 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </span>
-            ))}
-          </div>
-
-          {/* Quick-Add Saved Profiles */}
-          {(state?.players || []).some(
-            (sp) => !activeGame.roster.some((r) => r.id === sp.id)
-          ) && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">Saved:</span>
-              {(state?.players || [])
-                .filter((sp) => !activeGame.roster.some((r) => r.id === sp.id))
-                .map((sp) => (
-                  <button
-                    key={sp.id}
-                    type="button"
-                    onClick={() =>
-                      void dispatch(
-                        { type: 'add_saved_to_roster', playerId: sp.id },
-                        `Added ${sp.name}`
-                      )
-                    }
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-white/10 hover:border-emerald-400/50 text-xs font-bold text-slate-200 cursor-pointer"
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full"
-                      style={{ backgroundColor: sp.dartColor || DEFAULT_DART_COLOR }}
-                    />
-                    + {sp.name}
-                  </button>
-                ))}
-            </div>
-          )}
-
-          {/* Add Guest + Darts Colour + Save Toggle */}
-          <form onSubmit={handleAddPlayerSubmit} className="space-y-2">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newPlayerName}
-                onChange={(e) => setNewPlayerName(e.target.value)}
-                placeholder="Add guest player..."
-                maxLength={20}
-                className="flex-1 rounded-xl bg-slate-900 border border-white/15 px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-400"
-              />
+        {/* ALL ARCADE GAMES LAUNCHER GRID */}
+        <div className="grid grid-cols-2 gap-2.5">
+          {arcadeGames.map((g) => {
+            const Icon = g.icon;
+            const isActive = activeGame?.id === g.id;
+            return (
               <button
-                type="submit"
-                className="px-3.5 py-2 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-bold cursor-pointer"
+                key={g.id}
+                type="button"
+                onClick={() => void dispatch({ type: 'launch_game', gameId: g.id }, `Loaded ${g.title}`)}
+                className={cn(
+                  'card-matte p-3.5 sm:p-4 rounded-2xl text-left flex flex-col justify-between gap-2 active:scale-[0.97] transition-all cursor-pointer',
+                  isActive && 'border-emerald-400/65 bg-emerald-500/12'
+                )}
               >
-                + Add
+                <div className="flex items-center justify-between">
+                  <Icon className="w-5 h-5 text-emerald-400" />
+                  <span className="text-[10px] font-mono text-slate-400">
+                    {g.minPlayers}–{g.maxPlayers}P
+                  </span>
+                </div>
+                <div>
+                  <div className="text-sm font-black text-white leading-tight">{g.title}</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">{g.category}</div>
+                </div>
               </button>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                {DART_COLOR_OPTIONS.slice(0, 7).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setNewPlayerColor(opt.hex)}
-                    className={cn(
-                      'w-5 h-5 rounded-full cursor-pointer',
-                      newPlayerColor === opt.hex ? 'ring-2 ring-white scale-110' : 'opacity-70'
-                    )}
-                    style={{ backgroundColor: opt.hex }}
-                  />
-                ))}
-              </div>
-              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={saveNewPlayer}
-                  onChange={(e) => setSaveNewPlayer(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded accent-emerald-500"
-                />
-                Save profile
-              </label>
-            </div>
-          </form>
-
-          {/* Dynamic Match Config Options */}
-          {activeGameDef && activeGameDef.configOptions.length > 0 && (
-            <div className="space-y-2 pt-2 border-t border-white/10">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-                Match Rules
-              </div>
-              {activeGameDef.configOptions.map((opt) => {
-                const currentVal = activeGame.matchConfig?.[opt.key] ?? opt.defaultValue;
-                return (
-                  <div
-                    key={opt.key}
-                    className="p-2.5 rounded-xl bg-slate-900/70 border border-white/[0.07] space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-white">{opt.label}</span>
-                      {opt.type === 'toggle' && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void dispatch({
-                              type: 'set_match_config',
-                              key: opt.key,
-                              value: !currentVal,
-                            })
-                          }
-                          className={cn(
-                            'w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer',
-                            currentVal ? 'bg-emerald-500' : 'bg-slate-700'
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              'w-5 h-5 rounded-full bg-white transition-transform',
-                              currentVal ? 'translate-x-5' : 'translate-x-0'
-                            )}
-                          />
-                        </button>
-                      )}
-                    </div>
-                    {opt.type === 'select' && opt.options && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {opt.options.map((choice) => (
-                          <button
-                            key={String(choice.value)}
-                            type="button"
-                            onClick={() =>
-                              void dispatch({
-                                type: 'set_match_config',
-                                key: opt.key,
-                                value: choice.value,
-                              })
-                            }
-                            className={cn(
-                              'px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer',
-                              currentVal === choice.value
-                                ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
-                                : 'bg-slate-950/60 border-white/10 text-slate-400 hover:text-white'
-                            )}
-                          >
-                            {choice.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Start Game CTA */}
-          <button
-            type="button"
-            disabled={activeGame.roster.length < activeGame.minPlayers}
-            onClick={() => void dispatch({ type: 'start_match' }, `Started ${activeGame.title}!`)}
-            className="w-full py-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-[0_0_24px_rgba(16,185,129,0.35)]"
-          >
-            <Play className="w-4 h-4 fill-current" />
-            {activeGame.roster.length < activeGame.minPlayers
-              ? `Add at least ${activeGame.minPlayers} players`
-              : `Start ${activeGame.title}`}
-          </button>
-        </section>
-      )}
-
-      {/* VICTORY REMATCH CARD */}
-      {isArcadeGame && activeGame && activeGame.phase === 'finished' && (
-        <section className="card-matte rounded-2xl p-5 border-amber-400/50 text-center space-y-3">
-          <Trophy className="w-9 h-9 text-amber-400 mx-auto" />
-          <div className="text-lg font-black text-white">
-            {activeGame.winnerHeadline || `${activeGame.title} Complete`}
-          </div>
-          <div className="grid grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'rematch' }, 'Rematch Started!')}
-              className="py-3 rounded-xl bg-emerald-500 text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
-            >
-              Play Rematch
-            </button>
-            <button
-              type="button"
-              onClick={() => void dispatch({ type: 'exit_game' }, 'Back to Lobby')}
-              className="py-3 rounded-xl bg-slate-900 border border-white/15 text-white font-bold text-xs sm:text-sm uppercase tracking-wider cursor-pointer"
-            >
-              Change Game
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* ALL 8 ARCADE GAMES LAUNCHER GRID */}
-      <div className="grid grid-cols-2 gap-2.5">
-        {arcadeGames.map((g) => {
-          const Icon = g.icon;
-          const isActive = activeGame?.id === g.id;
-          return (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => void dispatch({ type: 'launch_game', gameId: g.id }, `Loaded ${g.title}`)}
-              className={cn(
-                'card-matte p-3.5 sm:p-4 rounded-2xl text-left flex flex-col justify-between gap-2 active:scale-[0.97] transition-all cursor-pointer',
-                isActive && 'border-emerald-400/65 bg-emerald-500/12'
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <Icon className="w-5 h-5 text-emerald-400" />
-                <span className="text-[10px] font-mono text-slate-400">
-                  {g.minPlayers}–{g.maxPlayers}P
-                </span>
-              </div>
-              <div>
-                <div className="text-sm font-black text-white leading-tight">{g.title}</div>
-                <div className="text-[11px] text-slate-400 mt-0.5">{g.category}</div>
-              </div>
-            </button>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
     );
   };
 
@@ -1569,9 +1266,9 @@ export const MobileRemoteView: React.FC = () => {
           {isPartyMode ? 'Temp Party Players (Unsaved)' : 'Saved Profiles & Theme Colours'}
         </div>
         {(state?.players || []).map((p) => {
-          const isCurrent = state?.activePlayer.id === p.id;
+          const isCurrent = state?.activePlayer?.id === p.id;
           const inGameSetup = activeGame?.phase === 'setup';
-          const alreadyInRoster = activeGame?.roster.some((r) => r.id === p.id);
+          const alreadyInRoster = (activeGame?.roster ?? []).some((r) => r.id === p.id);
           const isEditingColor = editingColorPlayerId === p.id;
 
           return (
@@ -1729,12 +1426,12 @@ export const MobileRemoteView: React.FC = () => {
   // Prefer live Kiosk synced clips when populated, falling back / merging with direct
   // `/api/replays/list` disk reads so saved clips ALWAYS appear right after an app restart!
   const allSavedClips = React.useMemo(() => {
-    const map = new Map<string, RemoteKioskState['recentClips'][number]>();
+    const map = new Map<string, SavedClipItem>();
     for (const c of diskClips) {
       const key = (c.relativePath || c.filename || c.id).toLowerCase();
       map.set(key, c);
     }
-    for (const c of state?.recentClips || []) {
+    for (const c of state?.recentClips ?? []) {
       const key = (c.relativePath || c.filename || c.id).toLowerCase();
       map.set(key, c);
     }
@@ -1867,7 +1564,7 @@ export const MobileRemoteView: React.FC = () => {
 
           {(state?.replayAvailableCameras?.length || 0) > 1 && (
             <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/10">
-              {state!.replayAvailableCameras.map((cam) => {
+              {(state?.replayAvailableCameras ?? []).map((cam) => {
                 const isSelected = state?.replaySelectedDeviceId === cam.deviceId;
                 return (
                   <button
@@ -2042,7 +1739,7 @@ export const MobileRemoteView: React.FC = () => {
                   <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5 mt-0.5">
                     <span className="text-amber-300 font-bold">{clip.segmentName}</span>
                     <span>•</span>
-                    <span>{clip.durationSec.toFixed(1)}s</span>
+                    <span>{formatNum(clip?.durationSec, 1)}s</span>
                     {clip.subfolder && (
                       <>
                         <span>•</span>
@@ -2072,12 +1769,17 @@ export const MobileRemoteView: React.FC = () => {
                       const targetPath = clip.relativePath || clip.filename;
                       void dispatch({ type: 'delete_saved_clip', path: targetPath }, 'Deleted Clip').then(
                         () => {
+                          if (!isMountedRef.current) return;
                           setDiskClips((prev) =>
                             prev.filter(
                               (c) => c.relativePath !== targetPath && c.filename !== targetPath
                             )
                           );
-                          window.setTimeout(() => void pullSavedClipsFromServer(), 350);
+                          clearTimerRef(deleteClipTimerRef);
+                          deleteClipTimerRef.current = window.setTimeout(() => {
+                            deleteClipTimerRef.current = null;
+                            void pullSavedClipsFromServer();
+                          }, 350);
                         }
                       );
                     }}
@@ -2428,7 +2130,7 @@ export const MobileRemoteView: React.FC = () => {
             <div className="p-2 rounded-xl bg-slate-900/80 border border-white/[0.07]">
               <div className="text-[10px] font-mono text-slate-400 uppercase">Best 3DA</div>
               <div className="text-base font-black font-mono text-emerald-300 tabular-nums">
-                {state.careerSummary.bestDay3DA.toFixed(1)}
+                {formatNum(state?.careerSummary?.bestDay3DA, 1)}
               </div>
             </div>
             <div className="p-2 rounded-xl bg-slate-900/80 border border-white/[0.07]">
@@ -2507,7 +2209,7 @@ export const MobileRemoteView: React.FC = () => {
                     ? 'Target Webapp Controller'
                     : isPartyMode
                     ? 'Vice Party Mode'
-                    : state?.activePlayer.name || 'Connecting...'}
+                    : state?.activePlayer?.name || 'Connecting...'}
                 </span>
               </div>
             </div>
@@ -2735,64 +2437,64 @@ export const MobileRemoteView: React.FC = () => {
         />
       ) : isDartCounterMode ? (
         <DartCounterRemoteScreen state={state} dispatch={dispatch} />
+      ) : isDesktopOrTablet ? (
+        /* =====================================================================
+            IPAD / TABLET 2-COLUMN COMMAND DECK (>= 768px)
+           ===================================================================== */
+        <main className="grid max-w-6xl w-full mx-auto px-5 pt-5 grid-cols-12 gap-5 items-start">
+          {/* LEFT COLUMN (7 cols): Live Telemetry + Primary Pads + Quick Throw Pad */}
+          <div className="col-span-7 space-y-4">
+            {renderLiveReadoutCard()}
+            {renderPrimaryActions()}
+            {renderThrowPad()}
+          </div>
+
+          {/* RIGHT COLUMN (5 cols): Context-Aware 1st Tab (Goals / Games / Drills) + Players + Replays + Display */}
+          <div className="col-span-5 space-y-4">
+            <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
+              {(
+                [
+                  { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
+                  { id: 'players', label: 'Players', icon: Users },
+                  { id: 'replays', label: 'Replays', icon: Clapperboard },
+                  { id: 'display', label: 'Display', icon: Monitor },
+                ] as const
+              ).map((tab) => {
+                const Icon = tab.icon;
+                const active = tabletRightPanel === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setTabletRightPanel(tab.id)}
+                    className={cn(
+                      'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
+                      active
+                        ? currentMode === 'practice' && tab.id === 'mode'
+                          ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                        : 'text-slate-400 hover:text-white'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {tabletRightPanel === 'mode' && renderModePanel()}
+            {tabletRightPanel === 'players' && renderPlayersPanel()}
+            {tabletRightPanel === 'replays' && renderReplaysPanel()}
+            {tabletRightPanel === 'display' && renderDisplayPanel()}
+          </div>
+        </main>
       ) : (
+        /* =====================================================================
+            PHONE SINGLE-COLUMN FALLBACK (< 768px)
+           ===================================================================== */
         <>
-          {/* =====================================================================
-              IPAD / TABLET 2-COLUMN COMMAND DECK (md and above)
-             ===================================================================== */}
-          <main className="hidden md:grid max-w-6xl w-full mx-auto px-5 pt-5 grid-cols-12 gap-5 items-start">
-            {/* LEFT COLUMN (7 cols): Live Telemetry + Primary Pads + Quick Throw Pad */}
-            <div className="col-span-7 space-y-4">
-              {renderLiveReadoutCard()}
-              {renderPrimaryActions()}
-              {renderThrowPad()}
-            </div>
-
-            {/* RIGHT COLUMN (5 cols): Context-Aware 1st Tab (Goals / Games / Drills) + Players + Replays + Display */}
-            <div className="col-span-5 space-y-4">
-              <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-slate-900/85 border border-white/10">
-                {(
-                  [
-                    { id: 'mode', label: modeTabMeta.label, icon: modeTabMeta.icon },
-                    { id: 'players', label: 'Players', icon: Users },
-                    { id: 'replays', label: 'Replays', icon: Clapperboard },
-                    { id: 'display', label: 'Display', icon: Monitor },
-                  ] as const
-                ).map((tab) => {
-                  const Icon = tab.icon;
-                  const active = tabletRightPanel === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setTabletRightPanel(tab.id)}
-                      className={cn(
-                        'py-2.5 px-1 rounded-xl text-[11px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer',
-                        active
-                          ? currentMode === 'practice' && tab.id === 'mode'
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
-                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
-                          : 'text-slate-400 hover:text-white'
-                      )}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span>{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {tabletRightPanel === 'mode' && renderModePanel()}
-              {tabletRightPanel === 'players' && renderPlayersPanel()}
-              {tabletRightPanel === 'replays' && renderReplaysPanel()}
-              {tabletRightPanel === 'display' && renderDisplayPanel()}
-            </div>
-          </main>
-
-          {/* =====================================================================
-              PHONE SINGLE-COLUMN FALLBACK (< md)
-             ===================================================================== */}
-          <main className="md:hidden flex-1 w-full max-w-lg mx-auto px-4 pt-4 space-y-4">
+          <main className="flex-1 w-full max-w-lg mx-auto px-4 pt-4 space-y-4">
             {renderLiveReadoutCard()}
 
             {mobileTab === 'control' && (
@@ -2821,9 +2523,9 @@ export const MobileRemoteView: React.FC = () => {
             {mobileTab === 'display' && renderDisplayPanel()}
           </main>
 
-          {/* Phone-Only Fixed Bottom Thumb Bar (< md) */}
+          {/* Phone-Only Fixed Bottom Thumb Bar */}
           <nav
-            className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 pt-2"
+            className="fixed bottom-0 inset-x-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-t border-white/10 px-2 pt-2"
             style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}
           >
             <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
@@ -2988,10 +2690,10 @@ export const MobileRemoteView: React.FC = () => {
               {(state?.replayAvailableCameras?.length || 0) > 0 && (
                 <div className="space-y-1.5 pt-1">
                   <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-                    Detected PC Cameras ({state!.replayAvailableCameras.length}) — Tap to try as Oche Cam
+                    Detected PC Cameras ({state?.replayAvailableCameras?.length ?? 0}) — Tap to try as Oche Cam
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                    {state!.replayAvailableCameras.map((cam) => {
+                    {(state?.replayAvailableCameras ?? []).map((cam) => {
                       const isSelected = state?.replaySelectedDeviceId === cam.deviceId;
                       return (
                         <button

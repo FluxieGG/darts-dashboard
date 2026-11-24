@@ -247,7 +247,13 @@ export function applyDartToState(
   state: SniperBingoGameState,
   dart: DartThrow
 ): { nextState: SniperBingoGameState; feedback: SniperBingoFeedback } {
-  if (state.isFinished || state.turnComplete || state.visitEntries.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.visitEntries.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', callout: null } };
   }
 
@@ -378,7 +384,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: SniperBingoGameState): SniperBingoGameState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   const nextPlayerIndex = (state.activePlayerIndex + 1) % state.players.length;
   const nextRound = nextPlayerIndex === 0 ? state.round + 1 : state.round;

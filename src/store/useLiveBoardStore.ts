@@ -253,17 +253,57 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
 
     // Update all player stats cleanly from real logged darts
     usePlayerStore.getState().updateActiveStats((prev) => {
-      const allSessionThrows = [...committedThrows, ...prev.sessionThrows];
+      const MAX_SESSION_THROWS = 200;
+      const cappedSessionThrows = [...committedThrows, ...prev.sessionThrows].slice(
+        0,
+        MAX_SESSION_THROWS
+      );
       const newTotalDarts = prev.totalDartsThrown + committedThrows.length;
-      const totalPoints = allSessionThrows.reduce((acc, t) => acc + t.score, 0);
 
-      const new3DA = newTotalDarts > 0 ? (totalPoints / newTotalDarts) * 3 : 0;
+      // Exact cumulative points (backwards-compatible with persisted stats missing totalPointsScored)
+      const prevTotalPoints =
+        typeof prev.totalPointsScored === 'number'
+          ? prev.totalPointsScored
+          : prev.sessionThrows.reduce((acc, t) => acc + t.score, 0);
+      const newTotalPoints = prevTotalPoints + totalScore;
 
-      // First 9 darts average (chronologically first 9 darts of the session are at the tail)
-      const firstNineDarts = allSessionThrows.slice(-9);
-      const firstNinePoints = firstNineDarts.reduce((acc, t) => acc + t.score, 0);
+      const new3DA = newTotalDarts > 0 ? (newTotalPoints / newTotalDarts) * 3 : 0;
+
+      // Exact First 9 darts average: accumulate first 9 darts of the session and freeze thereafter
+      let prevFirstNineDartsCount: number;
+      let prevFirstNinePoints: number;
+      if (
+        typeof prev.firstNineDartsCount === 'number' &&
+        typeof prev.firstNinePoints === 'number'
+      ) {
+        prevFirstNineDartsCount = prev.firstNineDartsCount;
+        prevFirstNinePoints = prev.firstNinePoints;
+      } else if (prev.totalDartsThrown >= 9) {
+        prevFirstNineDartsCount = 9;
+        if (prev.sessionThrows.length >= 9 && prev.sessionThrows.length === prev.totalDartsThrown) {
+          prevFirstNinePoints = prev.sessionThrows
+            .slice(-9)
+            .reduce((acc, t) => acc + t.score, 0);
+        } else {
+          prevFirstNinePoints = Math.round((prev.firstNineAvg / 3) * 9);
+        }
+      } else {
+        const legacyFirstDarts = prev.sessionThrows.slice(-9);
+        prevFirstNineDartsCount = legacyFirstDarts.length;
+        prevFirstNinePoints = legacyFirstDarts.reduce((acc, t) => acc + t.score, 0);
+      }
+
+      let nextFirstNineDartsCount = prevFirstNineDartsCount;
+      let nextFirstNinePoints = prevFirstNinePoints;
+      if (nextFirstNineDartsCount < 9) {
+        const remainingNeeded = 9 - nextFirstNineDartsCount;
+        const dartsToCount = committedThrows.slice(0, remainingNeeded);
+        nextFirstNineDartsCount += dartsToCount.length;
+        nextFirstNinePoints += dartsToCount.reduce((acc, t) => acc + t.score, 0);
+      }
+
       const newFirstNineAvg =
-        firstNineDarts.length > 0 ? (firstNinePoints / firstNineDarts.length) * 3 : 0;
+        nextFirstNineDartsCount > 0 ? (nextFirstNinePoints / nextFirstNineDartsCount) * 3 : 0;
 
       const newTonBreakdown = { ...prev.tonBreakdown };
       newTonBreakdown.totalVisits += 1;
@@ -298,8 +338,11 @@ export const useLiveBoardStore = create<LiveBoardState>((set, get) => ({
         segmentAccuracy: updatedAccuracy,
         trendHistory: updatedTrend,
         recentVisits: updatedRecentVisits,
-        sessionThrows: allSessionThrows,
+        sessionThrows: cappedSessionThrows,
         totalDartsThrown: newTotalDarts,
+        totalPointsScored: newTotalPoints,
+        firstNinePoints: nextFirstNinePoints,
+        firstNineDartsCount: nextFirstNineDartsCount,
       };
     });
 

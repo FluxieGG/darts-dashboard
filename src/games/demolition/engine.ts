@@ -60,7 +60,13 @@ export function applyDartToState(
   state: DemolitionState,
   dart: DartThrow
 ): { nextState: DemolitionState; feedback: DemolitionDartFeedback } {
-  if (state.isFinished || state.turnComplete || state.currentVisitDarts.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.currentVisitDarts.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.currentPlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', ignored: true } };
   }
 
@@ -254,7 +260,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: DemolitionState): DemolitionState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.currentPlayerIndex]) {
+    return state;
+  }
 
   const players = state.players.map((p) => ({ ...p }));
   const prevPlayer = players[state.currentPlayerIndex];

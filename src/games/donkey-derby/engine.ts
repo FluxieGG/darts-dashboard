@@ -15,7 +15,8 @@ import {
  * are well-spaced across the board regardless of player count (2-6+).
  */
 export function assignBalancedSegments(playerCount: number): number[] {
-  const count = Math.max(1, Math.min(playerCount, SEGMENT_ORDER.length));
+  if (playerCount <= 0) return [];
+  const count = Math.min(playerCount, SEGMENT_ORDER.length);
   const usedIndices = new Set<number>();
   const segments: number[] = [];
 
@@ -80,7 +81,13 @@ export function applyDartToState(
   state: DonkeyDerbyState,
   dart: DartThrow
 ): { nextState: DonkeyDerbyState; feedback: DerbyDartFeedback } {
-  if (state.isFinished || state.turnComplete || state.currentVisit.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.currentVisit.length >= 3 ||
+    state.racers.length === 0 ||
+    !state.racers[state.activePlayerIndex]
+  ) {
     return {
       nextState: state,
       feedback: { sound: 'hit', calloutTitle: null, calloutAccent: 'sky' },
@@ -280,7 +287,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: DonkeyDerbyState): DonkeyDerbyState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.racers.length === 0 || !state.racers[state.activePlayerIndex]) {
+    return state;
+  }
 
   const nextIndex = (state.activePlayerIndex + 1) % state.racers.length;
   const nextRound = nextIndex === 0 ? state.round + 1 : state.round;
@@ -351,8 +360,8 @@ export function buildGameResult(
     gameId: 'donkey-derby',
     winnerId: winner?.player.id ?? null,
     winnerName: winner?.player.name ?? 'Winner',
-    headline: assister
-      ? `${winner?.player.name} wins via ${assister.player.name}'s assist!`
+    headline: assister && winner
+      ? `${winner.player.name} wins via ${assister.player.name}'s assist!`
       : `${winner?.player.name ?? 'Racer'} wins the Donkey Derby!`,
     standings,
     totalDartsThrown: state.totalDartsThrown,

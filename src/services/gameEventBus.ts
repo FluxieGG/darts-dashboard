@@ -54,10 +54,15 @@ class GameEventBus {
     const nextStatus = status || (throws.length > 0 ? 'throw' : 'waiting');
     const nextEvent = event || '';
 
+    const prevThrows = this.previousVisitThrows;
+    this.previousVisitThrows = throws.map((t) => ({ ...t }));
+
+    let emittedCorrection = false;
+
     // 1. Diff each dart slot against previous snapshot
     for (let i = 0; i < throws.length; i++) {
       const nextDart = throws[i];
-      const prevDart = this.previousVisitThrows[i];
+      const prevDart = prevThrows[i];
 
       if (!prevDart) {
         // Brand-new dart landed in slot i
@@ -70,6 +75,7 @@ class GameEventBus {
         });
       } else if (dartSignature(prevDart) !== dartSignature(nextDart)) {
         // Mid-visit camera correction on slot i
+        emittedCorrection = true;
         this.emit({
           type: 'dart_corrected',
           dart: nextDart,
@@ -81,7 +87,17 @@ class GameEventBus {
       }
     }
 
-    this.previousVisitThrows = throws.map((t) => ({ ...t }));
+    // 1b. Detect mid-visit dart removal (e.g., last dart removed before takeout while earlier darts remain)
+    if (throws.length < prevThrows.length && throws.length > 0 && !emittedCorrection) {
+      this.emit({
+        type: 'dart_corrected',
+        dart: throws[throws.length - 1],
+        previousDart: prevThrows[prevThrows.length - 1],
+        dartIndex: throws.length - 1,
+        visitThrows: throws,
+        timestamp: now,
+      });
+    }
 
     // 2. Emit board status transition if changed
     if (nextStatus !== this.lastBoardStatus || nextEvent !== this.lastBoardEvent) {

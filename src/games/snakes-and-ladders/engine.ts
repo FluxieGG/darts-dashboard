@@ -159,7 +159,13 @@ export function applyDartToState(
   state: SnakesAndLaddersState,
   dart: DartThrow
 ): { nextState: SnakesAndLaddersState; feedback: SnakesDartFeedback } {
-  if (state.isFinished || state.turnComplete || state.currentVisit.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.currentVisit.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return {
       nextState: state,
       feedback: { sound: 'hit', calloutTitle: null, calloutAccent: 'sky' },
@@ -320,7 +326,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: SnakesAndLaddersState): SnakesAndLaddersState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   const nextIndex = (state.activePlayerIndex + 1) % state.players.length;
   const nextRound = nextIndex === 0 ? state.round + 1 : state.round;

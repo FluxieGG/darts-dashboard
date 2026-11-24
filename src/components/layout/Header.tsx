@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useGameStore } from '../../store/useGameStore';
@@ -69,10 +69,20 @@ export const Header: React.FC<HeaderProps> = ({
   const tapCountRef = useRef(0);
   const tapTimerRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (tapTimerRef.current !== null) {
+        window.clearTimeout(tapTimerRef.current);
+        tapTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleCrestTap = () => {
     tapCountRef.current += 1;
     if (tapTimerRef.current !== null) {
       window.clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = null;
     }
     if (tapCountRef.current >= 5) {
       tapCountRef.current = 0;
@@ -81,10 +91,13 @@ export const Header: React.FC<HeaderProps> = ({
     }
     tapTimerRef.current = window.setTimeout(() => {
       tapCountRef.current = 0;
+      tapTimerRef.current = null;
     }, 2400);
   };
 
-  const playerColor = activePlayer.dartColor || DEFAULT_DART_COLOR;
+  const playerName = activePlayer?.name || 'Player';
+  const playerInitial = playerName.charAt(0).toUpperCase();
+  const playerColor = activePlayer?.dartColor || DEFAULT_DART_COLOR;
 
   return (
     <header
@@ -160,17 +173,17 @@ export const Header: React.FC<HeaderProps> = ({
           {isDartCounterTheme ? (
             <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[#FFF3EB] border border-[#F76505]/30 text-sm sm:text-base font-bold text-[#111827]">
               <div className="w-6 h-6 rounded-full flex items-center justify-center font-black text-xs text-white bg-[#F76505] shrink-0">
-                {activePlayer.name.charAt(0).toUpperCase()}
+                {playerInitial}
               </div>
               <span className="truncate max-w-[180px] sm:max-w-[240px]">
-                {activePlayer.name}
+                {playerName}
               </span>
             </div>
           ) : isPartyMode ? (
             <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-purple-950/70 border border-amber-400/35 text-sm sm:text-base font-bold text-amber-200 shadow-[0_0_16px_-4px_rgba(250,204,21,0.25)]">
               <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
               <span className="truncate max-w-[180px] sm:max-w-[240px]">
-                {activePlayer.name}
+                {playerName}
               </span>
               <span className="hidden md:inline text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-200 border border-purple-400/30">
                 Party • Unsaved
@@ -187,10 +200,10 @@ export const Header: React.FC<HeaderProps> = ({
                 className="w-6 h-6 rounded-full flex items-center justify-center font-black text-xs text-slate-950 shrink-0"
                 style={{ backgroundColor: playerColor }}
               >
-                {activePlayer.name.charAt(0).toUpperCase()}
+                {playerInitial}
               </div>
               <span className="truncate max-w-[180px] sm:max-w-[240px]">
-                {activePlayer.name}
+                {playerName}
               </span>
             </div>
           )}

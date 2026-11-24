@@ -10,6 +10,7 @@ import {
 } from '../types/dartCounter';
 import { isDouble } from '../games/utils/dartHelpers';
 import { usePlayerStore } from './usePlayerStore';
+import { safeLocalStorage } from '../lib/storage';
 
 export type OnlineStartScore = 501 | 301 | 701;
 export type OnlineOutRule = 'double' | 'straight';
@@ -54,6 +55,7 @@ interface OnlineMatchState {
   opponentLegs: number;
   remaining: number;
   turnStartRemaining: number;
+  lastTurnStartRemaining: number | null;
   dartsInLeg: number;
   legPointsScored: number;
   visitDartsCount: number;
@@ -114,6 +116,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
       opponentLegs: 0,
       remaining: 501,
       turnStartRemaining: 501,
+      lastTurnStartRemaining: null,
       dartsInLeg: 0,
       legPointsScored: 0,
       visitDartsCount: 0,
@@ -153,6 +156,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
           opponentLegs: 0,
           remaining: startScore,
           turnStartRemaining: startScore,
+          lastTurnStartRemaining: null,
           dartsInLeg: 0,
           legPointsScored: 0,
           visitDartsCount: 0,
@@ -172,6 +176,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
           opponentAvg: null,
           isPlayerTurn: true,
           isBust: false,
+          lastTurnStartRemaining: null,
           lastBanner: null,
           matchWinner: null,
           history: [],
@@ -209,6 +214,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
 
           set({
             playerLegs: nextPlayerLegs,
+            lastTurnStartRemaining: s.turnStartRemaining,
             remaining: wonMatch ? 0 : s.startScore,
             turnStartRemaining: wonMatch ? 0 : s.startScore,
             dartsInLeg: wonMatch ? nextDartsInLeg : 0,
@@ -237,6 +243,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         if (isBust) {
           set({
             remaining: s.turnStartRemaining,
+            lastTurnStartRemaining: null,
             dartsInLeg: nextDartsInLeg,
             visitDartsCount: nextVisitCount,
             isBust: true,
@@ -258,6 +265,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         const nextPoints = s.legPointsScored + pts;
         set({
           remaining: after,
+          lastTurnStartRemaining: null,
           dartsInLeg: nextDartsInLeg,
           legPointsScored: nextPoints,
           visitDartsCount: nextVisitCount,
@@ -316,6 +324,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         if (!s.isActive || s.matchWinner) return;
         set({
           turnStartRemaining: s.remaining,
+          lastTurnStartRemaining: null,
           visitDartsCount: 0,
           isBust: false,
         });
@@ -328,6 +337,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         set({
           remaining: clamped,
           turnStartRemaining: clamped,
+          lastTurnStartRemaining: null,
           legPointsScored: Math.max(0, s.startScore - clamped),
           visitDartsCount: 0,
           isBust: false,
@@ -344,6 +354,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
           opponentLegs: nextOpp,
           remaining: s.startScore,
           turnStartRemaining: s.startScore,
+          lastTurnStartRemaining: null,
           dartsInLeg: 0,
           legPointsScored: 0,
           visitDartsCount: 0,
@@ -361,6 +372,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         set({
           remaining: s.startScore,
           turnStartRemaining: s.startScore,
+          lastTurnStartRemaining: null,
           dartsInLeg: 0,
           legPointsScored: 0,
           visitDartsCount: 0,
@@ -376,6 +388,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         const prev = s.history[s.history.length - 1];
         set({
           ...prev,
+          lastTurnStartRemaining: null,
           visitDartsCount: Math.max(0, s.visitDartsCount - 1),
           matchWinner: null,
           lastBanner: null,
@@ -425,6 +438,7 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
               opponentRemaining: null,
               opponentAvg: null,
               isPlayerTurn: true,
+              lastTurnStartRemaining: null,
               dcMatchUrl: null,
               dcPendingVisit: null,
               dcLastSubmitStatus: null,
@@ -436,12 +450,19 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
               matchWinner: null,
             });
           } else {
-            set({
-              dcMatchUrl: null,
-              dcPendingInvites: incomingInvites,
-              dcOnlineFriends: incomingFriends,
-              dcOutgoingInviteTo: outgoingInviteTo,
-            });
+            const lobbyUnchanged =
+              s.dcMatchUrl === null &&
+              s.dcOutgoingInviteTo === outgoingInviteTo &&
+              JSON.stringify(s.dcPendingInvites) === JSON.stringify(incomingInvites) &&
+              JSON.stringify(s.dcOnlineFriends) === JSON.stringify(incomingFriends);
+            if (!lobbyUnchanged) {
+              set({
+                dcMatchUrl: null,
+                dcPendingInvites: incomingInvites,
+                dcOnlineFriends: incomingFriends,
+                dcOutgoingInviteTo: outgoingInviteTo,
+              });
+            }
           }
           return;
         }
@@ -457,12 +478,22 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
             : s.opponentName && s.opponentName !== 'Online Opponent'
             ? s.opponentName
             : 'DartCounter Opponent';
-        const playerLegs = Math.max(0, Math.round(dc.playerLegs || 0));
-        const opponentLegs = Math.max(0, Math.round(dc.opponentLegs || 0));
-        const legsToWin = Math.max(0, Math.round(dc.legsToWin || 0));
-        const rawDcPlayerRem = Math.max(0, Math.min(startScore, Math.round(dc.playerRemaining)));
+        const playerLegs = Number.isFinite(dc.playerLegs)
+          ? Math.max(0, Math.round(dc.playerLegs))
+          : s.playerLegs;
+        const opponentLegs = Number.isFinite(dc.opponentLegs)
+          ? Math.max(0, Math.round(dc.opponentLegs))
+          : s.opponentLegs;
+        const legsToWin = Number.isFinite(dc.legsToWin)
+          ? Math.max(0, Math.round(dc.legsToWin))
+          : 0;
+        const rawDcPlayerRem = Number.isFinite(dc.playerRemaining)
+          ? Math.max(0, Math.min(startScore, Math.round(dc.playerRemaining)))
+          : s.isActive && s.source === 'dartcounter'
+          ? s.remaining
+          : startScore;
         const rawDcOppRem =
-          typeof dc.opponentRemaining === 'number'
+          typeof dc.opponentRemaining === 'number' && Number.isFinite(dc.opponentRemaining)
             ? Math.max(0, Math.min(startScore, Math.round(dc.opponentRemaining)))
             : null;
 
@@ -525,12 +556,16 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
           legsToWin: legsToWin || s.legsToWin || 3,
           opponentName,
           opponentRemaining: dcOppRem,
-          opponentAvg: typeof dc.opponentAvg === 'number' ? dc.opponentAvg : s.opponentAvg,
+          opponentAvg:
+            typeof dc.opponentAvg === 'number' && Number.isFinite(dc.opponentAvg)
+              ? dc.opponentAvg
+              : s.opponentAvg,
           isPlayerTurn: Boolean(dc.isPlayerTurn),
           playerLegs,
           opponentLegs,
           remaining: nextRemaining,
           turnStartRemaining: nextTurnStart,
+          lastTurnStartRemaining: isNewLeg ? null : s.lastTurnStartRemaining,
           legPointsScored: isNewLeg ? Math.max(0, startScore - dcPlayerRem) : nextPoints,
           dartsInLeg: isNewLeg ? 0 : s.dartsInLeg,
           visitDartsCount: isNewLeg ? 0 : keepLocalMidVisit ? s.visitDartsCount : 0,
@@ -565,29 +600,32 @@ export const useOnlineMatchStore = create<OnlineMatchState>()(
         return state;
       },
       storage: createJSONStorage(() => ({
-        getItem: (name) => localStorage.getItem(name),
+        getItem: (name) => safeLocalStorage.getItem(name),
         setItem: (name, value) => {
           // Never overwrite persisted online match state during Party Mode
           if (usePlayerStore.getState().isPartyMode) return;
-          localStorage.setItem(name, value);
+          safeLocalStorage.setItem(name, value);
         },
-        removeItem: (name) => localStorage.removeItem(name),
+        removeItem: (name) => safeLocalStorage.removeItem(name),
       })),
-      partialize: (s) => ({
-        isActive: s.isActive,
-        source: s.source,
-        startScore: s.startScore,
-        outRule: s.outRule,
-        legsToWin: s.legsToWin,
-        opponentName: s.opponentName,
-        playerLegs: s.playerLegs,
-        opponentLegs: s.opponentLegs,
-        remaining: s.remaining,
-        turnStartRemaining: s.turnStartRemaining,
-        dartsInLeg: s.dartsInLeg,
-        legPointsScored: s.legPointsScored,
-        dcMode: s.dcMode,
-      }),
+      partialize: (s) => {
+        const isLiveDartCounter = s.source === 'dartcounter';
+        return {
+          isActive: isLiveDartCounter ? false : s.isActive,
+          source: isLiveDartCounter ? 'manual' : s.source,
+          startScore: s.startScore,
+          outRule: s.outRule,
+          legsToWin: s.legsToWin,
+          opponentName: s.opponentName,
+          playerLegs: isLiveDartCounter ? 0 : s.playerLegs,
+          opponentLegs: isLiveDartCounter ? 0 : s.opponentLegs,
+          remaining: isLiveDartCounter ? s.startScore : s.remaining,
+          turnStartRemaining: isLiveDartCounter ? s.startScore : s.turnStartRemaining,
+          dartsInLeg: isLiveDartCounter ? 0 : s.dartsInLeg,
+          legPointsScored: isLiveDartCounter ? 0 : s.legPointsScored,
+          dcMode: s.dcMode,
+        };
+      },
     }
   )
 );

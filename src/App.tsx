@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { Header } from './components/layout/Header';
 import { BentoGrid } from './components/layout/BentoGrid';
 import { OnlineMatchFullscreenArena } from './components/online/OnlineMatchFullscreenArena';
@@ -9,6 +9,7 @@ import { MobileRemoteView } from './components/remote/MobileRemoteView';
 import { DevConsoleQrModal } from './components/dev/DevConsoleQrModal';
 import { MobileDevConsoleView } from './components/dev/MobileDevConsoleView';
 import { ActionReplayOverlay } from './components/replay/ActionReplayOverlay';
+import { AppErrorBoundary } from './components/common/AppErrorBoundary';
 import { KioskBootScreen } from './components/layout/KioskBootScreen';
 import { GamesLobby } from './games/components/GamesLobby';
 import { PracticeLobby } from './games/components/PracticeLobby';
@@ -35,8 +36,11 @@ import { DEFAULT_DART_COLOR, hexToRgbTriplet } from './lib/playerThemes';
 import { Trophy } from 'lucide-react';
 
 const KioskApp: React.FC = () => {
-  const { dataMode, localWsUrl, localHttpUrl, isAutoSimulating, autoSimIntervalMs } =
-    useSettingsStore();
+  const dataMode = useSettingsStore((s) => s.dataMode);
+  const localWsUrl = useSettingsStore((s) => s.localWsUrl);
+  const localHttpUrl = useSettingsStore((s) => s.localHttpUrl);
+  const isAutoSimulating = useSettingsStore((s) => s.isAutoSimulating);
+  const autoSimIntervalMs = useSettingsStore((s) => s.autoSimIntervalMs);
   const syncBoardThrows = useLiveBoardStore((s) => s.syncBoardThrows);
   const addSimulatedDart = useLiveBoardStore((s) => s.addSimulatedDart);
   const completeVisit = useLiveBoardStore((s) => s.completeVisit);
@@ -66,6 +70,8 @@ const KioskApp: React.FC = () => {
   useDartCounterBridge();
 
   const boardServiceRef = useRef<LocalBoardManagerService | null>(null);
+  const startupHydratedRef = useRef(false);
+  const handleBootComplete = useCallback(() => setIsBootingKiosk(false), []);
 
   // Kiosk Keyboard Shortcuts:
   // - F                 -> Instant Fullscreen Kiosk Mode toggle (ignores editable fields)
@@ -123,6 +129,7 @@ const KioskApp: React.FC = () => {
   useEffect(() => {
     let stopSync: (() => void) | null = null;
     let cancelled = false;
+    startupHydratedRef.current = true;
 
     void hydrateDashboardStateFromDisk().then(() => {
       if (!cancelled) {
@@ -143,9 +150,10 @@ const KioskApp: React.FC = () => {
     };
   }, [hydrateVault, loadSavedClips]);
 
-  // Fallback hydration if user skips KioskBootScreen early
+  // Fallback hydration if somehow mount effect did not run before exiting KioskBootScreen
   useEffect(() => {
-    if (!isBootingKiosk) {
+    if (!isBootingKiosk && !startupHydratedRef.current) {
+      startupHydratedRef.current = true;
       void hydrateDashboardStateFromDisk();
       void hydrateVault();
       void loadSavedClips();
@@ -244,7 +252,7 @@ const KioskApp: React.FC = () => {
     : isTurnTintActive
     ? activeTurnPlayerColor!
     : !isPartyMode
-    ? activePlayer.dartColor || DEFAULT_DART_COLOR
+    ? activePlayer?.dartColor || DEFAULT_DART_COLOR
     : undefined;
 
   const rootStyle = resolvedTintHex
@@ -270,7 +278,7 @@ const KioskApp: React.FC = () => {
       {isBootingKiosk && (
         <KioskBootScreen
           isLocalConnected={isLocalConnected}
-          onComplete={() => setIsBootingKiosk(false)}
+          onComplete={handleBootComplete}
         />
       )}
 
@@ -328,7 +336,13 @@ const KioskApp: React.FC = () => {
       />
 
       {/* Full-Viewport Broadcast Side-by-Side Action Replay Overlay */}
-      <ActionReplayOverlay />
+      <AppErrorBoundary
+        mode="silent"
+        label="Action Replay Overlay"
+        onError={() => useReplayStore.getState().closeOverlayClip()}
+      >
+        <ActionReplayOverlay />
+      </AppErrorBoundary>
 
       {/* Passive Objective Completed Toast Banner */}
       {recentlyCompletedObjective && (

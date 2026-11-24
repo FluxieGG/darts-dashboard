@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLayoutStore } from '../../store/useLayoutStore';
 import { WIDGET_REGISTRY } from '../widgets/widgetRegistry';
+import { AppErrorBoundary } from '../common/AppErrorBoundary';
 import { cn } from '../../lib/utils';
 
 export const BentoGrid: React.FC = () => {
@@ -35,7 +36,9 @@ export const BentoGrid: React.FC = () => {
                 isFullWidth ? 'col-span-2' : 'col-span-2 sm:col-span-1'
               )}
             >
-              <Component />
+              <AppErrorBoundary mode="widget" label={registryItem.title}>
+                <Component />
+              </AppErrorBoundary>
             </div>
           );
         })}

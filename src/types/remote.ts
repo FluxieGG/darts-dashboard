@@ -171,6 +171,7 @@ export interface RemoteKioskState {
   replayErrorEpoch: number;
   hasActiveReplayOverlay: boolean;
   replayClipCount: number;
+  clipsRevision?: number;
   isSavingReplay: boolean;
   lastRecording: {
     id: string;
@@ -180,7 +181,7 @@ export interface RemoteKioskState {
     durationSec: number;
     isSaved: boolean;
   } | null;
-  recentClips: Array<{
+  recentClips?: Array<{
     id: string;
     filename: string;
     relativePath?: string;

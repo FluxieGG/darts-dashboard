@@ -16,6 +16,8 @@ let latestSubmitResult = null;
 let streamAbortController = null;
 let streamConnecting = false;
 let reconnectTimer = null;
+let lastStreamActivityAt = 0;
+const tabStates = new Map(); // tabId -> { state, updatedAt }
 
 async function loadSettings() {
   try {
@@ -41,11 +43,70 @@ function getBaseUrl() {
   return (settings.kioskUrl || DEFAULT_SETTINGS.kioskUrl).replace(/\/+$/, '');
 }
 
+const DARTCOUNTER_URL_PATTERNS = [
+  'https://app.dartcounter.net/*',
+  'https://*.dartcounter.net/*',
+];
+
+async function queryDartCounterTabs() {
+  try {
+    return await chrome.tabs.query({ url: DARTCOUNTER_URL_PATTERNS });
+  } catch {
+    return [];
+  }
+}
+
+function selectPrimaryTab(tabs) {
+  if (!Array.isArray(tabs) || tabs.length === 0) return null;
+
+  const openIds = new Set(tabs.map((t) => t.id).filter((id) => typeof id === 'number'));
+  for (const knownId of tabStates.keys()) {
+    if (!openIds.has(knownId)) {
+      tabStates.delete(knownId);
+    }
+  }
+
+  let bestMatchTab = null;
+  let bestMatchTs = -1;
+  let bestRecentTab = null;
+  let bestRecentTs = -1;
+
+  for (const tab of tabs) {
+    if (typeof tab.id !== 'number') continue;
+    const entry = tabStates.get(tab.id);
+    const ts = entry?.updatedAt || 0;
+    if (entry?.state?.isMatchActive) {
+      if (ts >= bestMatchTs) {
+        bestMatchTs = ts;
+        bestMatchTab = tab;
+      }
+    }
+    if (entry && ts >= bestRecentTs) {
+      bestRecentTs = ts;
+      bestRecentTab = tab;
+    }
+  }
+
+  if (bestMatchTab) return bestMatchTab;
+  if (bestRecentTab) return bestRecentTab;
+  return tabs.find((t) => t.active && typeof t.id === 'number') || tabs.find((t) => typeof t.id === 'number') || null;
+}
+
+async function sendToPrimaryDartCounterTab(message) {
+  try {
+    const tabs = await queryDartCounterTabs();
+    const primary = selectPrimaryTab(tabs);
+    if (primary && typeof primary.id === 'number') {
+      chrome.tabs.sendMessage(primary.id, message).catch(() => {});
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function broadcastToDartCounterTabs(message) {
   try {
-    const tabs = await chrome.tabs.query({
-      url: ['https://app.dartcounter.net/*', 'https://*.dartcounter.net/*'],
-    });
+    const tabs = await queryDartCounterTabs();
     for (const tab of tabs) {
       if (tab.id) {
         chrome.tabs.sendMessage(tab.id, message).catch(() => {});
@@ -102,6 +163,7 @@ async function connectKioskStream(forceReset = false) {
 
   const abort = new AbortController();
   streamAbortController = abort;
+  let reader = null;
 
   try {
     await loadSettings();
@@ -115,8 +177,13 @@ async function connectKioskStream(forceReset = false) {
       throw new Error(`HTTP ${res.status}`);
     }
 
+    if (streamAbortController !== abort || abort.signal.aborted) {
+      return;
+    }
+
     streamConnecting = false;
     kioskConnected = true;
+    lastStreamActivityAt = Date.now();
     void broadcastToDartCounterTabs({ type: 'bridge_status', kioskConnected, settings });
 
     // Re-push latest scraped state right away if we already have an active tab
@@ -124,7 +191,7 @@ async function connectKioskStream(forceReset = false) {
       void postJson('/api/dartcounter/state', latestScrapedState);
     }
 
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
@@ -133,6 +200,7 @@ async function connectKioskStream(forceReset = false) {
       if (done) break;
       if (!value) continue;
 
+      lastStreamActivityAt = Date.now();
       buffer += decoder.decode(value, { stream: true });
 
       let sepIdx;
@@ -145,10 +213,23 @@ async function connectKioskStream(forceReset = false) {
   } catch {
     // Expected during reconnect or when Kiosk server is offline
   } finally {
-    streamConnecting = false;
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore
+      }
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+    }
     if (streamAbortController === abort) {
+      streamConnecting = false;
       streamAbortController = null;
       kioskConnected = false;
+      lastStreamActivityAt = 0;
       void broadcastToDartCounterTabs({ type: 'bridge_status', kioskConnected, settings });
       scheduleReconnect(3000);
     }
@@ -180,13 +261,13 @@ function handleSseBlock(block) {
   if (eventName === 'dc_config' && payload && payload.mode) {
     void saveSettings({ mode: payload.mode });
   } else if (eventName === 'dc_visit' && payload) {
-    void broadcastToDartCounterTabs({
+    void sendToPrimaryDartCounterTab({
       type: 'submit_visit',
       visit: payload,
       settings,
     });
   } else if (eventName === 'dc_control' && payload) {
-    void broadcastToDartCounterTabs({
+    void sendToPrimaryDartCounterTab({
       type: 'dc_control_command',
       command: payload,
       settings,
@@ -194,7 +275,7 @@ function handleSseBlock(block) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false;
 
   if (msg.type === 'content_heartbeat') {
@@ -206,12 +287,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'dc_state_update') {
-    latestScrapedState = msg.state;
-    void postJson('/api/dartcounter/state', msg.state).then((ok) => {
-      if (ok && !kioskConnected && !streamAbortController && !streamConnecting) {
-        void connectKioskStream();
+    const tabId = sender?.tab?.id;
+    const now = Date.now();
+    if (typeof tabId === 'number') {
+      tabStates.set(tabId, { state: msg.state, updatedAt: now });
+    }
+
+    // Prevent a background lobby tab from wiping out an active match tab!
+    let otherTabHasActiveMatch = false;
+    if (!msg.state?.isMatchActive) {
+      for (const [id, entry] of tabStates.entries()) {
+        if (id !== tabId && entry?.state?.isMatchActive) {
+          otherTabHasActiveMatch = true;
+          break;
+        }
       }
-    });
+    }
+
+    if (!otherTabHasActiveMatch) {
+      latestScrapedState = msg.state;
+      void postJson('/api/dartcounter/state', msg.state).then((ok) => {
+        if (ok && !kioskConnected && !streamAbortController && !streamConnecting) {
+          void connectKioskStream();
+        }
+      });
+    }
     sendResponse({ ok: true, kioskConnected, settings });
     return false;
   }
@@ -230,28 +330,49 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'popup_get_status') {
-    void loadSettings().then(() => {
-      sendResponse({
-        ok: true,
-        kioskConnected,
-        settings,
-        latestScrapedState,
-        latestSubmitResult,
-      });
-    });
+    void (async () => {
+      try {
+        await loadSettings();
+        sendResponse({
+          ok: true,
+          kioskConnected,
+          settings,
+          latestScrapedState,
+          latestSubmitResult,
+        });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: err?.message || String(err),
+          kioskConnected,
+          settings,
+          latestScrapedState,
+          latestSubmitResult,
+        });
+      }
+    })();
     return true;
   }
 
   if (msg.type === 'popup_update_settings') {
     void (async () => {
-      await saveSettings(msg.partial || {});
-      if (msg.partial && msg.partial.mode) {
-        await postJson('/api/dartcounter/config', { mode: msg.partial.mode });
+      try {
+        await saveSettings(msg.partial || {});
+        if (msg.partial && msg.partial.mode) {
+          await postJson('/api/dartcounter/config', { mode: msg.partial.mode });
+        }
+        if (msg.partial && msg.partial.kioskUrl) {
+          void connectKioskStream(true);
+        }
+        sendResponse({ ok: true, kioskConnected, settings });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: err?.message || String(err),
+          kioskConnected,
+          settings,
+        });
       }
-      if (msg.partial && msg.partial.kioskUrl) {
-        void connectKioskStream(true);
-      }
-      sendResponse({ ok: true, kioskConnected, settings });
     })();
     return true;
   }
@@ -271,10 +392,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-chrome.tabs.onRemoved.addListener(() => {
-  void chrome.tabs
-    .query({ url: ['https://app.dartcounter.net/*', 'https://*.dartcounter.net/*'] })
+chrome.tabs.onRemoved.addListener((removedTabId) => {
+  tabStates.delete(removedTabId);
+  void queryDartCounterTabs()
     .then((tabs) => {
+      const primary = selectPrimaryTab(tabs);
+      if (primary && typeof primary.id === 'number') {
+        const entry = tabStates.get(primary.id);
+        if (entry?.state) {
+          latestScrapedState = entry.state;
+          void postJson('/api/dartcounter/state', latestScrapedState);
+          return;
+        }
+      }
       if (tabs.length === 0 && latestScrapedState?.isMatchActive) {
         latestScrapedState = {
           ...latestScrapedState,
@@ -287,10 +417,10 @@ chrome.tabs.onRemoved.addListener(() => {
     .catch(() => {});
 });
 
-// MV3 keepalive alarm (every 24s) so Brave NEVER suspends the service worker while occluded behind the Kiosk TV!
+// MV3 keepalive alarm (0.5m = 30s Chrome MV3 minimum) + stale SSE stream watchdog (> 45s)
 function ensureKeepaliveAlarm() {
   try {
-    chrome.alarms?.create('dc-keepalive', { periodInMinutes: 0.4 });
+    chrome.alarms?.create('dc-keepalive', { periodInMinutes: 0.5 });
   } catch {
     // ignore
   }
@@ -298,7 +428,14 @@ function ensureKeepaliveAlarm() {
 
 chrome.alarms?.onAlarm.addListener((alarm) => {
   if (alarm.name === 'dc-keepalive') {
-    if (!streamAbortController && !streamConnecting && !reconnectTimer) {
+    const streamIsStale =
+      Boolean(streamAbortController) &&
+      lastStreamActivityAt > 0 &&
+      Date.now() - lastStreamActivityAt > 45000;
+
+    if (streamIsStale) {
+      void connectKioskStream(true);
+    } else if (!streamAbortController && !streamConnecting && !reconnectTimer) {
       void connectKioskStream();
     }
     void broadcastToDartCounterTabs({ type: 'force_scrape' });

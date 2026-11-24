@@ -215,6 +215,7 @@ export const CricketGame: React.FC<GameModuleProps> = ({
     const prev = stack[stack.length - 1];
     commitState(prev.state, prev.turnStartState, stack.slice(0, -1));
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.visitEntries.map((e) => e.dart));
   }, [commitState]);
 
   const handleRestart = useCallback(() => {
@@ -366,6 +367,8 @@ export const CricketGame: React.FC<GameModuleProps> = ({
 
     return overlays;
   }, [state.players, activePlayer, isCutthroat]);
+
+  if (!activePlayer) return null;
 
   const activeClosedCount = getClosedCount(activePlayer);
 

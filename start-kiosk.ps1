@@ -1,7 +1,7 @@
 ﻿param(
   [switch]$Silent,
-  [switch]$StrictKiosk,
   [int]$BootDelaySec = 0,
+  [int]$CalibrationTimeoutSec = 180,
   [int]$DashboardPort = 5173,
   [int]$BoardPort = 3180
 )
@@ -40,165 +40,20 @@ function Test-LocalPort([int]$Port) {
   return $false
 }
 
-# Win32 window helper for reliable Maximize -> Focus -> Fullscreen Kiosk on Windows boot
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class KioskWin32 {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct RECT {
-    public int Left;
-    public int Top;
-    public int Right;
-    public int Bottom;
-  }
-
-  [DllImport("user32.dll")]
-  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-  [DllImport("user32.dll")]
-  public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-  [DllImport("user32.dll")]
-  public static extern IntPtr GetForegroundWindow();
-
-  [DllImport("user32.dll")]
-  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-  [DllImport("kernel32.dll")]
-  public static extern uint GetCurrentThreadId();
-
-  [DllImport("user32.dll")]
-  public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-  [DllImport("user32.dll")]
-  public static extern bool BringWindowToTop(IntPtr hWnd);
-
-  [DllImport("user32.dll")]
-  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-  [DllImport("user32.dll")]
-  public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-
-  public const int SW_RESTORE = 9;
-  public const int SW_MAXIMIZE = 3;
-  public const int GWL_STYLE = -16;
-  public const int WS_CAPTION = 0x00C00000;
-
-  public static void FocusAndMaximize(IntPtr hWnd) {
-    if (hWnd == IntPtr.Zero) return;
-    IntPtr fg = GetForegroundWindow();
-    uint pid;
-    uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out pid) : 0;
-    uint curThread = GetCurrentThreadId();
-    uint targetThread = GetWindowThreadProcessId(hWnd, out pid);
-
-    if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, true);
-    if (targetThread != 0 && targetThread != curThread) AttachThreadInput(curThread, targetThread, true);
-
-    ShowWindow(hWnd, SW_MAXIMIZE);
-    BringWindowToTop(hWnd);
-    SetForegroundWindow(hWnd);
-
-    if (targetThread != 0 && targetThread != curThread) AttachThreadInput(curThread, targetThread, false);
-    if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, false);
-  }
-
-  public static bool IsBorderlessFullscreen(IntPtr hWnd, int screenW, int screenH) {
-    if (hWnd == IntPtr.Zero) return false;
-    RECT r;
-    if (!GetWindowRect(hWnd, out r)) return false;
-    int width = r.Right - r.Left;
-    int height = r.Bottom - r.Top;
-    int style = GetWindowLong(hWnd, GWL_STYLE);
-    bool hasCaption = (style & WS_CAPTION) != 0;
-    return (!hasCaption) && width >= screenW && height >= screenH;
-  }
-}
-"@
-
-function Find-AutodartsBrowserWindow {
-  $procs = Get-Process -Name msedge, chrome -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.MainWindowHandle -ne [IntPtr]::Zero -and
-      ($_.MainWindowTitle -like '*Autodarts*' -or $_.MainWindowTitle -like '*localhost:5173*')
-    }
-  return $procs | Select-Object -First 1
-}
-
-function Maximize-And-EnterKioskMode {
-  $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-  $win = $null
-
-  # Wait up to 18 seconds for Edge/Chrome Autodarts window to appear
-  for ($i = 0; $i -lt 72; $i++) {
-    $win = Find-AutodartsBrowserWindow
-    if ($win) { break }
-    Start-Sleep -Milliseconds 250
-  }
-
-  if (-not $win) {
-    Write-BootLog "      Could not locate Autodarts browser window for maximize/fullscreen." 'DarkYellow'
-    return
-  }
-
-  $hwnd = $win.MainWindowHandle
-
-  # Step A: Focus and Maximize the app window
-  [KioskWin32]::FocusAndMaximize($hwnd)
-  Write-BootLog "      Window focused & maximized ($($win.MainWindowTitle))." 'Cyan'
-
-  # Wait briefly for the React app title to finish loading before pressing 'f'
-  for ($w = 0; $w -lt 16; $w++) {
-    $refreshed = Find-AutodartsBrowserWindow
-    if ($refreshed -and $refreshed.MainWindowTitle -like '*Autodarts*') {
-      $hwnd = $refreshed.MainWindowHandle
-      break
-    }
-    Start-Sleep -Milliseconds 250
-  }
-  Start-Sleep -Milliseconds 450
-
-  # Step B: Enter true fullscreen kiosk mode if not already borderless fullscreen
-  if (-not [KioskWin32]::IsBorderlessFullscreen($hwnd, $screen.Width, $screen.Height)) {
-    [KioskWin32]::FocusAndMaximize($hwnd)
-    Start-Sleep -Milliseconds 150
-    $wshell = New-Object -ComObject WScript.Shell
-    # Send 'f' (in-app fullscreen kiosk toggle) and verify; fall back to F11 native browser fullscreen
-    $wshell.SendKeys('f')
-    Start-Sleep -Milliseconds 700
-
-    if (-not [KioskWin32]::IsBorderlessFullscreen($hwnd, $screen.Width, $screen.Height)) {
-      [KioskWin32]::FocusAndMaximize($hwnd)
-      Start-Sleep -Milliseconds 150
-      $wshell.SendKeys('{F11}')
-      Start-Sleep -Milliseconds 500
-    }
-  }
-
-  if ([KioskWin32]::IsBorderlessFullscreen($hwnd, $screen.Width, $screen.Height)) {
-    Write-BootLog "      Instant Fullscreen Kiosk Mode active!" 'Green'
-  } else {
-    Write-BootLog "      Sent fullscreen command (press F or F11 anytime to toggle)." 'DarkGray'
-  }
-}
-
 Write-BootLog "======================================================" 'Cyan'
-Write-BootLog "   AUTODARTS ZERO-TOUCH KIOSK BOOT SEQUENCE" 'White'
+Write-BootLog "   AUTODARTS DASHBOARD BOOT SEQUENCE (MANUAL BROWSER)" 'White'
 Write-BootLog "======================================================" 'Cyan'
 
 # Optional cold-boot settle delay so USB cameras & Wi-Fi initialize cleanly
 if ($BootDelaySec -gt 0) {
-  Write-BootLog "[0/6] Waiting ${BootDelaySec}s for Windows USB cameras & Wi-Fi to settle..." 'DarkGray'
+  Write-BootLog "[0/5] Waiting ${BootDelaySec}s for Windows USB cameras & Wi-Fi to settle..." 'DarkGray'
   Start-Sleep -Seconds $BootDelaySec
 }
 
 # ----------------------------------------------------------------------------
 # STEP 1: Launch Autodarts Desktop & wait for Local Board Manager (Port 3180)
 # ----------------------------------------------------------------------------
-Write-BootLog "[1/6] Checking Autodarts Desktop (port $BoardPort)..." 'Yellow'
+Write-BootLog "[1/5] Checking Autodarts Desktop (port $BoardPort)..." 'Yellow'
 
 if (Test-LocalPort $BoardPort) {
   Write-BootLog "      Autodarts Board Manager is already live on port $BoardPort." 'Green'
@@ -231,9 +86,66 @@ if (Test-LocalPort $BoardPort) {
 }
 
 # ----------------------------------------------------------------------------
-# STEP 2: Detect & Verify All Connected Cameras (Oche Cam + 3 Board Cams)
+# STEP 2: Wait for Autodarts Calibration & Board Detection to Finish
 # ----------------------------------------------------------------------------
-Write-BootLog "[2/6] Detecting all connected USB & Autodarts board cameras..." 'Yellow'
+Write-BootLog "[2/5] Waiting for Autodarts calibration & board detection..." 'Yellow'
+
+if (-not (Test-LocalPort $BoardPort)) {
+  Write-BootLog "      Skipping calibration wait (port $BoardPort not reachable)." 'DarkYellow'
+} else {
+  $calibrated = $false
+  $waitedAny = $false
+  $lastLoggedState = ''
+  $deadline = (Get-Date).AddSeconds($CalibrationTimeoutSec)
+  $lastHeartbeat = Get-Date
+
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $state = Invoke-RestMethod -Uri "http://127.0.0.1:$BoardPort/api/state" -TimeoutSec 2
+      $running = ($state.running -eq $true)
+      $statusStr = [string]$state.status
+      $eventStr = [string]$state.event
+
+      $isCalibratingOrStopped = ($statusStr -match 'calibrat|stop|init|start') -or ($eventStr -match 'calibrat')
+
+      if ($running -and -not $isCalibratingOrStopped) {
+        $calibrated = $true
+        if ($waitedAny) {
+          Write-BootLog "      Autodarts calibration complete & detection running (status: $statusStr)! Settling 2s..." 'Green'
+          Start-Sleep -Seconds 2
+        } else {
+          Write-BootLog "      Autodarts is already calibrated & running (status: $statusStr)." 'Green'
+        }
+        break
+      }
+
+      $stateSummary = "running=$running, status=$statusStr"
+      if ($stateSummary -ne $lastLoggedState -or ((Get-Date) - $lastHeartbeat).TotalSeconds -ge 15) {
+        Write-BootLog "      Waiting for Autodarts calibration/detection ($stateSummary)..." 'DarkGray'
+        $lastLoggedState = $stateSummary
+        $lastHeartbeat = Get-Date
+      }
+    } catch {
+      if ($lastLoggedState -ne 'api-warming' -or ((Get-Date) - $lastHeartbeat).TotalSeconds -ge 15) {
+        Write-BootLog "      Waiting for Autodarts /api/state to respond..." 'DarkGray'
+        $lastLoggedState = 'api-warming'
+        $lastHeartbeat = Get-Date
+      }
+    }
+
+    $waitedAny = $true
+    Start-Sleep -Seconds 1
+  }
+
+  if (-not $calibrated) {
+    Write-BootLog "      Timed out after ${CalibrationTimeoutSec}s waiting for Autodarts calibration ($lastLoggedState) - starting Dashboard anyway." 'DarkYellow'
+  }
+}
+
+# ----------------------------------------------------------------------------
+# STEP 3: Detect & Verify All Connected Cameras (Oche Cam + 3 Board Cams)
+# ----------------------------------------------------------------------------
+Write-BootLog "[3/5] Detecting all connected USB & Autodarts board cameras..." 'Yellow'
 
 $autodartsVidPids = @()
 $autodartsConfiguredCount = 0
@@ -346,9 +258,9 @@ try {
 } catch {}
 
 # ----------------------------------------------------------------------------
-# STEP 3: Start Dashboard + iPad LAN Relay + Career Vault + Replay Clipper
+# STEP 4: Start Dashboard + iPad LAN Relay + Career Vault + Replay Clipper
 # ----------------------------------------------------------------------------
-Write-BootLog "[3/6] Starting Autodarts Dashboard server (port $DashboardPort)..." 'Yellow'
+Write-BootLog "[4/5] Starting Autodarts Dashboard server (port $DashboardPort)..." 'Yellow'
 
 if (Test-LocalPort $DashboardPort) {
   Write-BootLog "      Dashboard server is already running on port $DashboardPort." 'Green'
@@ -376,10 +288,6 @@ if (Test-LocalPort $DashboardPort) {
   }
 }
 
-# ----------------------------------------------------------------------------
-# STEP 4: Verify iPad Oche Deck LAN Relay is listening
-# ----------------------------------------------------------------------------
-Write-BootLog "[4/6] Arming iPad Oche Deck LAN Relay..." 'Yellow'
 $lanUrl = $null
 for ($i = 0; $i -lt 8; $i++) {
   try {
@@ -402,7 +310,7 @@ if ($lanUrl) {
 # ----------------------------------------------------------------------------
 # STEP 5: Launch Brave Browser -> Target DartCounter (Ready for Online Games)
 # ----------------------------------------------------------------------------
-Write-BootLog "[5/6] Launching Brave Browser -> Target DartCounter (https://app.dartcounter.net)..." 'Yellow'
+Write-BootLog "[5/5] Launching Brave Browser -> Target DartCounter (https://app.dartcounter.net)..." 'Yellow'
 
 $dartCounterUrl = "https://app.dartcounter.net"
 $existingBraveDc = Get-Process -Name brave -ErrorAction SilentlyContinue |
@@ -424,7 +332,6 @@ if ($existingBraveDc) {
 
   if ($braveExe) {
     # Disable background tab throttling / window occlusion so DartCounter stays 100% live
-    # and auto-logs scores instantly even while Brave sits behind the fullscreen Kiosk TV!
     Start-Process -FilePath $braveExe -ArgumentList @(
       "--new-window",
       "--disable-background-timer-throttling",
@@ -437,62 +344,12 @@ if ($existingBraveDc) {
       $dartCounterUrl
     )
     Write-BootLog "      Brave launched (un-throttled) to $dartCounterUrl (ready to start a game)." 'Green'
-    Start-Sleep -Milliseconds 900
   } else {
     Write-BootLog "      Brave Browser executable not found in standard paths." 'DarkYellow'
   }
 }
 
-# ----------------------------------------------------------------------------
-# STEP 6: Open App -> Maximize -> Instant Fullscreen Kiosk Mode
-# ----------------------------------------------------------------------------
-Write-BootLog "[6/6] Launching Autodarts Kiosk Display (Open -> Maximize -> Fullscreen)..." 'Yellow'
-
-$kioskUrl = "http://localhost:$DashboardPort/?kiosk=1"
-$existingWindow = Find-AutodartsBrowserWindow
-
-if ($existingWindow) {
-  Write-BootLog "      Found existing Autodarts window — maximizing & entering kiosk mode..." 'Cyan'
-  Maximize-And-EnterKioskMode
-} else {
-  $browserPaths = @(
-    "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe",
-    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-    "$env:ProgramFiles (x86)\Google\Chrome\Application\chrome.exe"
-  )
-  $browser = $browserPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-  if ($browser) {
-    if ($StrictKiosk) {
-      $argsList = @(
-        "--kiosk", $kioskUrl,
-        "--edge-kiosk-type=fullscreen",
-        "--autoplay-policy=no-user-gesture-required",
-        "--disable-session-crashed-bubble",
-        "--noerrdialogs",
-        "--no-first-run"
-      )
-      Start-Process -FilePath $browser -ArgumentList $argsList
-    } else {
-      $argsList = @(
-        "--app=$kioskUrl",
-        "--start-maximized",
-        "--window-position=0,0",
-        "--autoplay-policy=no-user-gesture-required",
-        "--disable-session-crashed-bubble",
-        "--noerrdialogs",
-        "--no-first-run"
-      )
-      Start-Process -FilePath $browser -ArgumentList $argsList
-      Maximize-And-EnterKioskMode
-    }
-    Write-BootLog "      Kiosk launched cleanly! Boot sequence complete." 'Green'
-  } else {
-    Start-Process $kioskUrl
-    Write-BootLog "      Opened in default browser." 'Green'
-  }
-}
+Write-BootLog "      App server ready! Open http://localhost:$DashboardPort manually in your browser." 'Green'
 
 if (-not $Silent) {
   Start-Sleep -Seconds 2

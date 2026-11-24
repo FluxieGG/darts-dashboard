@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -14,13 +15,36 @@ function fetchAutodartsCameraConfig(): Promise<{
   reachable: boolean;
 }> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: { vidPids: string[]; configuredCamCount: number; reachable: boolean }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const req = http.get('http://127.0.0.1:3180/api/config', { timeout: 1500 }, (upstreamRes) => {
-      let raw = '';
-      upstreamRes.on('data', (chunk) => {
-        raw += chunk.toString();
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+
+      upstreamRes.on('data', (chunk: Buffer | string) => {
+        if (settled) return;
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        if (totalBytes > 2 * 1024 * 1024) {
+          upstreamRes.destroy();
+          finish({ vidPids: [], configuredCamCount: 0, reachable: true });
+          return;
+        }
+        chunks.push(buf);
       });
+
+      upstreamRes.on('error', () => {
+        finish({ vidPids: [], configuredCamCount: 0, reachable: false });
+      });
+
       upstreamRes.on('end', () => {
         try {
+          const raw = Buffer.concat(chunks, totalBytes).toString('utf-8');
           const parsed = JSON.parse(raw) as { cam?: { cams?: string[] } };
           const cams = Array.isArray(parsed?.cam?.cams) ? parsed.cam.cams : [];
           const vidPids: string[] = [];
@@ -31,19 +55,19 @@ function fetchAutodartsCameraConfig(): Promise<{
               if (!vidPids.includes(vp)) vidPids.push(vp);
             }
           }
-          resolve({ vidPids, configuredCamCount: cams.length, reachable: true });
+          finish({ vidPids, configuredCamCount: cams.length, reachable: true });
         } catch {
-          resolve({ vidPids: [], configuredCamCount: 0, reachable: true });
+          finish({ vidPids: [], configuredCamCount: 0, reachable: true });
         }
       });
     });
 
     req.on('timeout', () => {
       req.destroy();
-      resolve({ vidPids: [], configuredCamCount: 0, reachable: false });
+      finish({ vidPids: [], configuredCamCount: 0, reachable: false });
     });
     req.on('error', () => {
-      resolve({ vidPids: [], configuredCamCount: 0, reachable: false });
+      finish({ vidPids: [], configuredCamCount: 0, reachable: false });
     });
   });
 }
@@ -154,19 +178,60 @@ function encodeUrlPath(relativePath: string): string {
     .join('/');
 }
 
-function writeIndex(dir: string, clips: StoredClipMeta[]): void {
-  ensureDir(dir);
-  const indexPath = path.join(dir, INDEX_FILENAME);
-  const tmpPath = `${indexPath}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(clips, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, indexPath);
+const indexWriteQueues = new Map<string, Promise<void>>();
+
+function enqueueIndexWrite(dir: string, task: () => Promise<void>): Promise<void> {
+  const key = path.resolve(dir).toLowerCase();
+  const prev = indexWriteQueues.get(key) ?? Promise.resolve();
+  const next = prev.catch(() => undefined).then(task);
+  indexWriteQueues.set(key, next);
+  next.finally(() => {
+    if (indexWriteQueues.get(key) === next) {
+      indexWriteQueues.delete(key);
+    }
+  });
+  return next;
+}
+
+function writeIndex(dir: string, clips: StoredClipMeta[]): Promise<void> {
+  return enqueueIndexWrite(dir, async () => {
+    await fs.promises.mkdir(dir, { recursive: true });
+    const indexPath = path.join(dir, INDEX_FILENAME);
+    const tmpPath = `${indexPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    const serialized = JSON.stringify(clips, null, 2);
+    let renamed = false;
+
+    try {
+      await fs.promises.writeFile(tmpPath, serialized, 'utf-8');
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          await fs.promises.rename(tmpPath, indexPath);
+          renamed = true;
+          break;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if ((code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') && attempt < 4) {
+            await new Promise((r) => setTimeout(r, 30 * (attempt + 1)));
+            continue;
+          }
+          throw err;
+        }
+      }
+    } finally {
+      if (!renamed) {
+        await fs.promises.unlink(tmpPath).catch(() => {
+          // ignore temp cleanup errors
+        });
+      }
+    }
+  });
 }
 
 /**
  * Reads `clips-index.json`, automatically migrates any legacy root-level clips into
  * `Game Highlights`, `User Triggered`, or `Dev Tests`, and prunes missing files.
  */
-function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
+async function readAndOrganizeIndex(rootDir: string): Promise<StoredClipMeta[]> {
   ensureCategoryFolders(rootDir);
   const indexPath = path.join(rootDir, INDEX_FILENAME);
   let rawClips: StoredClipMeta[] = [];
@@ -184,6 +249,7 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
 
   let dirty = false;
   const organized: StoredClipMeta[] = [];
+  const seenRelPaths = new Set<string>();
 
   for (const item of rawClips) {
     if (!item?.filename) continue;
@@ -191,6 +257,12 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
     const category = inferCategory(item);
     const subfolder = CATEGORY_FOLDERS[category];
     const targetRel = `${subfolder}/${item.filename}`;
+    const targetRelKey = targetRel.toLowerCase();
+    if (seenRelPaths.has(targetRelKey)) {
+      dirty = true;
+      continue;
+    }
+
     const targetFull = path.join(rootDir, subfolder, item.filename);
 
     // Check if file already exists in target subfolder, else migrate from root or old relativePath
@@ -228,6 +300,7 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
       dirty = true;
     }
 
+    seenRelPaths.add(targetRelKey);
     organized.push({
       ...item,
       category,
@@ -260,8 +333,6 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
 
   // Scan ALL 3 category subfolders on disk and auto-discover any clip files not yet in clips-index.json
   // so saved clips ALWAYS survive restarts, folder edits, or empty/corrupt index files!
-  const knownPaths = new Set(organized.map((c) => (c.relativePath || '').toLowerCase()));
-
   for (const [catKey, subfolder] of Object.entries(CATEGORY_FOLDERS) as Array<[ClipCategory, string]>) {
     const folderFull = path.join(rootDir, subfolder);
     try {
@@ -269,7 +340,7 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
       for (const entry of entries) {
         if (!entry.isFile() || !/\.(webm|mp4)$/i.test(entry.name)) continue;
         const targetRel = `${subfolder}/${entry.name}`;
-        if (knownPaths.has(targetRel.toLowerCase())) continue;
+        if (seenRelPaths.has(targetRel.toLowerCase())) continue;
 
         const targetFull = path.join(folderFull, entry.name);
         const stat = fs.statSync(targetFull);
@@ -323,7 +394,7 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
           isSavedToDisk: true,
           createdAt: Math.round(stat.mtimeMs),
         });
-        knownPaths.add(targetRel.toLowerCase());
+        seenRelPaths.add(targetRel.toLowerCase());
         dirty = true;
       }
     } catch {
@@ -335,7 +406,7 @@ function readAndOrganizeIndex(rootDir: string): StoredClipMeta[] {
   organized.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   if (dirty) {
-    writeIndex(rootDir, organized);
+    await writeIndex(rootDir, organized);
   }
 
   return organized;
@@ -345,19 +416,64 @@ function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let settled = false;
+    let ended = false;
     const maxBytes = 80 * 1024 * 1024;
 
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length;
+    const finishResolve = (buf: Buffer) => {
+      if (settled) return;
+      settled = true;
+      resolve(buf);
+    };
+
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      reject(err);
+    };
+
+    req.on('data', (chunk: Buffer | string) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
       if (total > maxBytes) {
-        reject(new Error('Clip exceeds 80MB limit'));
+        finishReject(new Error('Clip exceeds 80MB limit'));
+        req.destroy();
         return;
       }
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      chunks.push(buf);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+
+    req.on('end', () => {
+      ended = true;
+      if (settled) return;
+      finishResolve(Buffer.concat(chunks, total));
+    });
+
+    req.on('aborted', () => {
+      finishReject(new Error('Upload aborted by client'));
+    });
+
+    req.on('close', () => {
+      if (!ended && !settled) {
+        finishReject(new Error('Upload stream closed before completion'));
+      }
+    });
+
+    req.on('error', (err) => finishReject(err));
   });
+}
+
+function sendJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
+  if (res.writableEnded || res.destroyed) return;
+  if (!res.headersSent) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  } else {
+    res.end();
+  }
 }
 
 function attachReplayMiddleware(
@@ -371,12 +487,23 @@ function attachReplayMiddleware(
       return;
     }
 
-    const url = new URL(req.url, 'http://127.0.0.1');
+    let url: URL;
+    try {
+      url = new URL(req.url, 'http://127.0.0.1');
+    } catch {
+      sendJsonResponse(res, 400, { ok: false, error: 'Invalid request URL' });
+      return;
+    }
     const pathname = url.pathname;
 
     const requestedDir = url.searchParams.get('dir');
     if (requestedDir && requestedDir.trim().length > 2) {
-      activeClipsDir = path.resolve(requestedDir.trim());
+      try {
+        activeClipsDir = path.resolve(requestedDir.trim());
+      } catch {
+        sendJsonResponse(res, 400, { ok: false, error: 'Invalid clips directory path' });
+        return;
+      }
     }
 
     // 0. GET /api/replays/board-stream — Unbuffered live MJPEG relay from Autodarts Desktop (all 3 board cameras)
@@ -384,12 +511,25 @@ function attachReplayMiddleware(
       const upstreamQuery = url.searchParams.get('warp') === '1' ? '?warp=true' : '';
       const upstreamUrl = `http://127.0.0.1:3180/api/streams/live${upstreamQuery}`;
 
-      const upstreamReq = http.get(upstreamUrl, (upstreamRes) => {
+      let cleaned = false;
+      let upstreamResRef: IncomingMessage | null = null;
+
+      const upstreamReq = http.get(upstreamUrl, { timeout: 15_000 }, (upstreamRes) => {
+        if (cleaned || res.writableEnded || res.destroyed) {
+          upstreamRes.destroy();
+          return;
+        }
+
+        upstreamResRef = upstreamRes;
+
         if ((upstreamRes.statusCode || 500) >= 400) {
-          res.statusCode = upstreamRes.statusCode || 502;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: `Autodarts stream HTTP ${upstreamRes.statusCode}` }));
+          const status = upstreamRes.statusCode || 502;
           upstreamRes.resume();
+          cleanup();
+          sendJsonResponse(res, status, {
+            ok: false,
+            error: `Autodarts stream HTTP ${upstreamRes.statusCode}`,
+          });
           return;
         }
 
@@ -407,97 +547,129 @@ function attachReplayMiddleware(
         upstreamRes.pipe(res);
 
         upstreamRes.on('error', () => {
-          if (!res.writableEnded) res.end();
+          cleanup();
+          if (!res.writableEnded && !res.destroyed) res.end();
+        });
+
+        upstreamRes.on('end', () => {
+          cleanup();
+          if (!res.writableEnded && !res.destroyed) res.end();
         });
       });
 
-      upstreamReq.on('error', (err) => {
-        if (!res.headersSent) {
-          res.statusCode = 502;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: err.message }));
-        } else if (!res.writableEnded) {
-          res.end();
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        if (upstreamResRef) {
+          try {
+            upstreamResRef.unpipe(res);
+            upstreamResRef.destroy();
+          } catch {
+            // ignore
+          }
+          upstreamResRef = null;
         }
+        if (!upstreamReq.destroyed) {
+          upstreamReq.destroy();
+        }
+      };
+
+      upstreamReq.on('timeout', () => {
+        cleanup();
+        sendJsonResponse(res, 504, { ok: false, error: 'Autodarts stream timed out' });
       });
 
-      req.on('close', () => {
-        upstreamReq.destroy();
+      upstreamReq.on('error', (err) => {
+        cleanup();
+        sendJsonResponse(res, 502, { ok: false, error: err.message });
       });
+
+      req.on('close', cleanup);
+      req.on('error', cleanup);
+      res.on('close', cleanup);
+      res.on('error', cleanup);
       return;
     }
 
     // 0b. GET /api/replays/cameras — Live Autodarts board camera VID:PIDs + start-kiosk.ps1 boot camera report
     if (req.method === 'GET' && pathname === '/api/replays/cameras') {
-      void fetchAutodartsCameraConfig().then((adInfo) => {
-        let bootReport: unknown = null;
-        try {
-          if (fs.existsSync(CAMERA_BOOT_REPORT_PATH)) {
-            const raw = fs.readFileSync(CAMERA_BOOT_REPORT_PATH, 'utf-8').replace(/^\uFEFF/, '');
-            bootReport = JSON.parse(raw);
+      fetchAutodartsCameraConfig()
+        .then((adInfo) => {
+          if (res.writableEnded || res.destroyed) return;
+
+          let bootReport: unknown = null;
+          try {
+            if (fs.existsSync(CAMERA_BOOT_REPORT_PATH)) {
+              const raw = fs.readFileSync(CAMERA_BOOT_REPORT_PATH, 'utf-8').replace(/^\uFEFF/, '');
+              bootReport = JSON.parse(raw);
+            }
+          } catch {
+            bootReport = null;
           }
-        } catch {
-          bootReport = null;
-        }
 
-        const reportVidPids = Array.isArray((bootReport as { autodartsVidPids?: unknown })?.autodartsVidPids)
-          ? ((bootReport as { autodartsVidPids: string[] }).autodartsVidPids)
-          : [];
-        const mergedVidPids = Array.from(new Set([...adInfo.vidPids, ...reportVidPids]));
+          const reportVidPids = Array.isArray((bootReport as { autodartsVidPids?: unknown })?.autodartsVidPids)
+            ? (bootReport as { autodartsVidPids: string[] }).autodartsVidPids
+            : [];
+          const mergedVidPids = Array.from(new Set([...adInfo.vidPids, ...reportVidPids]));
 
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Cache-Control', 'no-store');
-        res.end(
-          JSON.stringify({
-            ok: true,
-            autodartsReachable: adInfo.reachable,
-            autodartsVidPids: mergedVidPids,
-            autodartsConfiguredCamCount: adInfo.configuredCamCount,
-            bootReport,
-          })
-        );
-      });
+          if (!res.writableEnded && !res.destroyed) {
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Cache-Control', 'no-store');
+            res.end(
+              JSON.stringify({
+                ok: true,
+                autodartsReachable: adInfo.reachable,
+                autodartsVidPids: mergedVidPids,
+                autodartsConfiguredCamCount: adInfo.configuredCamCount,
+                bootReport,
+              })
+            );
+          }
+        })
+        .catch((err) => {
+          sendJsonResponse(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : 'Camera probe failed',
+          });
+        });
       return;
     }
 
     // 1. GET /api/replays/list — Organize subfolders & return saved clips
     if (req.method === 'GET' && pathname === '/api/replays/list') {
-      try {
-        const clips = readAndOrganizeIndex(activeClipsDir);
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Cache-Control', 'no-store');
-        res.end(
-          JSON.stringify({
-            ok: true,
-            saveDir: activeClipsDir,
-            folders: CATEGORY_FOLDERS,
-            clips,
-          })
-        );
-      } catch (err) {
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(
-          JSON.stringify({
+      readAndOrganizeIndex(activeClipsDir)
+        .then((clips) => {
+          if (res.writableEnded || res.destroyed) return;
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(
+            JSON.stringify({
+              ok: true,
+              saveDir: activeClipsDir,
+              folders: CATEGORY_FOLDERS,
+              clips,
+            })
+          );
+        })
+        .catch((err) => {
+          sendJsonResponse(res, 500, {
             ok: false,
             saveDir: activeClipsDir,
             clips: [],
             error: (err as Error).message,
-          })
-        );
-      }
+          });
+        });
       return;
     }
 
     // 2. POST /api/replays/clip — Save clip directly into its category subfolder
     if (req.method === 'POST' && pathname === '/api/replays/clip') {
       readBinaryBody(req)
-        .then((buffer) => {
+        .then(async (buffer) => {
           if (buffer.length === 0) {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ ok: false, error: 'Empty video buffer' }));
+            sendJsonResponse(res, 400, { ok: false, error: 'Empty video buffer' });
             return;
           }
 
@@ -521,11 +693,12 @@ function attachReplayMiddleware(
           const ext = (url.searchParams.get('ext') || 'webm').toLowerCase() === 'mp4' ? 'mp4' : 'webm';
 
           const now = new Date();
-          const stamp = [
-            now.getFullYear(),
-            String(now.getMonth() + 1).padStart(2, '0'),
-            String(now.getDate()).padStart(2, '0'),
-          ].join('-') +
+          const stamp =
+            [
+              now.getFullYear(),
+              String(now.getMonth() + 1).padStart(2, '0'),
+              String(now.getDate()).padStart(2, '0'),
+            ].join('-') +
             '_' +
             [
               String(now.getHours()).padStart(2, '0'),
@@ -542,13 +715,24 @@ function attachReplayMiddleware(
               ? 'USER'
               : sanitizeFilenamePart(reason);
           const layoutTag = isDualCamera ? '_SPLIT' : '';
-          const filename = customNameClean
+          let filename = customNameClean
             ? `${customNameClean} (${stamp}).${ext}`
             : `${stamp}_${sanitizeFilenamePart(playerName)}_${sanitizeFilenamePart(segmentName)}_${tag}${layoutTag}.${ext}`;
-          const relativePath = `${subfolder}/${filename}`;
-          const filePath = path.join(activeClipsDir, subfolder, filename);
 
-          fs.writeFileSync(filePath, buffer);
+          let filePath = path.join(activeClipsDir, subfolder, filename);
+          if (fs.existsSync(filePath)) {
+            const ms = String(now.getMilliseconds()).padStart(3, '0');
+            const rand = Math.random().toString(36).slice(2, 5);
+            const tieBreaker = `${ms}-${rand}`;
+            filename = customNameClean
+              ? `${customNameClean} (${stamp}_${tieBreaker}).${ext}`
+              : `${stamp}_${tieBreaker}_${sanitizeFilenamePart(playerName)}_${sanitizeFilenamePart(segmentName)}_${tag}${layoutTag}.${ext}`;
+            filePath = path.join(activeClipsDir, subfolder, filename);
+          }
+
+          const relativePath = `${subfolder}/${filename}`;
+
+          await fs.promises.writeFile(filePath, buffer);
 
           const record: StoredClipMeta = {
             id: `clip-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -576,96 +760,179 @@ function attachReplayMiddleware(
             createdAt: now.getTime(),
           };
 
-          const existing = readAndOrganizeIndex(activeClipsDir);
-          const updated = [record, ...existing].slice(0, 200);
-          writeIndex(activeClipsDir, updated);
+          const existing = await readAndOrganizeIndex(activeClipsDir);
+          const normalizedRelLower = relativePath.toLowerCase();
+          const dedupedExisting = existing.filter(
+            (c) => (c.relativePath || `${c.subfolder || ''}/${c.filename}`).toLowerCase() !== normalizedRelLower
+          );
+          const updated = [record, ...dedupedExisting].slice(0, 200);
+          await writeIndex(activeClipsDir, updated);
 
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, clip: record, saveDir: activeClipsDir }));
+          sendJsonResponse(res, 200, { ok: true, clip: record, saveDir: activeClipsDir });
         })
         .catch((err) => {
           console.error('[ReplayClipper] Save error:', err);
-          res.statusCode = 500;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+          sendJsonResponse(res, 500, { ok: false, error: (err as Error).message });
         });
       return;
     }
 
     // 3. GET /api/replays/file/<subfolder>/<filename> — Stream saved clip with HTTP Range support
     if (req.method === 'GET' && pathname.startsWith('/api/replays/file/')) {
-      const rawRel = pathname
-        .slice('/api/replays/file/'.length)
-        .split('/')
-        .map((seg) => decodeURIComponent(seg))
-        .join('/');
-
-      const resolved = resolveSafeClipPath(activeClipsDir, rawRel);
-      if (!resolved || !fs.existsSync(resolved.fullPath)) {
-        res.statusCode = 404;
-        res.end('Clip not found');
+      let rawRel: string;
+      try {
+        rawRel = pathname
+          .slice('/api/replays/file/'.length)
+          .split('/')
+          .map((seg) => decodeURIComponent(seg))
+          .join('/');
+      } catch {
+        if (!res.writableEnded && !res.destroyed) {
+          res.statusCode = 400;
+          res.end('Malformed clip path');
+        }
         return;
       }
 
-      const stat = fs.statSync(resolved.fullPath);
+      const resolved = resolveSafeClipPath(activeClipsDir, rawRel);
+      if (!resolved) {
+        if (!res.writableEnded && !res.destroyed) {
+          res.statusCode = 404;
+          res.end('Clip not found');
+        }
+        return;
+      }
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(resolved.fullPath);
+        if (!stat.isFile()) {
+          res.statusCode = 404;
+          res.end('Clip not found');
+          return;
+        }
+      } catch {
+        if (!res.writableEnded && !res.destroyed) {
+          res.statusCode = 404;
+          res.end('Clip not found');
+        }
+        return;
+      }
+
       const fileSize = stat.size;
       const contentType = resolved.fullPath.endsWith('.mp4') ? 'video/mp4' : 'video/webm';
       const range = req.headers.range;
 
+      let stream: fs.ReadStream;
       if (range) {
-        const match = range.match(/bytes=(\d*)-(\d*)/);
-        const start = match && match[1] ? parseInt(match[1], 10) : 0;
-        const end = match && match[2] ? Math.min(parseInt(match[2], 10), fileSize - 1) : fileSize - 1;
-        const chunkSize = end - start + 1;
+        const match = range.match(/^bytes=(\d*)-(\d*)$/);
+        if (fileSize === 0 || !match || (match[1] === '' && match[2] === '')) {
+          res.statusCode = 416;
+          res.setHeader('Content-Range', `bytes */${fileSize}`);
+          res.end();
+          return;
+        }
 
+        let start: number;
+        let end: number;
+        if (match[1] === '') {
+          const suffixLen = parseInt(match[2], 10);
+          if (Number.isNaN(suffixLen) || suffixLen <= 0) {
+            res.statusCode = 416;
+            res.setHeader('Content-Range', `bytes */${fileSize}`);
+            res.end();
+            return;
+          }
+          start = Math.max(0, fileSize - suffixLen);
+          end = fileSize - 1;
+        } else {
+          start = parseInt(match[1], 10);
+          end = match[2] ? Math.min(parseInt(match[2], 10), fileSize - 1) : fileSize - 1;
+        }
+
+        if (
+          fileSize === 0 ||
+          Number.isNaN(start) ||
+          Number.isNaN(end) ||
+          start < 0 ||
+          start >= fileSize ||
+          start > end
+        ) {
+          res.statusCode = 416;
+          res.setHeader('Content-Range', `bytes */${fileSize}`);
+          res.end();
+          return;
+        }
+
+        const chunkSize = end - start + 1;
         res.statusCode = 206;
         res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Length', chunkSize);
         res.setHeader('Content-Type', contentType);
-        fs.createReadStream(resolved.fullPath, { start, end }).pipe(res);
+        stream = fs.createReadStream(resolved.fullPath, { start, end });
       } else {
         res.statusCode = 200;
         res.setHeader('Content-Length', fileSize);
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Type', contentType);
-        fs.createReadStream(resolved.fullPath).pipe(res);
+        stream = fs.createReadStream(resolved.fullPath);
       }
+
+      const destroyStream = () => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+      };
+      res.on('close', destroyStream);
+      res.on('error', destroyStream);
+      stream.on('error', (err) => {
+        console.error('[ReplayClipper] Stream read error:', err);
+        destroyStream();
+        if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+          res.statusCode = 500;
+          res.end('Stream error');
+        } else if (!res.writableEnded && !res.destroyed) {
+          res.end();
+        }
+      });
+
+      stream.pipe(res);
       return;
     }
 
     // 4. DELETE /api/replays/file/<subfolder>/<filename> — Remove clip from disk & index
     if (req.method === 'DELETE' && pathname.startsWith('/api/replays/file/')) {
-      const rawRel = pathname
-        .slice('/api/replays/file/'.length)
-        .split('/')
-        .map((seg) => decodeURIComponent(seg))
-        .join('/');
-
-      const resolved = resolveSafeClipPath(activeClipsDir, rawRel);
-      if (!resolved) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ ok: false }));
+      let rawRel: string;
+      try {
+        rawRel = pathname
+          .slice('/api/replays/file/'.length)
+          .split('/')
+          .map((seg) => decodeURIComponent(seg))
+          .join('/');
+      } catch {
+        sendJsonResponse(res, 400, { ok: false, error: 'Malformed clip path' });
         return;
       }
 
-      try {
+      const resolved = resolveSafeClipPath(activeClipsDir, rawRel);
+      if (!resolved) {
+        sendJsonResponse(res, 400, { ok: false });
+        return;
+      }
+
+      (async () => {
         if (fs.existsSync(resolved.fullPath)) {
-          fs.unlinkSync(resolved.fullPath);
+          await fs.promises.unlink(resolved.fullPath);
         }
-        const existing = readAndOrganizeIndex(activeClipsDir).filter(
+        const existing = (await readAndOrganizeIndex(activeClipsDir)).filter(
           (c) => c.relativePath !== resolved.normalizedRel && c.filename !== path.basename(resolved.normalizedRel)
         );
-        writeIndex(activeClipsDir, existing);
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ ok: true }));
-      } catch (err) {
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
-      }
+        await writeIndex(activeClipsDir, existing);
+        sendJsonResponse(res, 200, { ok: true });
+      })().catch((err) => {
+        sendJsonResponse(res, 500, { ok: false, error: (err as Error).message });
+      });
       return;
     }
 

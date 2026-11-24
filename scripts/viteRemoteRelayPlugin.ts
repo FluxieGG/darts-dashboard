@@ -59,47 +59,78 @@ function detectLanCandidates(): NetworkCandidate[] {
   return candidates.sort((a, b) => a.priority - b.priority);
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+function readJsonBody(req: IncomingMessage, maxBytes = 512_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 512_000) {
-        reject(new Error('Payload too large'));
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+
+    const finishResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      reject(err);
+    };
+
+    req.on('data', (chunk: Buffer | string) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
+        finishReject(new Error('Payload too large'));
+        req.destroy();
+        return;
       }
+      chunks.push(buf);
     });
+
     req.on('end', () => {
-      if (!raw) {
-        resolve({});
+      if (settled) return;
+      if (totalBytes === 0) {
+        finishResolve({});
         return;
       }
       try {
-        resolve(JSON.parse(raw));
+        const raw = Buffer.concat(chunks, totalBytes).toString('utf-8');
+        finishResolve(JSON.parse(raw));
       } catch (err) {
-        reject(err);
+        finishReject(err instanceof Error ? err : new Error('Invalid JSON'));
       }
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => finishReject(err));
+    req.on('aborted', () => finishReject(new Error('Request aborted')));
   });
 }
 
-function sendSse(res: ServerResponse, eventName: string, data: unknown): void {
-  try {
-    res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
-  } catch {
-    // Client disconnected
+function sendJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
+  if (res.writableEnded || res.destroyed) return;
+  if (!res.headersSent) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  } else {
+    res.end();
   }
 }
 
 function attachRemoteRelayMiddleware(
   middlewares: { use: (handler: (req: IncomingMessage, res: ServerResponse, next: () => void) => void) => void },
-  defaultPort: number
+  defaultPort: number,
+  httpServer?: { once: (event: 'close', listener: () => void) => unknown } | null
 ) {
   const clients = new Map<string, RelayClient>();
   let latestKioskState: unknown = null;
   let latestDevHealth: unknown = null;
   const devLogsBuffer: unknown[] = [];
   const MAX_DEV_LOGS = 250;
+  let isBroadcastingPresence = false;
 
   const getCounts = () => {
     let connectedRemotes = 0;
@@ -114,23 +145,104 @@ function attachRemoteRelayMiddleware(
   };
 
   const broadcastPresence = () => {
-    const counts = getCounts();
-    for (const c of clients.values()) {
-      sendSse(c.res, 'presence', counts);
+    if (isBroadcastingPresence) return;
+    isBroadcastingPresence = true;
+    let evicted = false;
+    try {
+      const counts = getCounts();
+      const payload = `event: presence\ndata: ${JSON.stringify(counts)}\n\n`;
+      for (const c of Array.from(clients.values())) {
+        if (c.res.writableEnded || c.res.destroyed) {
+          clients.delete(c.id);
+          evicted = true;
+          continue;
+        }
+        try {
+          c.res.write(payload);
+        } catch {
+          try {
+            c.res.destroy();
+          } catch {
+            // ignore
+          }
+          clients.delete(c.id);
+          evicted = true;
+        }
+      }
+    } finally {
+      isBroadcastingPresence = false;
     }
+    if (evicted && clients.size > 0) {
+      broadcastPresence();
+    }
+  };
+
+  const removeClient = (clientId: string): boolean => {
+    if (!clients.delete(clientId)) return false;
+    broadcastPresence();
+    return true;
+  };
+
+  const sendSse = (client: RelayClient, eventName: string, data: unknown): boolean => {
+    const { res } = client;
+    if (res.writableEnded || res.destroyed) {
+      removeClient(client.id);
+      return false;
+    }
+    try {
+      res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+      return true;
+    } catch {
+      try {
+        res.destroy();
+      } catch {
+        // ignore
+      }
+      removeClient(client.id);
+      return false;
+    }
+  };
+
+  const registerSseLifecycle = (req: IncomingMessage, res: ServerResponse, clientId: string) => {
+    let cleaned = false;
+    const cleanupClient = () => {
+      if (cleaned) return;
+      cleaned = true;
+      removeClient(clientId);
+    };
+    req.on('close', cleanupClient);
+    req.on('error', cleanupClient);
+    res.on('close', cleanupClient);
+    res.on('error', cleanupClient);
   };
 
   // Heartbeat keeps mobile Safari/Chrome SSE connections alive while idle
   const heartbeat = setInterval(() => {
-    for (const c of clients.values()) {
+    let evicted = false;
+    for (const c of Array.from(clients.values())) {
+      if (c.res.writableEnded || c.res.destroyed) {
+        clients.delete(c.id);
+        evicted = true;
+        continue;
+      }
       try {
         c.res.write(': ping\n\n');
       } catch {
+        try {
+          c.res.destroy();
+        } catch {
+          // ignore
+        }
         clients.delete(c.id);
+        evicted = true;
       }
+    }
+    if (evicted) {
+      broadcastPresence();
     }
   }, 15_000);
   heartbeat.unref?.();
+  httpServer?.once('close', () => clearInterval(heartbeat));
 
   middlewares.use((req, res, next) => {
     if (!req.url || (!req.url.startsWith('/api/remote/') && !req.url.startsWith('/api/dev/'))) {
@@ -138,7 +250,13 @@ function attachRemoteRelayMiddleware(
       return;
     }
 
-    const url = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${defaultPort}`}`);
+    let url: URL;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${defaultPort}`}`);
+    } catch {
+      sendJsonResponse(res, 400, { ok: false, error: 'Invalid request URL' });
+      return;
+    }
     const pathname = url.pathname;
 
     // =========================================================================
@@ -174,20 +292,17 @@ function attachRemoteRelayMiddleware(
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders?.();
 
-        clients.set(clientId, { id: clientId, role, res });
+        const client: RelayClient = { id: clientId, role, res };
+        clients.set(clientId, client);
+        registerSseLifecycle(req, res, clientId);
 
         if (role === 'dev') {
           if (latestDevHealth) {
-            sendSse(res, 'health', latestDevHealth);
+            sendSse(client, 'health', latestDevHealth);
           }
-          sendSse(res, 'backlog', devLogsBuffer);
+          sendSse(client, 'backlog', devLogsBuffer);
         }
         broadcastPresence();
-
-        req.on('close', () => {
-          clients.delete(clientId);
-          broadcastPresence();
-        });
         return;
       }
 
@@ -202,18 +317,15 @@ function attachRemoteRelayMiddleware(
             while (devLogsBuffer.length > MAX_DEV_LOGS) {
               devLogsBuffer.shift();
             }
-            for (const c of clients.values()) {
+            for (const c of Array.from(clients.values())) {
               if (c.role === 'dev') {
-                sendSse(c.res, 'logs', entries);
+                sendSse(c, 'logs', entries);
               }
             }
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true, count: devLogsBuffer.length }));
+            sendJsonResponse(res, 200, { ok: true, count: devLogsBuffer.length });
           })
           .catch(() => {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ ok: false }));
+            sendJsonResponse(res, 400, { ok: false });
           });
         return;
       }
@@ -223,18 +335,15 @@ function attachRemoteRelayMiddleware(
         readJsonBody(req)
           .then((body) => {
             latestDevHealth = body;
-            for (const c of clients.values()) {
+            for (const c of Array.from(clients.values())) {
               if (c.role === 'dev') {
-                sendSse(c.res, 'health', body);
+                sendSse(c, 'health', body);
               }
             }
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true }));
+            sendJsonResponse(res, 200, { ok: true });
           })
           .catch(() => {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ ok: false }));
+            sendJsonResponse(res, 400, { ok: false });
           });
         return;
       }
@@ -246,26 +355,24 @@ function attachRemoteRelayMiddleware(
             const cmd = body as { type?: string };
             if (cmd?.type === 'clear_logs') {
               devLogsBuffer.length = 0;
-              for (const c of clients.values()) {
+              for (const c of Array.from(clients.values())) {
                 if (c.role === 'dev') {
-                  sendSse(c.res, 'cleared', { ok: true });
+                  sendSse(c, 'cleared', { ok: true });
                 }
               }
             }
             let delivered = 0;
-            for (const c of clients.values()) {
+            for (const c of Array.from(clients.values())) {
               if (c.role === 'dev_kiosk') {
-                sendSse(c.res, 'dev_command', body);
-                delivered++;
+                if (sendSse(c, 'dev_command', body)) {
+                  delivered++;
+                }
               }
             }
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true, delivered }));
+            sendJsonResponse(res, 200, { ok: true, delivered });
           })
           .catch(() => {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ ok: false }));
+            sendJsonResponse(res, 400, { ok: false });
           });
         return;
       }
@@ -315,18 +422,15 @@ function attachRemoteRelayMiddleware(
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();
 
-      clients.set(clientId, { id: clientId, role, res });
+      const client: RelayClient = { id: clientId, role, res };
+      clients.set(clientId, client);
+      registerSseLifecycle(req, res, clientId);
 
       // Hydrate newly connected remote immediately with cached kiosk state
       if (role === 'remote' && latestKioskState) {
-        sendSse(res, 'state', latestKioskState);
+        sendSse(client, 'state', latestKioskState);
       }
       broadcastPresence();
-
-      req.on('close', () => {
-        clients.delete(clientId);
-        broadcastPresence();
-      });
       return;
     }
 
@@ -350,18 +454,15 @@ function attachRemoteRelayMiddleware(
       readJsonBody(req)
         .then((body) => {
           latestKioskState = body;
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'remote') {
-              sendSse(c.res, 'state', body);
+              sendSse(c, 'state', body);
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, ...getCounts() }));
+          sendJsonResponse(res, 200, { ok: true, ...getCounts() });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -371,19 +472,17 @@ function attachRemoteRelayMiddleware(
       readJsonBody(req)
         .then((body) => {
           let delivered = 0;
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'kiosk') {
-              sendSse(c.res, 'command', body);
-              delivered++;
+              if (sendSse(c, 'command', body)) {
+                delivered++;
+              }
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, delivered }));
+          sendJsonResponse(res, 200, { ok: true, delivered });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -401,11 +500,11 @@ export function remoteRelayPlugin(): Plugin {
     name: 'autodarts-remote-relay',
     configureServer(server) {
       const port = server.config.server.port || 5173;
-      attachRemoteRelayMiddleware(server.middlewares, port);
+      attachRemoteRelayMiddleware(server.middlewares, port, server.httpServer);
     },
     configurePreviewServer(server) {
       const port = server.config.preview.port || 4173;
-      attachRemoteRelayMiddleware(server.middlewares, port);
+      attachRemoteRelayMiddleware(server.middlewares, port, server.httpServer);
     },
   };
 }

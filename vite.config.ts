@@ -36,6 +36,14 @@ export default defineConfig({
           proxy.on('error', () => {
             // Silently ignore transient ECONNREFUSED while Autodarts Desktop starts up
           });
+          proxy.on('proxyReqWs', (proxyReq, _req, socket) => {
+            proxyReq.on('error', () => {
+              // Ignore transient WS upstream error
+            });
+            socket.on('error', () => {
+              // Prevent unhandled socket error from crashing Vite dev server
+            });
+          });
         },
       },
       // Proxy Autodarts Cloud API
@@ -44,6 +52,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/autodarts/, ''),
         secure: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // Prevent unhandled proxy error from crashing Vite server
+          });
+        },
       },
     },
   },
@@ -56,6 +69,19 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/board/, ''),
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // Silently ignore transient ECONNREFUSED while Autodarts Desktop starts up
+          });
+          proxy.on('proxyReqWs', (proxyReq, _req, socket) => {
+            proxyReq.on('error', () => {
+              // Ignore transient WS upstream error
+            });
+            socket.on('error', () => {
+              // Prevent unhandled socket error from crashing Vite preview server
+            });
+          });
+        },
       },
     },
   },

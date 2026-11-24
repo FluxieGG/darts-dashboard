@@ -57,6 +57,9 @@ export interface PlayerStats {
   recentVisits?: DartVisit[];
   sessionThrows: DartThrow[];
   totalDartsThrown: number;
+  totalPointsScored?: number;
+  firstNinePoints?: number;
+  firstNineDartsCount?: number;
 }
 
 export interface PlayerProfile {

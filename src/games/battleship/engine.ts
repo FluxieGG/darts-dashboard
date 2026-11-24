@@ -238,7 +238,13 @@ export function applyDartToState(
   state: BattleshipGameState,
   dart: DartThrow
 ): { nextState: BattleshipGameState; feedback: BattleshipFeedback } {
-  if (state.isFinished || state.turnComplete || state.visitEntries.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.visitEntries.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', callout: null } };
   }
 
@@ -255,6 +261,9 @@ export function applyDartToState(
 
   const attacker = players[attackerIdx];
   const defender = players[defenderIdx];
+  if (!attacker || !defender) {
+    return { nextState: state, feedback: { sound: 'none', callout: null } };
+  }
   attacker.shotsFired += 1;
 
   const nextTotalDarts = state.totalDartsThrown + 1;
@@ -488,7 +497,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: BattleshipGameState): BattleshipGameState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   const nextPlayerIndex = (state.activePlayerIndex + 1) % state.players.length;
   const nextRound = nextPlayerIndex === 0 ? state.round + 1 : state.round;

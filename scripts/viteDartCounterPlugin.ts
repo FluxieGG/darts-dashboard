@@ -17,40 +17,70 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+function readJsonBody(req: IncomingMessage, maxBytes = 256_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 256_000) {
-        reject(new Error('Payload too large'));
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+
+    const finishResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      reject(err);
+    };
+
+    req.on('data', (chunk: Buffer | string) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
+        finishReject(new Error('Payload too large'));
+        req.destroy();
+        return;
       }
+      chunks.push(buf);
     });
+
     req.on('end', () => {
-      if (!raw) {
-        resolve({});
+      if (settled) return;
+      if (totalBytes === 0) {
+        finishResolve({});
         return;
       }
       try {
-        resolve(JSON.parse(raw));
+        const raw = Buffer.concat(chunks, totalBytes).toString('utf-8');
+        finishResolve(JSON.parse(raw));
       } catch (err) {
-        reject(err);
+        finishReject(err instanceof Error ? err : new Error('Invalid JSON'));
       }
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => finishReject(err));
+    req.on('aborted', () => finishReject(new Error('Request aborted')));
   });
 }
 
-function sendSse(res: ServerResponse, eventName: string, data: unknown): void {
-  try {
-    res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
-  } catch {
-    // client disconnected
+function sendJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
+  if (res.writableEnded || res.destroyed) return;
+  if (!res.headersSent) {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  } else {
+    res.end();
   }
 }
 
 function attachDartCounterMiddleware(
-  middlewares: { use: (handler: (req: IncomingMessage, res: ServerResponse, next: () => void) => void) => void }
+  middlewares: { use: (handler: (req: IncomingMessage, res: ServerResponse, next: () => void) => void) => void },
+  httpServer?: { once: (event: 'close', listener: () => void) => unknown } | null
 ): void {
   const clients = new Map<string, BridgeClient>();
   let latestMatchState: unknown = null;
@@ -60,6 +90,7 @@ function attachDartCounterMiddleware(
     mode: 'confirm',
     submitOnTakeout: true,
   };
+  let isBroadcastingPresence = false;
 
   const getCounts = () => {
     let connectedExtensions = 0;
@@ -72,22 +103,123 @@ function attachDartCounterMiddleware(
   };
 
   const broadcastPresence = () => {
-    const counts = getCounts();
-    for (const c of clients.values()) {
-      sendSse(c.res, 'dc_presence', counts);
+    if (isBroadcastingPresence) return;
+    isBroadcastingPresence = true;
+    let evicted = false;
+    let evictedExtension = false;
+    try {
+      const counts = getCounts();
+      const payload = `event: dc_presence\ndata: ${JSON.stringify(counts)}\n\n`;
+      for (const c of Array.from(clients.values())) {
+        if (c.res.writableEnded || c.res.destroyed) {
+          clients.delete(c.id);
+          evicted = true;
+          if (c.role === 'extension') evictedExtension = true;
+          continue;
+        }
+        try {
+          c.res.write(payload);
+        } catch {
+          try {
+            c.res.destroy();
+          } catch {
+            // ignore
+          }
+          clients.delete(c.id);
+          evicted = true;
+          if (c.role === 'extension') evictedExtension = true;
+        }
+      }
+    } finally {
+      isBroadcastingPresence = false;
+    }
+
+    if (evictedExtension && getCounts().connectedExtensions === 0 && latestMatchState) {
+      handleAllExtensionsDisconnected();
+    }
+    if (evicted && clients.size > 0) {
+      broadcastPresence();
+    }
+  };
+
+  const handleAllExtensionsDisconnected = () => {
+    if (!latestMatchState) return;
+    latestMatchState = {
+      ...(latestMatchState as Record<string, unknown>),
+      isMatchActive: false,
+      updatedAt: Date.now(),
+    };
+    for (const c of Array.from(clients.values())) {
+      if (c.role === 'kiosk') {
+        sendSse(c, 'dc_state', latestMatchState);
+      }
+    }
+  };
+
+  const removeClient = (clientId: string): boolean => {
+    const existing = clients.get(clientId);
+    if (!existing) return false;
+    clients.delete(clientId);
+    // Only revert match state when an extension client disconnects and no extensions remain
+    if (existing.role === 'extension' && getCounts().connectedExtensions === 0 && latestMatchState) {
+      handleAllExtensionsDisconnected();
+    }
+    broadcastPresence();
+    return true;
+  };
+
+  const sendSse = (client: BridgeClient, eventName: string, data: unknown): boolean => {
+    const { res } = client;
+    if (res.writableEnded || res.destroyed) {
+      removeClient(client.id);
+      return false;
+    }
+    try {
+      res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+      return true;
+    } catch {
+      try {
+        res.destroy();
+      } catch {
+        // ignore
+      }
+      removeClient(client.id);
+      return false;
     }
   };
 
   const heartbeat = setInterval(() => {
-    for (const c of clients.values()) {
+    let evicted = false;
+    let evictedExtension = false;
+    for (const c of Array.from(clients.values())) {
+      if (c.res.writableEnded || c.res.destroyed) {
+        clients.delete(c.id);
+        evicted = true;
+        if (c.role === 'extension') evictedExtension = true;
+        continue;
+      }
       try {
         c.res.write(': ping\n\n');
       } catch {
+        try {
+          c.res.destroy();
+        } catch {
+          // ignore
+        }
         clients.delete(c.id);
+        evicted = true;
+        if (c.role === 'extension') evictedExtension = true;
       }
+    }
+    if (evictedExtension && getCounts().connectedExtensions === 0 && latestMatchState) {
+      handleAllExtensionsDisconnected();
+    }
+    if (evicted) {
+      broadcastPresence();
     }
   }, 15_000);
   heartbeat.unref?.();
+  httpServer?.once('close', () => clearInterval(heartbeat));
 
   middlewares.use((req, res, next) => {
     if (!req.url || !req.url.startsWith('/api/dartcounter/')) {
@@ -103,7 +235,13 @@ function attachDartCounterMiddleware(
       return;
     }
 
-    const url = new URL(req.url, 'http://127.0.0.1');
+    let url: URL;
+    try {
+      url = new URL(req.url, 'http://127.0.0.1');
+    } catch {
+      sendJsonResponse(res, 400, { ok: false, error: 'Invalid request URL' });
+      return;
+    }
     const pathname = url.pathname;
 
     // 1. GET /api/dartcounter/status — Instant status snapshot for Kiosk, iPad & Extension Popup
@@ -137,32 +275,26 @@ function attachDartCounterMiddleware(
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();
 
-      clients.set(clientId, { id: clientId, role, res });
+      const client: BridgeClient = { id: clientId, role, res };
+      clients.set(clientId, client);
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        removeClient(clientId);
+      };
+      req.on('close', cleanup);
+      req.on('error', cleanup);
+      res.on('close', cleanup);
+      res.on('error', cleanup);
 
       // Hydrate newly connected peer immediately
-      sendSse(res, 'dc_config', bridgeConfig);
+      sendSse(client, 'dc_config', bridgeConfig);
       if (role === 'kiosk' && latestMatchState) {
-        sendSse(res, 'dc_state', latestMatchState);
+        sendSse(client, 'dc_state', latestMatchState);
       }
       broadcastPresence();
-
-      req.on('close', () => {
-        clients.delete(clientId);
-        // If all extension tabs closed, immediately revert Kiosk back to normal Track Online Match standby
-        if (getCounts().connectedExtensions === 0 && latestMatchState) {
-          latestMatchState = {
-            ...(latestMatchState as Record<string, unknown>),
-            isMatchActive: false,
-            updatedAt: Date.now(),
-          };
-          for (const c of clients.values()) {
-            if (c.role === 'kiosk') {
-              sendSse(c.res, 'dc_state', latestMatchState);
-            }
-          }
-        }
-        broadcastPresence();
-      });
       return;
     }
 
@@ -174,18 +306,15 @@ function attachDartCounterMiddleware(
             ...(body as Record<string, unknown>),
             updatedAt: Date.now(),
           };
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'kiosk') {
-              sendSse(c.res, 'dc_state', latestMatchState);
+              sendSse(c, 'dc_state', latestMatchState);
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, ...getCounts() }));
+          sendJsonResponse(res, 200, { ok: true, ...getCounts() });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -195,19 +324,17 @@ function attachDartCounterMiddleware(
       readJsonBody(req)
         .then((body) => {
           let delivered = 0;
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'extension') {
-              sendSse(c.res, 'dc_visit', body);
-              delivered++;
+              if (sendSse(c, 'dc_visit', body)) {
+                delivered++;
+              }
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, delivered }));
+          sendJsonResponse(res, 200, { ok: true, delivered });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -233,16 +360,13 @@ function attachDartCounterMiddleware(
               submitOnTakeout: parsed.submitOnTakeout,
             };
           }
-          for (const c of clients.values()) {
-            sendSse(c.res, 'dc_config', bridgeConfig);
+          for (const c of Array.from(clients.values())) {
+            sendSse(c, 'dc_config', bridgeConfig);
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, config: bridgeConfig }));
+          sendJsonResponse(res, 200, { ok: true, config: bridgeConfig });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -255,18 +379,15 @@ function attachDartCounterMiddleware(
             ...(body as Record<string, unknown>),
             timestamp: Date.now(),
           };
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'kiosk') {
-              sendSse(c.res, 'dc_submit_result', latestSubmitResult);
+              sendSse(c, 'dc_submit_result', latestSubmitResult);
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true }));
+          sendJsonResponse(res, 200, { ok: true });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -276,19 +397,17 @@ function attachDartCounterMiddleware(
       readJsonBody(req)
         .then((body) => {
           let delivered = 0;
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'extension') {
-              sendSse(c.res, 'dc_control', body);
-              delivered++;
+              if (sendSse(c, 'dc_control', body)) {
+                delivered++;
+              }
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, delivered }));
+          sendJsonResponse(res, 200, { ok: true, delivered });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -301,18 +420,15 @@ function attachDartCounterMiddleware(
             ...(body as Record<string, unknown>),
             timestamp: Date.now(),
           };
-          for (const c of clients.values()) {
+          for (const c of Array.from(clients.values())) {
             if (c.role === 'kiosk') {
-              sendSse(c.res, 'dc_control_result', latestControlResult);
+              sendSse(c, 'dc_control_result', latestControlResult);
             }
           }
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: true, latestControlResult }));
+          sendJsonResponse(res, 200, { ok: true, latestControlResult });
         })
         .catch(() => {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ ok: false }));
+          sendJsonResponse(res, 400, { ok: false });
         });
       return;
     }
@@ -329,10 +445,10 @@ export function dartCounterBridgePlugin(): Plugin {
   return {
     name: 'autodarts-dartcounter-bridge',
     configureServer(server) {
-      attachDartCounterMiddleware(server.middlewares);
+      attachDartCounterMiddleware(server.middlewares, server.httpServer);
     },
     configurePreviewServer(server) {
-      attachDartCounterMiddleware(server.middlewares);
+      attachDartCounterMiddleware(server.middlewares, server.httpServer);
     },
   };
 }

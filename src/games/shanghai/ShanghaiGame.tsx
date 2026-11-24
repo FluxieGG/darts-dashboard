@@ -7,6 +7,7 @@ import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
 import { CalloutBanner, GameCallout, VisitPillsStrip } from '../components/ArcadePrimitives';
+import { gameEventBus } from '../../services/gameEventBus';
 import { cn } from '../../lib/utils';
 import { Crown, Check, Flame, Sparkles, Target } from 'lucide-react';
 import {
@@ -118,6 +119,7 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
     setHistory(nextStack);
     setState(prev.state);
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.visitDarts);
   }, []);
 
   const handleRestart = useCallback(() => {
@@ -131,6 +133,7 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
     setHistory([]);
     setState(fresh);
     setCallout(null);
+    gameEventBus.resetVisitBuffer([]);
   }, [clearTimers, players, config]);
 
   useEffect(() => {
@@ -139,7 +142,7 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, history.length]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(history.length > 0);
@@ -306,6 +309,8 @@ export const ShanghaiGame: React.FC<GameModuleProps> = ({
     () => Array.from({ length: state.totalRounds }, (_, i) => i + 1),
     [state.totalRounds]
   );
+
+  if (!activePlayer) return null;
 
   return (
     <div className="space-y-4 sm:space-y-5">

@@ -96,17 +96,21 @@ export const ObjectivesWidget: React.FC = () => {
   const partyVaultMap = useCareerStore((s) => s.partyVaults);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
 
+  const playerId = activePlayer?.id ?? 'default';
+  const playerName = activePlayer?.name ?? 'Player';
+
   const playerVault = useMemo(
-    () => getPlayerVault(activePlayer.id, activePlayer.name),
-    [vaultMap, partyVaultMap, isPartyMode, activePlayer.id, activePlayer.name, getPlayerVault]
+    () => getPlayerVault(playerId, playerName),
+    [vaultMap, partyVaultMap, isPartyMode, playerId, playerName, getPlayerVault]
   );
 
+  const dailyLogs = playerVault?.dailyLogs ?? {};
   const { daily, weekly } = useMemo(() => evaluateObjectives(playerVault), [playerVault]);
-  const streaks = useMemo(() => computeStreaks(playerVault.dailyLogs), [playerVault.dailyLogs]);
+  const streaks = useMemo(() => computeStreaks(dailyLogs), [dailyLogs]);
 
   const dailyDone = daily.filter((o) => o.completed).length;
   const weeklyDone = weekly.filter((o) => o.completed).length;
-  const isTempGuest = !isPartyMode && !activePlayer.isPrimary && activePlayer.isSaved === false;
+  const isTempGuest = !isPartyMode && !activePlayer?.isPrimary && activePlayer?.isSaved === false;
 
   return (
     <div className="card-matte rounded-2xl p-5 sm:p-6 space-y-4">
@@ -122,8 +126,8 @@ export const ObjectivesWidget: React.FC = () => {
             </h3>
             <p className="text-xs text-slate-400">
               {isPartyMode
-                ? `${activePlayer.name} • Temp Party Session (Unsaved)`
-                : `${activePlayer.name}'s live challenges • tied to Career Vault`}
+                ? `${playerName} • Temp Party Session (Unsaved)`
+                : `${playerName}'s live challenges • tied to Career Vault`}
             </p>
           </div>
         </div>
@@ -145,7 +149,7 @@ export const ObjectivesWidget: React.FC = () => {
               </Badge>
             )
           )}
-          <Badge variant={dailyDone === daily.length ? 'emerald' : 'sky'} size="sm">
+          <Badge variant={daily.length > 0 && dailyDone === daily.length ? 'emerald' : 'sky'} size="sm">
             <Trophy className="w-3 h-3" />
             {dailyDone + weeklyDone}/{daily.length + weekly.length} Done
           </Badge>

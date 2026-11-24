@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId, useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -13,9 +13,18 @@ import { TrendingUp } from 'lucide-react';
 import { formatAvg } from '../../lib/utils';
 
 export const TrendSparklineWidget: React.FC = () => {
+  const uid = useId().replace(/:/g, '');
+  const avgGradientId = `${uid}-avgGradient`;
   const stats = usePlayerStore((s) => s.getActiveStats());
-  const data = stats.trendHistory;
-  const baselineAvg = stats.allTimeAvg > 0 ? stats.allTimeAvg : stats.threeDartAvg;
+
+  const data = useMemo(
+    () => (stats?.trendHistory ?? []).filter((d) => Number.isFinite(d?.threeDartAvg)),
+    [stats?.trendHistory]
+  );
+
+  const rawBaseline =
+    (stats?.allTimeAvg ?? 0) > 0 ? stats.allTimeAvg : (stats?.threeDartAvg ?? 0);
+  const baselineAvg = Number.isFinite(rawBaseline) ? rawBaseline : 0;
 
   return (
     <div className="card-matte rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
@@ -54,10 +63,10 @@ export const TrendSparklineWidget: React.FC = () => {
             </p>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
             <AreaChart data={data} margin={{ top: 12, right: 12, left: -16, bottom: 4 }}>
               <defs>
-                <linearGradient id="avgGradient" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id={avgGradientId} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#10B981" stopOpacity={0.45} />
                   <stop offset="95%" stopColor="#10B981" stopOpacity={0.02} />
                 </linearGradient>
@@ -72,7 +81,10 @@ export const TrendSparklineWidget: React.FC = () => {
                 dy={6}
               />
               <YAxis
-                domain={['dataMin - 5', 'dataMax + 5']}
+                domain={[
+                  (min: number) => (Number.isFinite(min) ? Math.max(0, Math.floor(min - 5)) : 0),
+                  (max: number) => (Number.isFinite(max) ? Math.ceil(max + 5) : 100),
+                ]}
                 stroke="#94A3B8"
                 fontSize={13}
                 fontWeight={600}
@@ -91,7 +103,8 @@ export const TrendSparklineWidget: React.FC = () => {
               <Tooltip
                 content={({ active, payload }) => {
                   if (active && payload && payload.length) {
-                    const item = payload[0].payload;
+                    const item = payload[0]?.payload;
+                    if (!item) return null;
                     return (
                       <div className="rounded-xl bg-[#141D2B] border border-white/15 p-3 shadow-2xl text-sm">
                         <p className="font-bold text-white">
@@ -115,7 +128,7 @@ export const TrendSparklineWidget: React.FC = () => {
                 stroke="#10B981"
                 strokeWidth={3.5}
                 fillOpacity={1}
-                fill="url(#avgGradient)"
+                fill={`url(#${avgGradientId})`}
               />
             </AreaChart>
           </ResponsiveContainer>

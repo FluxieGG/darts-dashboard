@@ -186,52 +186,142 @@ export class VirtualBoardCamera {
   private posBuffer: WebGLBuffer | null = null;
   private initialized = false;
   private failed = false;
+  private contextLost = false;
+  private texW = 0;
+  private texH = 0;
+  private maxTextureSize = 0;
+  private onContextLost: ((e: Event) => void) | null = null;
+  private onContextRestored: (() => void) | null = null;
   private readonly size: number;
 
   constructor(size = 900) {
     this.size = size;
   }
 
+  private detachContextListeners(canvas: HTMLCanvasElement): void {
+    if (this.onContextLost) {
+      canvas.removeEventListener('webglcontextlost', this.onContextLost);
+      this.onContextLost = null;
+    }
+    if (this.onContextRestored) {
+      canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
+      this.onContextRestored = null;
+    }
+  }
+
+  private attachContextListeners(canvas: HTMLCanvasElement): void {
+    if (this.onContextLost || this.onContextRestored) return;
+
+    this.onContextLost = (e: Event) => {
+      e.preventDefault();
+      this.contextLost = true;
+      this.initialized = false;
+      this.program = null;
+      this.texture = null;
+      this.posBuffer = null;
+      this.texW = 0;
+      this.texH = 0;
+    };
+
+    this.onContextRestored = () => {
+      this.contextLost = false;
+      this.failed = false;
+      this.initialized = false;
+      this.texW = 0;
+      this.texH = 0;
+    };
+
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
+  }
+
   private ensureInit(): boolean {
-    if (this.initialized) return true;
+    if (this.contextLost) return false;
+    if (this.initialized && this.gl && !this.gl.isContextLost()) return true;
     if (this.failed) return false;
 
+    const createdFreshCanvas = !this.canvas;
+    const canvas = this.canvas ?? document.createElement('canvas');
+    let gl: WebGLRenderingContext | null = null;
+    let vs: WebGLShader | null = null;
+    let fs: WebGLShader | null = null;
+    let prog: WebGLProgram | null = null;
+    let buf: WebGLBuffer | null = null;
+    let tex: WebGLTexture | null = null;
+
+    const cleanupPartial = () => {
+      if (gl) {
+        try {
+          if (vs) gl.deleteShader(vs);
+          if (fs) gl.deleteShader(fs);
+          if (prog) gl.deleteProgram(prog);
+          if (buf) gl.deleteBuffer(buf);
+          if (tex) gl.deleteTexture(tex);
+        } catch {
+          // ignore cleanup errors on broken context
+        }
+      }
+      vs = null;
+      fs = null;
+      prog = null;
+      buf = null;
+      tex = null;
+      if (createdFreshCanvas) {
+        this.detachContextListeners(canvas);
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    };
+
     try {
-      const canvas = document.createElement('canvas');
       canvas.width = this.size * 3;
       canvas.height = this.size;
-      const gl = canvas.getContext('webgl', {
+      this.attachContextListeners(canvas);
+
+      gl = canvas.getContext('webgl', {
         alpha: false,
-        antialias: true,
+        antialias: false,
         preserveDrawingBuffer: true,
         powerPreference: 'high-performance',
       });
-      if (!gl) {
+      if (!gl || gl.isContextLost()) {
+        cleanupPartial();
+        if (!this.contextLost) {
+          this.failed = true;
+        }
+        return false;
+      }
+
+      const maxTex = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096;
+      if (this.size * 3 > maxTex || this.size > maxTex) {
+        cleanupPartial();
         this.failed = true;
         return false;
       }
 
       const compile = (type: number, src: string): WebGLShader | null => {
-        const sh = gl.createShader(type);
+        const sh = gl!.createShader(type);
         if (!sh) return null;
-        gl.shaderSource(sh, src);
-        gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-          gl.deleteShader(sh);
+        gl!.shaderSource(sh, src);
+        gl!.compileShader(sh);
+        if (!gl!.getShaderParameter(sh, gl!.COMPILE_STATUS)) {
+          gl!.deleteShader(sh);
           return null;
         }
         return sh;
       };
 
-      const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER_SRC);
-      const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SRC);
+      vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER_SRC);
+      fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SRC);
       if (!vs || !fs) {
+        cleanupPartial();
         this.failed = true;
         return false;
       }
 
-      const prog = gl.createProgram();
+      prog = gl.createProgram();
       if (!prog) {
+        cleanupPartial();
         this.failed = true;
         return false;
       }
@@ -239,15 +329,22 @@ export class VirtualBoardCamera {
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        gl.deleteProgram(prog);
+        cleanupPartial();
         this.failed = true;
         return false;
       }
       gl.deleteShader(vs);
       gl.deleteShader(fs);
+      vs = null;
+      fs = null;
 
       // Full-screen quad
-      const buf = gl.createBuffer();
+      buf = gl.createBuffer();
+      if (!buf) {
+        cleanupPartial();
+        this.failed = true;
+        return false;
+      }
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(
         gl.ARRAY_BUFFER,
@@ -256,10 +353,20 @@ export class VirtualBoardCamera {
       );
 
       const posLoc = gl.getAttribLocation(prog, 'a_pos');
+      if (posLoc < 0) {
+        cleanupPartial();
+        this.failed = true;
+        return false;
+      }
       gl.enableVertexAttribArray(posLoc);
       gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-      const tex = gl.createTexture();
+      tex = gl.createTexture();
+      if (!tex) {
+        cleanupPartial();
+        this.failed = true;
+        return false;
+      }
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -291,9 +398,13 @@ export class VirtualBoardCamera {
       this.program = prog;
       this.texture = tex;
       this.posBuffer = buf;
+      this.texW = 0;
+      this.texH = 0;
+      this.maxTextureSize = maxTex;
       this.initialized = true;
       return true;
     } catch {
+      cleanupPartial();
       this.failed = true;
       return false;
     }
@@ -304,18 +415,39 @@ export class VirtualBoardCamera {
    * in a single GPU draw call from Autodarts' raw 3840×720 strip.
    */
   public render(rawStripBitmap: ImageBitmap): HTMLCanvasElement | null {
+    if (this.contextLost || this.gl?.isContextLost()) return null;
+    if (rawStripBitmap.width <= 0 || rawStripBitmap.height <= 0) return null;
     if (rawStripBitmap.width < rawStripBitmap.height * 2.4) return null;
     if (!this.ensureInit() || !this.gl || !this.canvas || !this.texture || !this.program) {
       return null;
     }
+    if (this.contextLost || this.gl.isContextLost()) return null;
+    if (
+      this.maxTextureSize > 0 &&
+      (rawStripBitmap.width > this.maxTextureSize || rawStripBitmap.height > this.maxTextureSize)
+    ) {
+      return null;
+    }
 
     const gl = this.gl;
-    gl.useProgram(this.program);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rawStripBitmap);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    return this.canvas;
+    try {
+      gl.useProgram(this.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      if (this.texW === rawStripBitmap.width && this.texH === rawStripBitmap.height) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, rawStripBitmap);
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rawStripBitmap);
+        this.texW = rawStripBitmap.width;
+        this.texH = rawStripBitmap.height;
+      }
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      return this.canvas;
+    } catch {
+      this.texW = 0;
+      this.texH = 0;
+      return null;
+    }
   }
 
   public getPanelSize(): number {
@@ -323,20 +455,39 @@ export class VirtualBoardCamera {
   }
 
   public getCanvas(): HTMLCanvasElement | null {
+    if (this.contextLost || this.gl?.isContextLost()) return null;
     return this.initialized ? this.canvas : null;
   }
 
   public dispose(): void {
+    if (this.canvas) {
+      this.detachContextListeners(this.canvas);
+    }
     if (this.gl) {
-      if (this.texture) this.gl.deleteTexture(this.texture);
-      if (this.posBuffer) this.gl.deleteBuffer(this.posBuffer);
-      if (this.program) this.gl.deleteProgram(this.program);
+      try {
+        if (!this.gl.isContextLost()) {
+          if (this.texture) this.gl.deleteTexture(this.texture);
+          if (this.posBuffer) this.gl.deleteBuffer(this.posBuffer);
+          if (this.program) this.gl.deleteProgram(this.program);
+          this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+        }
+      } catch {
+        // ignore errors during disposal
+      }
+    }
+    if (this.canvas) {
+      this.canvas.width = 0;
+      this.canvas.height = 0;
     }
     this.texture = null;
     this.posBuffer = null;
     this.program = null;
     this.gl = null;
     this.canvas = null;
+    this.texW = 0;
+    this.texH = 0;
+    this.maxTextureSize = 0;
+    this.contextLost = false;
     this.initialized = false;
   }
 }
