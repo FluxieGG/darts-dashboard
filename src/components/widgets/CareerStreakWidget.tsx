@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useCareerStore } from '../../store/useCareerStore';
 import {
@@ -7,6 +7,7 @@ import {
   formatReadableDate,
   getBestDaysEver,
   getLocalDateKey,
+  parseDateKey,
 } from '../../lib/careerEngine';
 import { Badge } from '../common/Badge';
 import {
@@ -34,25 +35,43 @@ export const CareerStreakWidget: React.FC = () => {
   const isDiskSynced = useCareerStore((s) => s.isDiskSynced);
   const getPlayerVault = useCareerStore((s) => s.getPlayerVault);
 
-  const todayKey = getLocalDateKey();
+  const [todayKey, setTodayKey] = useState(() => getLocalDateKey());
+
+  // Keep 24/7 kiosk calendar & streak badge accurate across local midnight rollovers
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const nextKey = getLocalDateKey();
+      setTodayKey((prev) => (prev === nextKey ? prev : nextKey));
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const playerId = activePlayer?.id ?? 'default';
+  const playerName = activePlayer?.name ?? 'Player';
 
   const playerVault = useMemo(
-    () => getPlayerVault(activePlayer.id, activePlayer.name),
-    [vaultMap, partyVaultMap, isPartyMode, activePlayer.id, activePlayer.name, getPlayerVault]
+    () => getPlayerVault(playerId, playerName),
+    [vaultMap, partyVaultMap, isPartyMode, playerId, playerName, getPlayerVault]
   );
 
-  const streaks = useMemo(() => computeStreaks(playerVault.dailyLogs), [playerVault.dailyLogs]);
+  const dailyLogs = playerVault?.dailyLogs ?? {};
+  const todayDate = useMemo(() => parseDateKey(todayKey), [todayKey]);
+
+  const streaks = useMemo(
+    () => computeStreaks(dailyLogs, todayDate),
+    [dailyLogs, todayDate]
+  );
   const calendarWeeks = useMemo(
-    () => buildCalendarWeeks(playerVault.dailyLogs, 14),
-    [playerVault.dailyLogs]
+    () => buildCalendarWeeks(dailyLogs, 14, todayDate),
+    [dailyLogs, todayDate]
   );
-  const bestDays = useMemo(() => getBestDaysEver(playerVault.dailyLogs, 3), [playerVault.dailyLogs]);
-  const bestDayDate = playerVault.records.bestDay3DA?.date;
+  const bestDays = useMemo(() => getBestDaysEver(dailyLogs, 3), [dailyLogs]);
+  const bestDayDate = playerVault?.records?.bestDay3DA?.date;
 
-  const selectedLog = playerVault.dailyLogs[todayKey] || bestDays[0] || null;
+  const selectedLog = dailyLogs[todayKey] || bestDays[0] || null;
   const shownDateKey = selectedLog?.date || todayKey;
   const topSegments = useMemo(() => {
-    if (!selectedLog) return [];
+    if (!selectedLog?.segmentCounts) return [];
     return Object.entries(selectedLog.segmentCounts)
       .filter(([name]) => name.startsWith('T') || name.startsWith('D') || name === 'Bull')
       .sort((a, b) => b[1] - a[1])
@@ -247,10 +266,10 @@ export const CareerStreakWidget: React.FC = () => {
               </div>
             </div>
 
-            {(topSegments.length > 0 || selectedLog.highlights.length > 0) && (
+            {(topSegments.length > 0 || (selectedLog.highlights?.length ?? 0) > 0) && (
               <div className="flex flex-wrap gap-1.5">
-                {selectedLog.highlights.slice(0, 3).map((h) => (
-                  <Badge key={h} variant="amber" size="sm">
+                {(selectedLog.highlights ?? []).slice(0, 3).map((h, idx) => (
+                  <Badge key={`${h}-${idx}`} variant="amber" size="sm">
                     {h}
                   </Badge>
                 ))}

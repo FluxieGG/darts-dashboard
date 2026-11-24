@@ -270,7 +270,12 @@ export function applyDartToDartsGolf(
   state: DartsGolfState,
   dart: DartThrow
 ): { nextState: DartsGolfState; feedback: DartsGolfFeedback } {
-  if (state.isFinished || state.turnComplete) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'dartHit' } };
   }
 
@@ -372,7 +377,12 @@ export function applyDartToDartsGolf(
 }
 
 export function advanceDartsGolfTurn(state: DartsGolfState): DartsGolfState {
-  if (state.isFinished || state.visitDarts.length === 0) {
+  if (
+    state.isFinished ||
+    state.visitDarts.length === 0 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return state;
   }
 
@@ -432,7 +442,7 @@ export function buildDartsGolfResult(state: DartsGolfState, startedAt: number): 
 
   const highlights: string[] = [
     `${courseLabel} (${state.scoringRule === 'lastDart' ? 'Last Dart Risk' : 'Best of 3'})`,
-    `Winning Card: ${formatGolfScore(champion.totalToPar)}`,
+    `Winning Card: ${formatGolfScore(champion?.totalToPar ?? 0)}`,
   ];
   if (totalEagles > 0) highlights.push(`${totalEagles} Eagle${totalEagles > 1 ? 's' : ''} Drained`);
   if (totalBirdies > 0) highlights.push(`${totalBirdies} Birdie${totalBirdies > 1 ? 's' : ''} Sunk`);
@@ -447,7 +457,7 @@ export function buildDartsGolfResult(state: DartsGolfState, startedAt: number): 
     )}!`,
     standings,
     totalDartsThrown: state.totalDartsThrown,
-    durationMs: Date.now() - startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
     highlights,
     completedAt: Date.now(),
   };

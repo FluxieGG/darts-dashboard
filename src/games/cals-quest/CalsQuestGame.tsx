@@ -7,6 +7,7 @@ import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
 import { CalloutBanner, GameCallout, VisitPillsStrip } from '../components/ArcadePrimitives';
+import { gameEventBus } from '../../services/gameEventBus';
 import { CalsQuestState, RelicId } from './types';
 import {
   advanceCalsQuestTurn,
@@ -66,7 +67,7 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
 
   const stateRef = useRef(state);
   const turnStartRef = useRef(state);
-  const historyRef = useRef<CalsQuestState[]>([]);
+  const historyRef = useRef<Array<{ state: CalsQuestState; turnStartState: CalsQuestState }>>([]);
   const startedAtRef = useRef(Date.now());
   const completedRef = useRef(false);
   const calloutTimerRef = useRef<number | null>(null);
@@ -120,14 +121,16 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
   );
 
   const handleUndo = useCallback(() => {
-    const prev = historyRef.current.pop();
-    if (!prev) return;
+    const snap = historyRef.current.pop();
+    if (!snap) return;
     clearTimers();
     completedRef.current = false;
-    stateRef.current = prev;
-    if (prev.visitDarts.length === 0) turnStartRef.current = prev;
-    setState(prev);
+    stateRef.current = snap.state;
+    turnStartRef.current = snap.turnStartState;
+    setState(snap.state);
     setHistoryLen(historyRef.current.length);
+    setCallout(null);
+    gameEventBus.resetVisitBuffer(snap.state.visitDarts);
   }, [clearTimers]);
 
   const handleRestart = useCallback(() => {
@@ -141,6 +144,7 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
     setState(fresh);
     setHistoryLen(0);
     setCallout(null);
+    gameEventBus.resetVisitBuffer([]);
   }, [players, config, clearTimers]);
 
   useEffect(() => {
@@ -149,7 +153,7 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, historyLen]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(historyLen > 0);
@@ -160,7 +164,7 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
     onDartThrown: (dart) => {
       const current = stateRef.current;
       if (current.isFinished || current.turnComplete) return;
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartRef.current });
       const { nextState, feedback } = applyDartToCalsQuest(current, dart);
       stateRef.current = nextState;
       setState(nextState);
@@ -188,7 +192,7 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
       if (current.isFinished) return;
       if (current.visitDarts.length === 0 && !current.pendingPathChoice) return;
 
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartRef.current });
       const { nextState, counterCallout } = advanceCalsQuestTurn(current);
       stateRef.current = nextState;
       turnStartRef.current = nextState;
@@ -295,6 +299,8 @@ export const CalsQuestGame: React.FC<GameModuleProps> = ({
 
     return overlays;
   }, [state.phase, state.claimedPathSide, state.boss, state.minions, state.cursedWedges]);
+
+  if (!activePlayerEntry) return null;
 
   const bossHpPct = Math.max(0, Math.min(100, (state.boss.hp / state.boss.maxHp) * 100));
   const livingMinions = state.minions.filter((m) => m.hp > 0);

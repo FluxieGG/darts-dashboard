@@ -18,6 +18,7 @@ export function useOnlineMatchSync(): void {
     const unsub = gameEventBus.subscribe((event) => {
       const match = useOnlineMatchStore.getState();
       if (!match.isActive || match.matchWinner) return;
+      if (match.source === 'dartcounter' && !match.isPlayerTurn) return;
 
       // Track throws on both Dashboard and dedicated DartCounter Kiosk views (never interfere with Arcade/Practice games)
       const activeView = useGameStore.getState().activeView;

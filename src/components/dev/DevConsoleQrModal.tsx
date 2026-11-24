@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { Modal } from '../common/Modal';
 import { Badge } from '../common/Badge';
@@ -37,14 +37,87 @@ export const DevConsoleQrModal: React.FC<DevConsoleQrModalProps> = ({
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
+  const pinRef = useRef('');
+  const pinErrorTimerRef = useRef<number | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
+
+  const clearPinErrorTimer = useCallback(() => {
+    if (pinErrorTimerRef.current !== null) {
+      window.clearTimeout(pinErrorTimerRef.current);
+      pinErrorTimerRef.current = null;
+    }
+  }, []);
+
+  const clearCopiedTimer = useCallback(() => {
+    if (copiedTimerRef.current !== null) {
+      window.clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = null;
+    }
+  }, []);
+
+  // Clear timers on unmount
+  useEffect(() => {
+    return () => {
+      clearPinErrorTimer();
+      clearCopiedTimer();
+    };
+  }, [clearPinErrorTimer, clearCopiedTimer]);
+
   // Always re-lock when closed so the dev QR stays completely hidden behind PIN 0161
   useEffect(() => {
     if (!isOpen) {
+      clearPinErrorTimer();
+      clearCopiedTimer();
+      pinRef.current = '';
       setPin('');
       setUnlocked(false);
       setPinError(false);
+      setCopied(false);
+      setQrDataUrl('');
     }
-  }, [isOpen]);
+  }, [isOpen, clearPinErrorTimer, clearCopiedTimer]);
+
+  const handleClearPin = useCallback(() => {
+    clearPinErrorTimer();
+    pinRef.current = '';
+    setPin('');
+    setPinError(false);
+  }, [clearPinErrorTimer]);
+
+  const handleBackspace = useCallback(() => {
+    if (unlocked) return;
+    clearPinErrorTimer();
+    const next = pinRef.current.slice(0, -1);
+    pinRef.current = next;
+    setPin(next);
+    setPinError(false);
+  }, [unlocked, clearPinErrorTimer]);
+
+  const handleDigit = useCallback(
+    (digit: string) => {
+      if (unlocked || pinRef.current.length >= 4) return;
+      clearPinErrorTimer();
+      const next = pinRef.current + digit;
+      pinRef.current = next;
+      setPinError(false);
+      setPin(next);
+
+      if (next.length === 4) {
+        if (next === DEV_CONSOLE_PIN) {
+          setUnlocked(true);
+        } else {
+          setPinError(true);
+          pinErrorTimerRef.current = window.setTimeout(() => {
+            pinRef.current = '';
+            setPin('');
+            setPinError(false);
+            pinErrorTimerRef.current = null;
+          }, 550);
+        }
+      }
+    },
+    [unlocked, clearPinErrorTimer]
+  );
 
   // Allow typing the 4-digit PIN via keyboard too
   useEffect(() => {
@@ -53,69 +126,70 @@ export const DevConsoleQrModal: React.FC<DevConsoleQrModalProps> = ({
       if (/^[0-9]$/.test(e.key)) {
         handleDigit(e.key);
       } else if (e.key === 'Backspace') {
-        setPin((prev) => prev.slice(0, -1));
-        setPinError(false);
+        handleBackspace();
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  });
+  }, [isOpen, unlocked, handleDigit, handleBackspace]);
 
-  // Load LAN dev URLs once unlocked
+  // Load LAN dev URLs once unlocked (ignore stale promise on close/unmount)
   useEffect(() => {
     if (!isOpen || !unlocked) return;
-    fetchRemoteInfo().then((data) => {
-      if (data) {
-        setInfo(data);
-        const best =
-          data.interfaces[0]?.devUrl ||
-          data.fallbackDevUrl ||
-          `${window.location.origin}/?dev=1`;
-        setSelectedDevUrl(best);
-      } else {
-        setSelectedDevUrl(`${window.location.origin}/?dev=1`);
-      }
-    });
+    let cancelled = false;
+    fetchRemoteInfo()
+      .then((data) => {
+        if (cancelled) return;
+        if (data) {
+          setInfo(data);
+          const best =
+            data.interfaces[0]?.devUrl ||
+            data.fallbackDevUrl ||
+            `${window.location.origin}/?dev=1`;
+          setSelectedDevUrl(best);
+        } else {
+          setSelectedDevUrl(`${window.location.origin}/?dev=1`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedDevUrl(`${window.location.origin}/?dev=1`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, unlocked]);
 
   useEffect(() => {
-    if (!unlocked || !selectedDevUrl) return;
+    if (!isOpen || !unlocked || !selectedDevUrl) return;
+    let cancelled = false;
     QRCode.toDataURL(selectedDevUrl, {
       width: 260,
       margin: 2,
       color: { dark: '#0B0F17', light: '#FFFFFF' },
       errorCorrectionLevel: 'M',
     })
-      .then(setQrDataUrl)
-      .catch(() => setQrDataUrl(''));
-  }, [unlocked, selectedDevUrl]);
-
-  const handleDigit = (digit: string) => {
-    if (unlocked) return;
-    setPinError(false);
-    setPin((prev) => {
-      if (prev.length >= 4) return prev;
-      const next = prev + digit;
-      if (next.length === 4) {
-        if (next === DEV_CONSOLE_PIN) {
-          setUnlocked(true);
-        } else {
-          setPinError(true);
-          window.setTimeout(() => {
-            setPin('');
-            setPinError(false);
-          }, 550);
-        }
-      }
-      return next;
-    });
-  };
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, unlocked, selectedDevUrl]);
 
   const handleCopy = () => {
     if (!selectedDevUrl) return;
     navigator.clipboard?.writeText(selectedDevUrl).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
+    clearCopiedTimer();
+    copiedTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copiedTimerRef.current = null;
+    }, 1800);
   };
 
   return (
@@ -176,10 +250,7 @@ export const DevConsoleQrModal: React.FC<DevConsoleQrModalProps> = ({
             ))}
             <button
               type="button"
-              onClick={() => {
-                setPin('');
-                setPinError(false);
-              }}
+              onClick={handleClearPin}
               className="h-12 rounded-xl bg-slate-900/60 hover:bg-white/10 border border-white/10 font-mono text-xs font-bold text-slate-400 cursor-pointer"
             >
               CLR
@@ -193,7 +264,7 @@ export const DevConsoleQrModal: React.FC<DevConsoleQrModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setPin((p) => p.slice(0, -1))}
+              onClick={handleBackspace}
               className="h-12 rounded-xl bg-slate-900/60 hover:bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 cursor-pointer"
             >
               <Delete className="w-5 h-5" />

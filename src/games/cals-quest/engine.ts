@@ -692,7 +692,12 @@ export function applyDartToCalsQuest(
   state: CalsQuestState,
   dart: DartThrow
 ): { nextState: CalsQuestState; feedback: CalsQuestFeedback } {
-  if (state.isFinished || state.turnComplete) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'dartHit' } };
   }
 
@@ -1171,7 +1176,7 @@ export function advanceCalsQuestTurn(state: CalsQuestState): {
   nextState: CalsQuestState;
   counterCallout?: CalsQuestFeedback;
 } {
-  if (state.isFinished) {
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
     return { nextState: state };
   }
 
@@ -1351,11 +1356,11 @@ export function buildCalsQuestResult(state: CalsQuestState, startedAt: number): 
       winnerId: mvp?.player.id ?? null,
       winnerName: isCoOp ? `${mvp?.player.name ?? 'Hero'} & Party` : mvp?.player.name ?? 'Hero',
       headline: isCoOp
-        ? `The Party conquered the Elder Dragon! (MVP: ${mvp?.player.name})`
+        ? `The Party conquered the Elder Dragon! (MVP: ${mvp?.player.name ?? 'Hero'})`
         : `${mvp?.player.name ?? 'Hero'} conquered the Elder Dragon Overlord!`,
       standings,
       totalDartsThrown: state.totalDartsThrown,
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
       highlights,
       completedAt: Date.now(),
     };
@@ -1368,7 +1373,7 @@ export function buildCalsQuestResult(state: CalsQuestState, startedAt: number): 
     headline: `Party defeated in Room ${state.roomNumber} by ${state.boss.name}`,
     standings,
     totalDartsThrown: state.totalDartsThrown,
-    durationMs: Date.now() - startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
     highlights,
     completedAt: Date.now(),
   };

@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useReplayStore } from '../../store/useReplayStore';
 import { Badge } from '../common/Badge';
 import {
+  AlertTriangle,
   CheckCircle2,
   Clapperboard,
   Columns2,
@@ -26,18 +28,28 @@ export const ActionReplayOverlay: React.FC = () => {
   const {
     activeOverlayClip,
     playbackRate,
-    devCaptureNextDartArmed,
     status,
     lastCaptureBanner,
     isSavingLastClip,
     savedConfirmation,
-  } = useReplayStore();
+  } = useReplayStore(
+    useShallow((s) => ({
+      activeOverlayClip: s.activeOverlayClip,
+      playbackRate: s.playbackRate,
+      status: s.status,
+      lastCaptureBanner: s.lastCaptureBanner,
+      isSavingLastClip: s.isSavingLastClip,
+      savedConfirmation: s.savedConfirmation,
+    }))
+  );
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [showStinger, setShowStinger] = useState(false);
+  const [videoLoadError, setVideoLoadError] = useState(false);
 
   // Trigger spinning broadcast stinger whenever a new replay clip opens
   useEffect(() => {
+    setVideoLoadError(false);
     if (!activeOverlayClip) {
       setShowStinger(false);
       return;
@@ -51,37 +63,46 @@ export const ActionReplayOverlay: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [activeOverlayClip?.id]);
 
+  // Explicitly release decoded video buffers & media pipelines when clip changes or closes
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => {
+      if (video) {
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    };
+  }, [activeOverlayClip?.id]);
+
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.playbackRate = playbackRate;
     }
-  }, [playbackRate, activeOverlayClip, showStinger]);
+  }, [playbackRate, activeOverlayClip?.id, showStinger]);
 
   const isSaved = activeOverlayClip ? activeOverlayClip.isSavedToDisk !== false : true;
+  const clipDurationSec = Number.isFinite(activeOverlayClip?.durationSec)
+    ? activeOverlayClip!.durationSec
+    : 0;
+  const clipReason = activeOverlayClip?.reason || 'Action Replay';
+  const clipPlayerName = activeOverlayClip?.playerName || 'Player';
 
   return (
     <>
-      {/* Passive Floating Live Status Pills (Dev Test Armed OR Currently Recording Post-Roll) */}
-      {(devCaptureNextDartArmed || status === 'capturing') && !activeOverlayClip && (
+      {/* Passive Floating Live Recording Status Pill */}
+      {status === 'capturing' && !activeOverlayClip && (
         <div className="fixed top-20 right-4 sm:right-6 z-50 flex flex-col items-end gap-2 pointer-events-none">
-          {status === 'capturing' && (
-            <div className="px-4 py-2.5 rounded-2xl bg-rose-950/95 border-2 border-rose-400/70 text-rose-100 shadow-[0_0_28px_rgba(244,63,94,0.5)] flex items-center gap-2.5 animate-pulse">
-              <Radio className="w-4 h-4 text-rose-400" />
-              <span className="text-xs sm:text-sm font-black uppercase tracking-wider">
-                {lastCaptureBanner || 'Capturing Split-Cam 5s Reaction...'}
-              </span>
-            </div>
-          )}
-
-          {/* [DEV-TEST: REMOVE WHEN DONE] Armed Banner */}
-          {devCaptureNextDartArmed && status !== 'capturing' && (
-            <div className="px-4 py-2.5 rounded-2xl bg-amber-950/95 border-2 border-amber-400/70 text-amber-100 shadow-[0_0_28px_rgba(245,158,11,0.45)] flex items-center gap-3">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
-              <div className="text-xs sm:text-sm font-black">
-                DEV TEST ARMED: Throw any dart to record 10s split-cam replay
-              </div>
-            </div>
-          )}
+          <div className="px-4 py-2.5 rounded-2xl bg-rose-950/95 border-2 border-rose-400/70 text-rose-100 shadow-[0_0_28px_rgba(244,63,94,0.5)] flex items-center gap-2.5 animate-pulse">
+            <Radio className="w-4 h-4 text-rose-400" />
+            <span className="text-xs sm:text-sm font-black uppercase tracking-wider">
+              {lastCaptureBanner || 'Capturing Split-Cam 5s Reaction...'}
+            </span>
+          </div>
         </div>
       )}
 
@@ -204,15 +225,13 @@ export const ActionReplayOverlay: React.FC = () => {
               </span>
               <div className="min-w-0">
                 <div className="text-base sm:text-2xl font-black text-white leading-tight truncate">
-                  {activeOverlayClip.reason
-                    .toLowerCase()
-                    .includes(activeOverlayClip.playerName.toLowerCase())
-                    ? activeOverlayClip.reason
-                    : `${activeOverlayClip.playerName} — ${activeOverlayClip.reason}`}
+                  {clipReason.toLowerCase().includes(clipPlayerName.toLowerCase())
+                    ? clipReason
+                    : `${clipPlayerName} — ${clipReason}`}
                 </div>
                 <div className="text-[11px] font-mono text-slate-300/85">
-                  {activeOverlayClip.durationSec.toFixed(1)}s clip (~{activeOverlayClip.preSeconds}s
-                  before impact + {activeOverlayClip.postSeconds}s reaction)
+                  {clipDurationSec.toFixed(1)}s clip (~{activeOverlayClip.preSeconds ?? 0}s
+                  before impact + {activeOverlayClip.postSeconds ?? 0}s reaction)
                 </div>
               </div>
             </div>
@@ -236,30 +255,39 @@ export const ActionReplayOverlay: React.FC = () => {
                   Unsaved • Tap Save on iPad
                 </Badge>
               )}
-
-              {activeOverlayClip.isDevTest && (
-                <Badge variant="amber" size="sm">
-                  DEV TEST
-                </Badge>
-              )}
             </div>
           </div>
 
           {/* MAX-SIZE Edge-to-Edge Video Stage */}
           <div className="flex-1 min-h-0 w-full relative bg-black flex items-center justify-center p-2 sm:p-3 animate-replay-stage">
-            <video
-              ref={videoRef}
-              src={activeOverlayClip.url}
-              autoPlay
-              loop
-              playsInline
-              onLoadedMetadata={() => {
-                if (videoRef.current) {
-                  videoRef.current.playbackRate = playbackRate;
-                }
-              }}
-              className="w-full h-full object-contain rounded-xl"
-            />
+            {videoLoadError ? (
+              <div className="px-6 py-5 rounded-2xl bg-slate-900/90 border border-amber-400/35 text-center space-y-2 max-w-md">
+                <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto" />
+                <div className="text-lg font-black text-white">Replay Video Unavailable</div>
+                <p className="text-xs font-mono text-slate-400">
+                  Unable to decode this clip. Dismiss from the iPad Oche Deck to return to live play.
+                </p>
+              </div>
+            ) : (
+              <video
+                key={activeOverlayClip.id}
+                ref={videoRef}
+                src={activeOverlayClip.url}
+                autoPlay
+                loop
+                muted
+                playsInline
+                onLoadedMetadata={() => {
+                  if (videoRef.current) {
+                    videoRef.current.playbackRate = playbackRate;
+                  }
+                }}
+                onError={() => {
+                  setVideoLoadError(true);
+                }}
+                className="w-full h-full object-contain rounded-xl"
+              />
+            )}
 
             {/* Floating Broadcast Score Bug */}
             <div className="pointer-events-none absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-3 px-6 py-3 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 shadow-2xl">

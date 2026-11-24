@@ -9,6 +9,31 @@ const reconnectBtn = document.getElementById('reconnect-btn');
 
 let currentMode = 'confirm';
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeSendMessage(msg, cb) {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+    if (typeof cb === 'function') {
+      chrome.runtime.sendMessage(msg, (resp) => {
+        if (chrome.runtime?.lastError) return;
+        cb(resp);
+      });
+    } else {
+      chrome.runtime.sendMessage(msg)?.catch?.(() => {});
+    }
+  } catch {
+    // ignore
+  }
+}
+
 const MODE_HINTS = {
   auto: 'Auto-Score: Enters your Autodarts visit total into DartCounter automatically as soon as you pull your darts.',
   confirm:
@@ -43,8 +68,8 @@ function renderStatus(resp) {
   const st = resp.latestScrapedState;
   if (st && st.isMatchActive) {
     matchPreview.innerHTML = `
-      <div><strong>${st.playerName}</strong> ${st.playerRemaining} vs <strong>${st.opponentName}</strong> ${st.opponentRemaining ?? '—'}</div>
-      <div style="color:#94a3b8;margin-top:3px;">Legs ${st.playerLegs}–${st.opponentLegs} • ${st.startScore} • ${st.isPlayerTurn ? 'Your Turn' : 'Opponent Turn'}</div>
+      <div><strong>${escapeHtml(st.playerName)}</strong> ${escapeHtml(st.playerRemaining)} vs <strong>${escapeHtml(st.opponentName)}</strong> ${escapeHtml(st.opponentRemaining ?? '—')}</div>
+      <div style="color:#94a3b8;margin-top:3px;">Legs ${escapeHtml(st.playerLegs)}–${escapeHtml(st.opponentLegs)} • ${escapeHtml(st.startScore)} • ${st.isPlayerTurn ? 'Your Turn' : 'Opponent Turn'}</div>
     `;
   } else {
     matchPreview.textContent = 'No active DartCounter match detected yet. Start a match on app.dartcounter.net.';
@@ -52,8 +77,7 @@ function renderStatus(resp) {
 }
 
 function refresh() {
-  chrome.runtime.sendMessage({ type: 'popup_get_status' }, (resp) => {
-    if (chrome.runtime.lastError) return;
+  safeSendMessage({ type: 'popup_get_status' }, (resp) => {
     renderStatus(resp);
   });
 }
@@ -62,17 +86,17 @@ for (const btn of modeButtons) {
   btn.addEventListener('click', () => {
     const mode = btn.dataset.mode;
     renderModeButtons(mode);
-    chrome.runtime.sendMessage(
+    safeSendMessage(
       { type: 'popup_update_settings', partial: { mode } },
       (resp) => {
-        if (!chrome.runtime.lastError) renderStatus(resp);
+        renderStatus(resp);
       }
     );
   });
 }
 
 saveBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage(
+  safeSendMessage(
     {
       type: 'popup_update_settings',
       partial: {
@@ -82,21 +106,19 @@ saveBtn.addEventListener('click', () => {
       },
     },
     (resp) => {
-      if (!chrome.runtime.lastError) {
-        renderStatus(resp);
-        chrome.runtime.sendMessage({ type: 'popup_force_scrape' });
-        saveBtn.textContent = 'Saved ✓';
-        setTimeout(() => {
-          saveBtn.textContent = 'Save & Sync';
-        }, 1200);
-      }
+      renderStatus(resp);
+      safeSendMessage({ type: 'popup_force_scrape' });
+      saveBtn.textContent = 'Saved ✓';
+      setTimeout(() => {
+        saveBtn.textContent = 'Save & Sync';
+      }, 1200);
     }
   );
 });
 
 reconnectBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'popup_reconnect' });
-  chrome.runtime.sendMessage({ type: 'popup_force_scrape' });
+  safeSendMessage({ type: 'popup_reconnect' });
+  safeSendMessage({ type: 'popup_force_scrape' });
   setTimeout(refresh, 400);
 });
 

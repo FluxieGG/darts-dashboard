@@ -1,19 +1,75 @@
 import { create } from 'zustand';
 import { DartThrow } from '../types/darts';
-import { CareerVaultData, GameLeaderboardEntry, PlayerCareerVault } from '../types/career';
 import {
+  CareerVaultData,
+  DailyCareerLog,
+  GameLeaderboardEntry,
+  PlayerCareerVault,
+} from '../types/career';
+import {
+  addDaysToDateKey,
   applyArcadeGameToCareerVault,
   applyVisitToCareerVault,
   createEmptyPlayerVault,
+  createEmptyRecords,
   evaluateObjectives,
   getLocalDateKey,
   getWeekStartKey,
+  isValidDateKey,
 } from '../lib/careerEngine';
+import { safeLocalStorage } from '../lib/storage';
 import { usePlayerStore } from './usePlayerStore';
 import { useGameStore } from './useGameStore';
 import { soundEngine } from '../games/utils/soundEngine';
 
 const LOCAL_FALLBACK_KEY = 'autodarts_career_vault_v1';
+const OBJECTIVE_RETENTION_DAYS = 14;
+const MAX_KEEPALIVE_BYTES = 60 * 1024;
+const UNLOAD_GUARD_KEY = '__autodartsCareerUnloadFlushHandler__';
+
+export const EMPTY_PLAYER_VAULT: PlayerCareerVault = Object.freeze({
+  playerId: '',
+  playerName: '',
+  dailyLogs: Object.freeze({}) as Record<string, DailyCareerLog>,
+  records: Object.freeze(createEmptyRecords()),
+  objectiveRerolls: Object.freeze({}) as Record<string, number>,
+  completedObjectiveIds: Object.freeze([]) as unknown as string[],
+});
+
+function pruneExpiredObjectiveIds(ids: string[], now: Date = new Date()): string[] {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const cutoffKey = addDaysToDateKey(getLocalDateKey(now), -OBJECTIVE_RETENTION_DAYS);
+  if (!cutoffKey) return ids;
+  return ids.filter((id) => {
+    if (typeof id !== 'string') return false;
+    const match = id.match(/^[dw]-(\d{4}-\d{2}-\d{2})-/);
+    if (!match) return true;
+    const dateKey = match[1];
+    return isValidDateKey(dateKey) && dateKey >= cutoffKey;
+  });
+}
+
+function pruneExpiredObjectiveRerolls(
+  rerolls: Record<string, number>,
+  now: Date = new Date()
+): Record<string, number> {
+  if (!rerolls || typeof rerolls !== 'object') return {};
+  const cutoffKey = addDaysToDateKey(getLocalDateKey(now), -OBJECTIVE_RETENTION_DAYS);
+  if (!cutoffKey) return { ...rerolls };
+  const pruned: Record<string, number> = {};
+  for (const [key, val] of Object.entries(rerolls)) {
+    const match = key.match(/^(?:daily|weekly):(\d{4}-\d{2}-\d{2})$/);
+    if (match) {
+      const dateKey = match[1];
+      if (isValidDateKey(dateKey) && dateKey >= cutoffKey) {
+        pruned[key] = val;
+      }
+    } else {
+      pruned[key] = val;
+    }
+  }
+  return pruned;
+}
 
 interface LeaderboardRecordInput {
   gameId: string;
@@ -59,8 +115,8 @@ interface CareerStoreState {
 
 function loadLocalFallback(): CareerVaultData {
   try {
-    const raw = localStorage.getItem(LOCAL_FALLBACK_KEY);
-    if (raw) {
+    const raw = safeLocalStorage.getItem(LOCAL_FALLBACK_KEY);
+    if (raw && typeof raw === 'string') {
       const parsed = JSON.parse(raw) as CareerVaultData;
       if (parsed && typeof parsed === 'object' && parsed.players) {
         return parsed;
@@ -73,35 +129,98 @@ function loadLocalFallback(): CareerVaultData {
 }
 
 let diskSaveTimer: number | null = null;
+let pendingDiskVault: CareerVaultData | null = null;
+let hydrateInFlightPromise: Promise<void> | null = null;
+
+function saveVaultToDisk(
+  vault: CareerVaultData,
+  onDiskSaved: (savedAt: number, ok: boolean) => void
+): Promise<void> {
+  return fetch('/api/career/vault', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(vault),
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data?.ok) {
+        onDiskSaved(data.savedAt || Date.now(), true);
+      } else {
+        onDiskSaved(Date.now(), false);
+      }
+    })
+    .catch(() => {
+      onDiskSaved(Date.now(), false);
+    });
+}
+
+function flushPendingVaultOnUnload(): void {
+  if (diskSaveTimer !== null) {
+    window.clearTimeout(diskSaveTimer);
+    diskSaveTimer = null;
+  }
+  if (!pendingDiskVault) return;
+  const vaultToFlush = pendingDiskVault;
+  pendingDiskVault = null;
+
+  try {
+    const body = JSON.stringify(vaultToFlush);
+    const byteLength =
+      typeof TextEncoder !== 'undefined'
+        ? new TextEncoder().encode(body).byteLength
+        : body.length;
+    if (byteLength <= MAX_KEEPALIVE_BYTES) {
+      void fetch('/api/career/vault', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+      }).catch(() => {
+        // ignore unload errors
+      });
+    } else {
+      void fetch('/api/career/vault', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).catch(() => {
+        // ignore unload errors
+      });
+    }
+  } catch {
+    // ignore serialization errors on unload
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const win = window as unknown as Record<string, (() => void) | undefined>;
+  const prevHandler = win[UNLOAD_GUARD_KEY];
+  if (prevHandler) {
+    window.removeEventListener('beforeunload', prevHandler);
+    window.removeEventListener('pagehide', prevHandler);
+  }
+  win[UNLOAD_GUARD_KEY] = flushPendingVaultOnUnload;
+  window.addEventListener('beforeunload', flushPendingVaultOnUnload);
+  window.addEventListener('pagehide', flushPendingVaultOnUnload);
+}
 
 function persistVault(vault: CareerVaultData, onDiskSaved: (savedAt: number, ok: boolean) => void): void {
   try {
-    localStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify(vault));
+    safeLocalStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify(vault));
   } catch {
     // ignore quota errors
   }
 
+  pendingDiskVault = vault;
   if (diskSaveTimer !== null) {
     window.clearTimeout(diskSaveTimer);
   }
   diskSaveTimer = window.setTimeout(() => {
     diskSaveTimer = null;
-    fetch('/api/career/vault', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(vault),
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.ok) {
-          onDiskSaved(data.savedAt || Date.now(), true);
-        } else {
-          onDiskSaved(Date.now(), false);
-        }
-      })
-      .catch(() => {
-        onDiskSaved(Date.now(), false);
-      });
+    const toSave = pendingDiskVault;
+    pendingDiskVault = null;
+    if (!toSave) return;
+    void saveVaultToDisk(toSave, onDiskSaved);
   }, 350);
 }
 
@@ -177,49 +296,62 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
     });
   },
 
-  hydrateVault: async () => {
-    try {
-      const res = await fetch('/api/career/vault', { cache: 'no-store' });
-      if (!res.ok) return;
-      const diskVault = (await res.json()) as CareerVaultData;
-      if (!diskVault || typeof diskVault !== 'object' || !diskVault.players) return;
+  hydrateVault: () => {
+    if (hydrateInFlightPromise) return hydrateInFlightPromise;
 
-      const localVault = get().vault;
-      const diskHasData = Object.keys(diskVault.players).length > 0;
-      const localHasData = Object.keys(localVault.players).length > 0;
+    let run: Promise<void> | null = null;
+    run = (async () => {
+      try {
+        const res = await fetch('/api/career/vault', { cache: 'no-store' });
+        if (!res.ok) return;
+        const diskVault = (await res.json()) as CareerVaultData;
+        if (!diskVault || typeof diskVault !== 'object' || !diskVault.players) return;
 
-      if (diskHasData && (diskVault.updatedAt >= localVault.updatedAt || !localHasData)) {
-        try {
-          localStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify(diskVault));
-        } catch {
-          // ignore
+        const localVault = get().vault;
+        const diskHasData = Object.keys(diskVault.players).length > 0;
+        const localHasData = Object.keys(localVault.players).length > 0;
+        const diskUpdatedAt = Number.isFinite(diskVault.updatedAt) ? diskVault.updatedAt : 0;
+        const localUpdatedAt = Number.isFinite(localVault.updatedAt) ? localVault.updatedAt : 0;
+
+        if (diskHasData && (diskUpdatedAt >= localUpdatedAt || !localHasData)) {
+          try {
+            safeLocalStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify(diskVault));
+          } catch {
+            // ignore
+          }
+          set({
+            vault: diskVault,
+            isDiskSynced: true,
+            lastSavedAt: diskUpdatedAt || Date.now(),
+          });
+        } else if (
+          (localHasData && !diskHasData) ||
+          (localHasData && diskHasData && localUpdatedAt > diskUpdatedAt)
+        ) {
+          await saveVaultToDisk(localVault, (savedAt, ok) =>
+            set({ isDiskSynced: ok, lastSavedAt: savedAt })
+          );
+        } else {
+          set({ isDiskSynced: true });
         }
-        set({
-          vault: diskVault,
-          isDiskSynced: true,
-          lastSavedAt: diskVault.updatedAt || Date.now(),
-        });
-      } else if (localHasData && !diskHasData) {
-        persistVault(localVault, (savedAt, ok) =>
-          set({ isDiskSynced: ok, lastSavedAt: savedAt })
-        );
-      } else {
-        set({ isDiskSynced: true });
+      } catch {
+        set({ isDiskSynced: false });
+      } finally {
+        if (hydrateInFlightPromise === run) {
+          hydrateInFlightPromise = null;
+        }
       }
-    } catch {
-      set({ isDiskSynced: false });
-    }
+    })();
+
+    hydrateInFlightPromise = run;
+    return run;
   },
 
-  getPlayerVault: (playerId, playerName = 'Callum') => {
+  getPlayerVault: (playerId) => {
     if (usePlayerStore.getState().isPartyMode) {
-      const existingParty = get().partyVaults[playerId];
-      if (existingParty) return existingParty;
-      return createEmptyPlayerVault(playerId, playerName);
+      return get().partyVaults[playerId] || EMPTY_PLAYER_VAULT;
     }
-    const existing = get().vault.players[playerId];
-    if (existing) return existing;
-    return createEmptyPlayerVault(playerId, playerName);
+    return get().vault.players[playerId] || EMPTY_PLAYER_VAULT;
   },
 
   recordVisitForActivePlayer: (throws) => {
@@ -227,27 +359,34 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
 
     const playerState = usePlayerStore.getState();
     const activePlayer = playerState.getActivePlayer();
+    const now = new Date();
 
     // PARTY MODE: Full live functionality in RAM-only partyVaults (ZERO disk / localStorage writes!)
     if (playerState.isPartyMode) {
       const prevPartyVault =
         get().partyVaults[activePlayer.id] ||
         createEmptyPlayerVault(activePlayer.id, activePlayer.name);
-      const updated = applyVisitToCareerVault(prevPartyVault, throws);
+      const updated = applyVisitToCareerVault(prevPartyVault, throws, now);
 
-      const { daily, weekly } = evaluateObjectives(updated);
+      const { daily, weekly } = evaluateObjectives(updated, now);
       const allObjectives = [...daily, ...weekly];
-      const alreadyDone = new Set(updated.completedObjectiveIds);
+      const prunedIds = pruneExpiredObjectiveIds(updated.completedObjectiveIds, now);
+      const prunedRerolls = pruneExpiredObjectiveRerolls(updated.objectiveRerolls, now);
+      const alreadyDone = new Set(prunedIds);
       const newlyCompleted = allObjectives.filter((obj) => obj.completed && !alreadyDone.has(obj.id));
 
-      let finalVault = updated;
+      let finalVault: PlayerCareerVault = {
+        ...updated,
+        completedObjectiveIds: prunedIds,
+        objectiveRerolls: prunedRerolls,
+      };
       let toastLabel: string | null = get().recentlyCompletedObjective;
 
       if (newlyCompleted.length > 0) {
         finalVault = {
-          ...updated,
+          ...finalVault,
           completedObjectiveIds: [
-            ...updated.completedObjectiveIds,
+            ...prunedIds,
             ...newlyCompleted.map((o) => o.id),
           ],
         };
@@ -279,21 +418,27 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
       currentVault.players[activePlayer.id] ||
       createEmptyPlayerVault(activePlayer.id, activePlayer.name);
 
-    const updatedPlayerVault = applyVisitToCareerVault(prevPlayerVault, throws);
+    const updatedPlayerVault = applyVisitToCareerVault(prevPlayerVault, throws, now);
 
-    const { daily, weekly } = evaluateObjectives(updatedPlayerVault);
+    const { daily, weekly } = evaluateObjectives(updatedPlayerVault, now);
     const allObjectives = [...daily, ...weekly];
-    const alreadyDone = new Set(updatedPlayerVault.completedObjectiveIds);
+    const prunedIds = pruneExpiredObjectiveIds(updatedPlayerVault.completedObjectiveIds, now);
+    const prunedRerolls = pruneExpiredObjectiveRerolls(updatedPlayerVault.objectiveRerolls, now);
+    const alreadyDone = new Set(prunedIds);
     const newlyCompleted = allObjectives.filter((obj) => obj.completed && !alreadyDone.has(obj.id));
 
-    let finalPlayerVault = updatedPlayerVault;
+    let finalPlayerVault: PlayerCareerVault = {
+      ...updatedPlayerVault,
+      completedObjectiveIds: prunedIds,
+      objectiveRerolls: prunedRerolls,
+    };
     let toastLabel: string | null = get().recentlyCompletedObjective;
 
     if (newlyCompleted.length > 0) {
       finalPlayerVault = {
-        ...updatedPlayerVault,
+        ...finalPlayerVault,
         completedObjectiveIds: [
-          ...updatedPlayerVault.completedObjectiveIds,
+          ...prunedIds,
           ...newlyCompleted.map((o) => o.id),
         ],
       };
@@ -385,10 +530,11 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
 
   rerollObjectives: (playerId, period) => {
     const playerState = usePlayerStore.getState();
+    const now = new Date();
     const key =
       period === 'daily'
-        ? `daily:${getLocalDateKey()}`
-        : `weekly:${getWeekStartKey()}`;
+        ? `daily:${getLocalDateKey(now)}`
+        : `weekly:${getWeekStartKey(now)}`;
 
     // PARTY MODE: Reroll temp user's objectives in RAM only (ZERO disk writes!)
     if (playerState.isPartyMode) {
@@ -396,14 +542,16 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
       const targetId = playerId || activeParty.id;
       const prevParty =
         get().partyVaults[targetId] || createEmptyPlayerVault(targetId, activeParty.name);
-      const nextSalt = (prevParty.objectiveRerolls[key] || 0) + 1;
+      const prunedRerolls = pruneExpiredObjectiveRerolls(prevParty.objectiveRerolls, now);
+      const nextSalt = (prunedRerolls[key] || 0) + 1;
       set((s) => ({
         partyVaults: {
           ...s.partyVaults,
           [targetId]: {
             ...prevParty,
+            completedObjectiveIds: pruneExpiredObjectiveIds(prevParty.completedObjectiveIds, now),
             objectiveRerolls: {
-              ...prevParty.objectiveRerolls,
+              ...prunedRerolls,
               [key]: nextSalt,
             },
           },
@@ -418,7 +566,8 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
       currentVault.players[playerId] ||
       createEmptyPlayerVault(playerId, matched?.name || 'Callum');
 
-    const nextSalt = (prevPlayerVault.objectiveRerolls[key] || 0) + 1;
+    const prunedRerolls = pruneExpiredObjectiveRerolls(prevPlayerVault.objectiveRerolls, now);
+    const nextSalt = (prunedRerolls[key] || 0) + 1;
 
     const nextVault: CareerVaultData = {
       ...currentVault,
@@ -426,8 +575,9 @@ export const useCareerStore = create<CareerStoreState>((set, get) => ({
         ...currentVault.players,
         [playerId]: {
           ...prevPlayerVault,
+          completedObjectiveIds: pruneExpiredObjectiveIds(prevPlayerVault.completedObjectiveIds, now),
           objectiveRerolls: {
-            ...prevPlayerVault.objectiveRerolls,
+            ...prunedRerolls,
             [key]: nextSalt,
           },
         },

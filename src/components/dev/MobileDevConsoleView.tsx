@@ -80,12 +80,60 @@ export const MobileDevConsoleView: React.FC = () => {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const esRef = useRef<EventSource | null>(null);
+  const pinRef = useRef('');
+  const pinErrorTimerRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const lastWakeAtRef = useRef(0);
+  const isMountedRef = useRef(true);
 
-  const handleDigit = (digit: string) => {
+  const clearPinErrorTimer = useCallback(() => {
+    if (pinErrorTimerRef.current !== null) {
+      window.clearTimeout(pinErrorTimerRef.current);
+      pinErrorTimerRef.current = null;
+    }
+  }, []);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      clearPinErrorTimer();
+      clearReconnectTimer();
+    };
+  }, [clearPinErrorTimer, clearReconnectTimer]);
+
+  const handleClearPin = useCallback(() => {
+    clearPinErrorTimer();
+    pinRef.current = '';
+    setPin('');
     setPinError(false);
-    setPin((prev) => {
-      if (prev.length >= 4) return prev;
-      const next = prev + digit;
+  }, [clearPinErrorTimer]);
+
+  const handleBackspace = useCallback(() => {
+    clearPinErrorTimer();
+    const next = pinRef.current.slice(0, -1);
+    pinRef.current = next;
+    setPin(next);
+    setPinError(false);
+  }, [clearPinErrorTimer]);
+
+  const handleDigit = useCallback(
+    (digit: string) => {
+      if (pinRef.current.length >= 4) return;
+      clearPinErrorTimer();
+      const next = pinRef.current + digit;
+      pinRef.current = next;
+      setPinError(false);
+      setPin(next);
+
       if (next.length === 4) {
         if (next === DEV_CONSOLE_PIN) {
           try {
@@ -96,31 +144,37 @@ export const MobileDevConsoleView: React.FC = () => {
           setUnlocked(true);
         } else {
           setPinError(true);
-          window.setTimeout(() => {
+          pinErrorTimerRef.current = window.setTimeout(() => {
+            pinRef.current = '';
             setPin('');
             setPinError(false);
+            pinErrorTimerRef.current = null;
           }, 550);
         }
       }
-      return next;
-    });
-  };
+    },
+    [clearPinErrorTimer]
+  );
 
   const handleLock = () => {
+    clearPinErrorTimer();
     try {
       sessionStorage.removeItem(SESSION_UNLOCK_KEY);
     } catch {
       // ignore
     }
+    pinRef.current = '';
     setUnlocked(false);
     setPin('');
+    setPinError(false);
   };
 
   const pullSnapshot = useCallback(async () => {
     try {
       const res = await fetch('/api/dev/snapshot', { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok || !isMountedRef.current) return;
       const data = await res.json();
+      if (!isMountedRef.current) return;
       if (data?.ok) {
         setConnected(true);
         if (data.health) setHealth(data.health as DevHealthSnapshot);
@@ -129,17 +183,43 @@ export const MobileDevConsoleView: React.FC = () => {
         }
       }
     } catch {
-      setConnected(false);
+      if (isMountedRef.current) setConnected(false);
     }
   }, []);
 
   const connectStream = useCallback(() => {
-    esRef.current?.close();
+    clearReconnectTimer();
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
     const es = new EventSource('/api/dev/stream?role=dev');
     esRef.current = es;
 
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
+    es.onopen = () => {
+      if (!isMountedRef.current) return;
+      reconnectAttemptRef.current = 0;
+      setConnected(true);
+    };
+
+    es.onerror = () => {
+      if (!isMountedRef.current) return;
+      setConnected(false);
+      if (es.readyState === EventSource.CLOSED && esRef.current === es) {
+        esRef.current = null;
+        if (document.visibilityState === 'hidden') return;
+        const attempt = reconnectAttemptRef.current;
+        reconnectAttemptRef.current = Math.min(attempt + 1, 5);
+        const delayMs = Math.min(15000, 1000 * Math.pow(2, attempt));
+        clearReconnectTimer();
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          if (isMountedRef.current && document.visibilityState !== 'hidden') {
+            connectStream();
+          }
+        }, delayMs);
+      }
+    };
 
     es.addEventListener('health', (ev) => {
       try {
@@ -176,31 +256,49 @@ export const MobileDevConsoleView: React.FC = () => {
     es.addEventListener('cleared', () => {
       setLogs([]);
     });
-  }, []);
+  }, [clearReconnectTimer]);
 
   useEffect(() => {
     if (!unlocked) return;
     void pullSnapshot();
     connectStream();
 
-    const onWake = () => {
+    const triggerWakeReconnect = () => {
+      const now = Date.now();
+      if (now - lastWakeAtRef.current < 400) return;
+      lastWakeAtRef.current = now;
+      reconnectAttemptRef.current = 0;
+      void pullSnapshot();
+      connectStream();
+    };
+
+    const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void pullSnapshot();
-        if (!esRef.current || esRef.current.readyState === EventSource.CLOSED) {
-          connectStream();
-        }
+        triggerWakeReconnect();
       }
     };
-    document.addEventListener('visibilitychange', onWake);
-    window.addEventListener('focus', onWake);
+    const onPageShow = () => {
+      if (document.visibilityState === 'visible') {
+        triggerWakeReconnect();
+      }
+    };
+    const onOnline = () => {
+      triggerWakeReconnect();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('online', onOnline);
 
     return () => {
+      clearReconnectTimer();
       esRef.current?.close();
       esRef.current = null;
-      document.removeEventListener('visibilitychange', onWake);
-      window.removeEventListener('focus', onWake);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('online', onOnline);
     };
-  }, [unlocked, pullSnapshot, connectStream]);
+  }, [unlocked, pullSnapshot, connectStream, clearReconnectTimer]);
 
   const filteredLogs = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -275,7 +373,7 @@ export const MobileDevConsoleView: React.FC = () => {
             ))}
             <button
               type="button"
-              onClick={() => setPin('')}
+              onClick={handleClearPin}
               className="h-14 rounded-2xl bg-slate-900/60 border border-white/10 font-mono text-xs font-bold text-slate-400"
             >
               CLR
@@ -289,7 +387,7 @@ export const MobileDevConsoleView: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setPin((p) => p.slice(0, -1))}
+              onClick={handleBackspace}
               className="h-14 rounded-2xl bg-slate-900/60 border border-white/10 flex items-center justify-center text-slate-300"
             >
               <Delete className="w-5 h-5" />
@@ -349,14 +447,18 @@ export const MobileDevConsoleView: React.FC = () => {
 
             <button
               type="button"
+              disabled={syncing}
               onClick={async () => {
                 setSyncing(true);
-                await sendDevCommand({ type: 'force_health' });
-                await pullSnapshot();
-                setSyncing(false);
+                try {
+                  await sendDevCommand({ type: 'force_health' });
+                  await pullSnapshot();
+                } finally {
+                  if (isMountedRef.current) setSyncing(false);
+                }
               }}
               title="Force resync"
-              className="p-1.5 rounded-lg bg-slate-900 border border-white/10 text-slate-300"
+              className="p-1.5 rounded-lg bg-slate-900 border border-white/10 text-slate-300 disabled:opacity-60"
             >
               <RefreshCw className={cn('w-3.5 h-3.5', syncing && 'animate-spin')} />
             </button>

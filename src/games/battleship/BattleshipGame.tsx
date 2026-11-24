@@ -154,6 +154,7 @@ export const BattleshipGame: React.FC<GameModuleProps> = ({
     const prev = stack[stack.length - 1];
     commitState(prev.state, prev.turnStartState, stack.slice(0, -1));
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.visitEntries.map((e) => e.dart));
   }, [commitState]);
 
   const handleRestart = useCallback(() => {
@@ -317,6 +318,8 @@ export const BattleshipGame: React.FC<GameModuleProps> = ({
 
     return overlays;
   }, [targetDefender]);
+
+  if (!activePlayer || !targetDefender) return null;
 
   const enemyTotalHull = getTotalFleetHull(targetDefender.fleet);
   const enemyRemainingHull = getRemainingFleetHull(targetDefender.fleet);

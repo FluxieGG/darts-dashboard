@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import {
   AppView,
   GAME_PLAYER_COLORS,
@@ -14,6 +14,8 @@ import {
 import { usePlayerStore } from './usePlayerStore';
 import { useCareerStore } from './useCareerStore';
 import { gameEventBus } from '../services/gameEventBus';
+import { getGameDefinition } from '../games/gameRegistry';
+import { safeLocalStorage } from '../lib/storage';
 
 interface GameStoreState {
   // Navigation & Active Game Socket State
@@ -132,7 +134,7 @@ export const useGameStore = create<GameStoreState>()(
       activeTurnPlayerColor: null,
       isRulesOverlayOpen: false,
 
-      soundEnabled: true,
+      soundEnabled: false,
       recentResults: [],
 
       setActiveView: (activeView) => set({ activeView }),
@@ -187,7 +189,7 @@ export const useGameStore = create<GameStoreState>()(
 
       setSelectedCategory: (selectedCategory) => set({ selectedCategory }),
 
-      toggleSound: () => set((s) => ({ soundEnabled: !s.soundEnabled })),
+      toggleSound: () => {},
 
       setActiveController: (activeController) => set({ activeController }),
 
@@ -214,6 +216,8 @@ export const useGameStore = create<GameStoreState>()(
           roster: seededRoster,
           matchConfig: { ...defaultConfig },
           lastResult: null,
+          activeController: null,
+          canUndoActiveGame: false,
           activeTurnPlayerColor: null,
           matchInstanceKey: get().matchInstanceKey + 1,
         });
@@ -274,9 +278,12 @@ export const useGameStore = create<GameStoreState>()(
       },
 
       removeRosterPlayer: (playerId) =>
-        set((s) => ({
-          roster: s.roster.filter((p) => p.id !== playerId),
-        })),
+        set((s) => {
+          if (s.matchPhase === 'playing' || s.matchPhase === 'paused') return s;
+          return {
+            roster: s.roster.filter((p) => p.id !== playerId),
+          };
+        }),
 
       reorderRoster: (fromIndex, toIndex) =>
         set((s) => {
@@ -295,6 +302,9 @@ export const useGameStore = create<GameStoreState>()(
         }),
 
       startMatch: () => {
+        const { activeGameId, roster } = get();
+        const game = activeGameId ? getGameDefinition(activeGameId) : undefined;
+        if (game && roster.length < game.minPlayers) return;
         gameEventBus.resetVisitBuffer();
         set((s) => ({
           matchPhase: 'playing',
@@ -321,6 +331,7 @@ export const useGameStore = create<GameStoreState>()(
       },
 
       completeMatch: (gameTitle, result) => {
+        if (get().matchPhase !== 'playing') return;
         const summary: GameSessionSummary = {
           id: `gsum-${Date.now()}`,
           gameId: result.gameId,
@@ -336,6 +347,8 @@ export const useGameStore = create<GameStoreState>()(
         set((s) => ({
           matchPhase: 'finished',
           lastResult: result,
+          activeController: null,
+          canUndoActiveGame: false,
           activeTurnPlayerColor: winnerColor,
           // Never persist Party Mode match history into localStorage
           recentResults: isPartyMode ? s.recentResults : [summary, ...s.recentResults].slice(0, 20),
@@ -379,6 +392,9 @@ export const useGameStore = create<GameStoreState>()(
       },
 
       rematch: () => {
+        const { activeGameId, roster } = get();
+        const game = activeGameId ? getGameDefinition(activeGameId) : undefined;
+        if (game && roster.length < game.minPlayers) return;
         gameEventBus.resetVisitBuffer();
         set((s) => ({
           matchPhase: 'playing',
@@ -389,6 +405,7 @@ export const useGameStore = create<GameStoreState>()(
     }),
     {
       name: 'autodarts_games_store_v1',
+      storage: createJSONStorage(() => safeLocalStorage),
       partialize: (state) => ({
         soundEnabled: state.soundEnabled,
         recentResults: state.recentResults,

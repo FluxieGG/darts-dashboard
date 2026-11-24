@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { DataConnectionMode } from '../types/config';
+import { safeLocalStorage } from '../lib/storage';
 
 interface SettingsState {
   dataMode: DataConnectionMode;
@@ -74,6 +75,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'autodarts_dashboard_settings_v2',
+      storage: createJSONStorage(() => safeLocalStorage),
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.localWsUrl = migrateLocalBoardUrl(state.localWsUrl, '/api/board/api/events');

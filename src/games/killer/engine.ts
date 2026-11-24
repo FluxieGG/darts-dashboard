@@ -316,9 +316,9 @@ export function applyDartToState(
         turnEndedEarly = true;
 
         const survivors = players.filter((p) => !p.isEliminated);
-        if (players.length > 1 && survivors.length === 1) {
+        if (survivors.length === 0 || (players.length > 1 && survivors.length === 1)) {
           isFinished = true;
-          winnerId = survivors[0].id;
+          winnerId = survivors[0]?.id ?? null;
         }
 
         entry = {
@@ -415,9 +415,9 @@ export function applyDartToState(
         activePlayer.kills += 1;
 
         const survivors = players.filter((p) => !p.isEliminated);
-        if (players.length > 1 && survivors.length === 1) {
+        if (survivors.length === 0 || (players.length > 1 && survivors.length === 1)) {
           isFinished = true;
-          winnerId = survivors[0].id;
+          winnerId = survivors[0]?.id ?? null;
         }
 
         entry = {
@@ -522,7 +522,7 @@ export function advanceTurn(state: KillerGameState): KillerGameState {
 
   // Playing Phase Turn Advance (skip eliminated players)
   const survivors = state.players.filter((p) => !p.isEliminated);
-  if (state.players.length > 1 && survivors.length <= 1) {
+  if (survivors.length === 0 || (state.players.length > 1 && survivors.length <= 1)) {
     const winner = survivors[0] ?? rankKillerPlayers(state.players)[0];
     return {
       ...state,

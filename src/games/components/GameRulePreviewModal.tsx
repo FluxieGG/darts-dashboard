@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { GameDefinition } from '../../types/games';
 import { Modal } from '../../components/common/Modal';
 import { Badge } from '../../components/common/Badge';
@@ -11,6 +11,16 @@ interface GameRulePreviewModalProps {
 
 export const GameRulePreviewModal: React.FC<GameRulePreviewModalProps> = ({ game, onClose }) => {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   if (!game) return null;
 
@@ -20,7 +30,13 @@ export const GameRulePreviewModal: React.FC<GameRulePreviewModalProps> = ({ game
   const handleCopyPrompt = () => {
     navigator.clipboard?.writeText(agyPrompt).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      copyTimerRef.current = null;
+    }, 2000);
   };
 
   return (

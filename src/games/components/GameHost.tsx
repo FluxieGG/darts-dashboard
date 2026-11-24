@@ -1,14 +1,12 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { useGameStore } from '../../store/useGameStore';
 import { useLiveBoardStore } from '../../store/useLiveBoardStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { getGameDefinition } from '../gameRegistry';
 import { GameModuleController, GameResult } from '../../types/games';
-import { soundEngine } from '../utils/soundEngine';
 import { Badge } from '../../components/common/Badge';
+import { AppErrorBoundary } from '../../components/common/AppErrorBoundary';
 import {
-  Volume2,
-  VolumeX,
   Trophy,
   Sliders,
   Sparkles,
@@ -16,6 +14,7 @@ import {
   Wifi,
   Tablet,
   BookOpen,
+  PauseCircle,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -71,10 +70,25 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
     [setCanUndoActiveGame]
   );
 
+  useEffect(() => {
+    if (matchPhase !== 'playing' && matchPhase !== 'paused') {
+      controllerRef.current = {};
+      setActiveController(null);
+      setCanUndoActiveGame(false);
+    }
+  }, [matchPhase, setActiveController, setCanUndoActiveGame]);
+
+  useEffect(() => {
+    return () => {
+      controllerRef.current = {};
+      setActiveController(null);
+      setCanUndoActiveGame(false);
+    };
+  }, [setActiveController, setCanUndoActiveGame]);
+
   const handleGameComplete = useCallback(
     (result: GameResult) => {
       if (!game) return;
-      soundEngine.playVictory(soundEnabled);
       completeMatch(game.title, result);
 
       // Automatically clip & save the game-winning shot / checkout for EVERY game!
@@ -95,7 +109,7 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
         forceAutoSave: true,
       });
     },
-    [game, soundEnabled, completeMatch]
+    [game, completeMatch]
   );
 
   if (!game || !game.component) {
@@ -131,6 +145,8 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
             <span className="text-xs sm:text-sm font-mono uppercase tracking-wider text-slate-400 font-bold">
               {matchPhase === 'setup'
                 ? 'Match Lineup & Setup'
+                : matchPhase === 'paused'
+                ? 'Match Paused'
                 : matchPhase === 'finished'
                 ? 'Match Complete'
                 : boardStatus === 'takeout'
@@ -148,6 +164,8 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
                 ? boardStatus === 'takeout'
                   ? 'amber'
                   : 'emerald'
+                : matchPhase === 'paused'
+                ? 'amber'
                 : matchPhase === 'finished'
                 ? 'purple'
                 : 'sky'
@@ -157,29 +175,14 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
           >
             {matchPhase === 'setup'
               ? 'Waiting for iPad Start'
+              : matchPhase === 'paused'
+              ? 'Paused'
               : matchPhase === 'finished'
               ? 'Final Result'
               : boardStatus === 'takeout'
               ? 'Pull Darts'
               : 'Live'}
           </Badge>
-
-          <div
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/80 border border-white/10 text-[11px] font-mono text-slate-300"
-            title={soundEnabled ? 'Arcade SFX Enabled' : 'Arcade SFX Muted'}
-          >
-            {soundEnabled ? (
-              <>
-                <Volume2 className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden sm:inline">SFX</span>
-              </>
-            ) : (
-              <>
-                <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                <span className="hidden sm:inline text-rose-300">Muted</span>
-              </>
-            )}
-          </div>
         </div>
       </div>
 
@@ -322,24 +325,77 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
         </div>
       )}
 
-      {/* PHASE 2: ACTIVE GAME SOCKET */}
-      {matchPhase === 'playing' && (
-        <div key={matchInstanceKey} className="w-full">
-          <GameComponent
-            players={roster}
-            config={matchConfig}
-            soundEnabled={soundEnabled}
-            isBoardConnected={isLocalConnected}
-            boardStatus={boardStatus}
-            currentVisitThrows={currentVisitThrows}
-            onGameComplete={handleGameComplete}
-            registerController={registerController}
-            onCanUndoChange={handleCanUndoChange}
-          />
+      {/* PHASE 2: ACTIVE GAME SOCKET (kept mounted while paused so live match state is preserved) */}
+      {(matchPhase === 'playing' || matchPhase === 'paused') && (
+        <div key={matchInstanceKey} className="relative w-full">
+          {matchPhase === 'paused' && (
+            <div className="mb-4 rounded-2xl border-2 border-amber-400/60 bg-amber-500/15 px-5 py-4 flex flex-wrap items-center justify-between gap-3 shadow-[0_0_32px_-8px_rgba(245,158,11,0.45)]">
+              <div className="flex items-center gap-3">
+                <PauseCircle className="w-7 h-7 text-amber-300 shrink-0" />
+                <div>
+                  <div className="text-lg sm:text-xl font-black uppercase tracking-wider text-amber-200 leading-tight">
+                    Match Paused
+                  </div>
+                  <div className="text-xs sm:text-sm font-mono text-amber-100/85">
+                    Live match state is preserved — tap Resume on the iPad Oche Deck to continue
+                  </div>
+                </div>
+              </div>
+              <Badge variant="amber" size="md" dot>
+                Paused
+              </Badge>
+            </div>
+          )}
+
+          {roster.length === 0 ? (
+            <div className="card-matte rounded-2xl p-8 max-w-lg mx-auto text-center space-y-3 border border-amber-400/40">
+              <Users className="w-10 h-10 text-amber-400 mx-auto" />
+              <h3 className="text-xl font-black text-white">No Players in Lineup</h3>
+              <p className="text-sm text-slate-400">
+                Add at least {game.minPlayers} player(s) from the iPad Oche Deck to play {game.title}.
+              </p>
+            </div>
+          ) : (
+            <AppErrorBoundary
+              mode="game"
+              label={game.title}
+              resetKey={`${activeGameId ?? 'none'}-${matchInstanceKey}`}
+              resetActionLabel="Return to Lobby"
+              onReset={() =>
+                useGameStore
+                  .getState()
+                  .setActiveView(game.mode === 'practice' ? 'practice-lobby' : 'games-lobby')
+              }
+            >
+              <GameComponent
+                players={roster}
+                config={matchConfig}
+                soundEnabled={soundEnabled}
+                isBoardConnected={isLocalConnected}
+                boardStatus={boardStatus}
+                currentVisitThrows={currentVisitThrows}
+                onGameComplete={handleGameComplete}
+                registerController={registerController}
+                onCanUndoChange={handleCanUndoChange}
+              />
+            </AppErrorBoundary>
+          )}
         </div>
       )}
 
       {/* PHASE 3: CELEBRATORY VICTORY PODIUM (Zero Kiosk Buttons) */}
+      {matchPhase === 'finished' && !lastResult && (
+        <div className="card-matte rounded-2xl p-8 max-w-xl mx-auto text-center space-y-4 border border-white/15">
+          <div className="w-14 h-14 rounded-2xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center mx-auto">
+            <Trophy className="w-8 h-8 text-purple-300" />
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-black text-white">Match Complete</h2>
+          <p className="text-sm text-slate-400">
+            Final standings are unavailable for this session. Start a rematch or choose another game from the iPad Oche Deck.
+          </p>
+        </div>
+      )}
+
       {matchPhase === 'finished' && lastResult && (
         <div className="card-matte rounded-2xl p-6 sm:p-10 max-w-3xl mx-auto text-center space-y-6 border-emerald-500/40 shadow-[0_0_40px_-8px_rgba(16,185,129,0.3)]">
           <div className="w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center mx-auto">
@@ -404,8 +460,8 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
           {/* Highlights */}
           {lastResult.highlights && lastResult.highlights.length > 0 && (
             <div className="flex flex-wrap justify-center gap-2">
-              {lastResult.highlights.map((h) => (
-                <Badge key={h} variant="sky" size="sm">
+              {lastResult.highlights.map((h, idx) => (
+                <Badge key={`${idx}-${h}`} variant="sky" size="sm">
                   {h}
                 </Badge>
               ))}
@@ -488,7 +544,7 @@ export const GameHost: React.FC<GameHostProps> = ({ isLocalConnected }) => {
             <div className="grid grid-cols-1 gap-3.5">
               {game.rules.map((step, idx) => (
                 <div
-                  key={step.title}
+                  key={`${idx}-${step.title}`}
                   className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-white/12 flex items-start gap-4"
                 >
                   <span className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 font-mono font-black text-lg flex items-center justify-center shrink-0">

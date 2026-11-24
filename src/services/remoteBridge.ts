@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   RemoteCommand,
   RemoteKioskState,
@@ -63,6 +63,32 @@ async function pushKioskState(snapshot: RemoteKioskState): Promise<void> {
   } catch {
     // Ignore transient network errors when server restarts
   }
+}
+
+let lastClipsRef: unknown = null;
+let lastClipsSignature = '';
+let clipsRevisionCounter = 0;
+let resyncInFlight = false;
+const pendingSimVisitTimers = new Set<number>();
+
+function clearPendingSimVisitTimers(): void {
+  for (const timerId of pendingSimVisitTimers) {
+    window.clearTimeout(timerId);
+  }
+  pendingSimVisitTimers.clear();
+}
+
+function computeClipsRevision(
+  clips: ReadonlyArray<{ id: string; createdAt: number }>
+): number {
+  const first = clips[0];
+  const signature = `${clips.length}:${first?.id ?? ''}:${first?.createdAt ?? 0}`;
+  if (clips !== lastClipsRef || signature !== lastClipsSignature) {
+    lastClipsRef = clips;
+    lastClipsSignature = signature;
+    clipsRevisionCounter += 1;
+  }
+  return clipsRevisionCounter;
 }
 
 function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
@@ -224,6 +250,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
     replayErrorEpoch: replayState.cameraErrorEpoch,
     hasActiveReplayOverlay: Boolean(replayState.activeOverlayClip),
     replayClipCount: replayState.clips.length,
+    clipsRevision: computeClipsRevision(replayState.clips),
     isSavingReplay: replayState.isSavingLastClip,
     lastRecording: replayState.lastRecordedClip
       ? {
@@ -235,20 +262,7 @@ function buildKioskSnapshot(isLocalConnected: boolean): RemoteKioskState {
           isSaved: Boolean(replayState.lastRecordedClip.isSavedToDisk),
         }
       : null,
-    recentClips: replayState.clips.slice(0, 100).map((c) => ({
-      id: c.id,
-      filename: c.filename,
-      relativePath: c.relativePath,
-      subfolder: c.subfolder,
-      category: c.category,
-      playerName: c.playerName,
-      segmentName: c.segmentName,
-      score: c.score,
-      reason: c.reason,
-      durationSec: c.durationSec,
-      isDualCamera: c.isDualCamera,
-      createdAt: c.createdAt,
-    })),
+    recentClips: [],
     activeGame: gameDef
       ? {
           id: gameDef.id,
@@ -410,6 +424,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
     }
 
     case 'set_data_mode':
+      clearPendingSimVisitTimers();
       useSettingsStore.getState().setDataMode(cmd.mode);
       break;
 
@@ -418,11 +433,16 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'simulate_visit': {
+      clearPendingSimVisitTimers();
+      const startedMode = useSettingsStore.getState().dataMode;
       const simVisit = generateSimulatedVisit(playerStore.getActivePlayer().id, Date.now());
       simVisit.throws.forEach((t, i) => {
-        window.setTimeout(() => {
+        const timerId = window.setTimeout(() => {
+          pendingSimVisitTimers.delete(timerId);
+          if (useSettingsStore.getState().dataMode !== startedMode) return;
           useLiveBoardStore.getState().addSimulatedDart(t);
         }, i * 320);
+        pendingSimVisitTimers.add(timerId);
       });
       break;
     }
@@ -593,46 +613,55 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'resync_and_recalibrate': {
+      if (resyncInFlight) {
+        devLogger.log('BOARD', 'warn', 'Resync & recalibration already in progress — skipping duplicate request');
+        break;
+      }
+      resyncInFlight = true;
       devLogger.log('BOARD', 'info', 'iPad requested full Resync & Autodarts Camera Recalibration...');
       void (async () => {
         try {
-          // 1. Trigger Autodarts Desktop 3-camera auto-calibration + board reset (port 3180)
-          const calRes = await fetch('/api/board/api/config/calibration/auto', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          });
-          if (calRes.ok) {
-            devLogger.log('BOARD', 'success', 'Autodarts 3-camera auto-calibration complete');
-          } else {
-            devLogger.log('BOARD', 'warn', `Autodarts calibration returned HTTP ${calRes.status}`);
+          try {
+            // 1. Trigger Autodarts Desktop 3-camera auto-calibration + board reset (port 3180)
+            const calRes = await fetch('/api/board/api/config/calibration/auto', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            });
+            if (calRes.ok) {
+              devLogger.log('BOARD', 'success', 'Autodarts 3-camera auto-calibration complete');
+            } else {
+              devLogger.log('BOARD', 'warn', `Autodarts calibration returned HTTP ${calRes.status}`);
+            }
+
+            await fetch('/api/board/api/reset', { method: 'POST' }).catch(() => {});
+            useLiveBoardStore.getState().clearCurrentVisit();
+          } catch (err) {
+            devLogger.log(
+              'BOARD',
+              'warn',
+              'Autodarts calibration unreachable (is Autodarts Desktop running?)',
+              (err as Error).message
+            );
           }
 
-          await fetch('/api/board/api/reset', { method: 'POST' }).catch(() => {});
-          liveStore.clearCurrentVisit();
-        } catch (err) {
-          devLogger.log(
-            'BOARD',
-            'warn',
-            'Autodarts calibration unreachable (is Autodarts Desktop running?)',
-            (err as Error).message
-          );
-        }
+          // 2. Refresh Career Vault & Saved Clips archive from disk
+          await Promise.all([
+            useCareerStore.getState().hydrateVault(),
+            useReplayStore.getState().loadSavedClips(),
+          ]);
 
-        // 2. Refresh Career Vault & Saved Clips archive from disk
-        await Promise.all([
-          useCareerStore.getState().hydrateVault(),
-          useReplayStore.getState().loadSavedClips(),
-        ]);
-
-        // 3. Re-arm Split-Cam + 3-cam board stream cleanly (unless actively recording or in DartCounter)
-        const rs = useReplayStore.getState();
-        if (
-          !isDartCounterClippingDisabled() &&
-          rs.status !== 'capturing' &&
-          (rs.cameraEnabled || rs.autoStartCamera)
-        ) {
-          await rs.startCamera();
+          // 3. Re-arm Split-Cam + 3-cam board stream cleanly (unless actively recording or in DartCounter)
+          const rs = useReplayStore.getState();
+          if (
+            !isDartCounterClippingDisabled() &&
+            rs.status !== 'capturing' &&
+            (rs.cameraEnabled || rs.autoStartCamera)
+          ) {
+            await rs.startCamera();
+          }
+        } finally {
+          resyncInFlight = false;
         }
       })();
       break;
@@ -663,11 +692,17 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'undo_last_action':
-      gameStore.activeController?.undoLastAction?.();
+      if (gameStore.activeView === 'game-active' && gameStore.matchPhase === 'playing') {
+        gameStore.activeController?.undoLastAction?.();
+      }
       break;
 
     case 'restart_match':
-      if (gameStore.activeController?.restartMatch) {
+      if (
+        gameStore.activeView === 'game-active' &&
+        gameStore.matchPhase === 'playing' &&
+        gameStore.activeController?.restartMatch
+      ) {
         gameStore.activeController.restartMatch();
       } else if (gameStore.activeView === 'game-active') {
         gameStore.rematch();
@@ -675,7 +710,7 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
       break;
 
     case 'toggle_sound':
-      gameStore.toggleSound();
+      // No-op: kiosk display has no audio output
       break;
 
     case 'next_turn_takeout':
@@ -728,45 +763,80 @@ function executeRemoteCommand(cmd: RemoteCommand): void {
  */
 export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemotes: number } {
   const [connectedRemotes, setConnectedRemotes] = useState(0);
+  const isLocalConnectedRef = useRef(isLocalConnected);
+  isLocalConnectedRef.current = isLocalConnected;
+  const schedulePushRef = useRef<((force?: boolean) => void) | null>(null);
 
   useEffect(() => {
     let pushTimer: number | null = null;
+    let pendingForce = false;
+    let hasInitialPushed = false;
+    let lastPushedSignature = '';
+    let prevConnectedRemotes = 0;
+    let prevDataMode = useSettingsStore.getState().dataMode;
 
-    const schedulePush = () => {
+    const flushPush = (force: boolean) => {
+      if (!force && prevConnectedRemotes === 0 && hasInitialPushed) {
+        return;
+      }
+      const snapshot = buildKioskSnapshot(isLocalConnectedRef.current);
+      const { updatedAt: _ignored, ...comparable } = snapshot;
+      const signature = JSON.stringify(comparable);
+      if (!force && signature === lastPushedSignature) {
+        return;
+      }
+      lastPushedSignature = signature;
+      hasInitialPushed = true;
+      void pushKioskState(snapshot);
+    };
+
+    const schedulePush = (force = false) => {
+      if (force) {
+        pendingForce = true;
+      }
+      if (!pendingForce && prevConnectedRemotes === 0 && hasInitialPushed) {
+        return;
+      }
       if (pushTimer !== null) return;
       pushTimer = window.setTimeout(() => {
         pushTimer = null;
-        void pushKioskState(buildKioskSnapshot(isLocalConnected));
+        const shouldForce = pendingForce;
+        pendingForce = false;
+        flushPush(shouldForce);
       }, 60);
     };
 
-    // Push initial state immediately
-    void pushKioskState(buildKioskSnapshot(isLocalConnected));
+    schedulePushRef.current = schedulePush;
+
+    // Push initial state immediately so /api/remote/state is hydrated
+    flushPush(true);
 
     const es = new EventSource('/api/remote/stream?role=kiosk');
 
     es.onopen = () => {
-      schedulePush();
+      schedulePush(true);
     };
 
     es.addEventListener('presence', (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as RemotePresencePayload;
         const count = data.connectedRemotes || 0;
-        setConnectedRemotes((prev) => {
-          if (prev !== count) {
-            devLogger.log(
-              'REMOTE',
-              count > 0 ? 'success' : 'info',
-              `iPad / Oche Remote count: ${count}`
-            );
-          }
-          return count;
-        });
-        useReplayStore.getState().setConnectedRemotes(count);
-        if (count > 0) {
-          void useReplayStore.getState().loadSavedClips().then(() => schedulePush());
-          schedulePush();
+        const prev = prevConnectedRemotes;
+        prevConnectedRemotes = count;
+
+        if (prev !== count) {
+          devLogger.log(
+            'REMOTE',
+            count > 0 ? 'success' : 'info',
+            `iPad / Oche Remote count: ${count}`
+          );
+          setConnectedRemotes(count);
+          useReplayStore.getState().setConnectedRemotes(count);
+        }
+
+        if (count > prev) {
+          schedulePush(true);
+          void useReplayStore.getState().loadSavedClips().then(() => schedulePush(true));
         }
       } catch {
         // ignore
@@ -784,16 +854,24 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
       }
     });
 
-    const unsubPlayer = usePlayerStore.subscribe(schedulePush);
-    const unsubLive = useLiveBoardStore.subscribe(schedulePush);
-    const unsubGame = useGameStore.subscribe(schedulePush);
-    const unsubSettings = useSettingsStore.subscribe(schedulePush);
-    const unsubReplay = useReplayStore.subscribe(schedulePush);
-    const unsubLayout = useLayoutStore.subscribe(schedulePush);
-    const unsubCareer = useCareerStore.subscribe(schedulePush);
-    const unsubOnline = useOnlineMatchStore.subscribe(schedulePush);
+    const unsubPlayer = usePlayerStore.subscribe(() => schedulePush());
+    const unsubLive = useLiveBoardStore.subscribe(() => schedulePush());
+    const unsubGame = useGameStore.subscribe(() => schedulePush());
+    const unsubSettings = useSettingsStore.subscribe((s) => {
+      if (s.dataMode !== prevDataMode) {
+        prevDataMode = s.dataMode;
+        clearPendingSimVisitTimers();
+      }
+      schedulePush();
+    });
+    const unsubReplay = useReplayStore.subscribe(() => schedulePush());
+    const unsubLayout = useLayoutStore.subscribe(() => schedulePush());
+    const unsubCareer = useCareerStore.subscribe(() => schedulePush());
+    const unsubOnline = useOnlineMatchStore.subscribe(() => schedulePush());
 
     return () => {
+      schedulePushRef.current = null;
+      clearPendingSimVisitTimers();
       es.close();
       unsubPlayer();
       unsubLive();
@@ -804,9 +882,13 @@ export function useKioskRemoteBridge(isLocalConnected: boolean): { connectedRemo
       unsubCareer();
       unsubOnline();
       if (pushTimer !== null) {
-        clearTimeout(pushTimer);
+        window.clearTimeout(pushTimer);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    schedulePushRef.current?.();
   }, [isLocalConnected]);
 
   return { connectedRemotes };

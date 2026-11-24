@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useOnlineMatchStore } from '../../store/useOnlineMatchStore';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useLiveBoardStore } from '../../store/useLiveBoardStore';
@@ -34,10 +35,35 @@ export const LiveMatchWidget: React.FC = () => {
     dcMode,
     dcMatchUrl,
     dcLastSubmitStatus,
-  } = useOnlineMatchStore();
+  } = useOnlineMatchStore(
+    useShallow((s) => ({
+      isActive: s.isActive,
+      source: s.source,
+      startScore: s.startScore,
+      outRule: s.outRule,
+      legsToWin: s.legsToWin,
+      opponentName: s.opponentName,
+      opponentRemaining: s.opponentRemaining,
+      opponentAvg: s.opponentAvg,
+      isPlayerTurn: s.isPlayerTurn,
+      playerLegs: s.playerLegs,
+      opponentLegs: s.opponentLegs,
+      remaining: s.remaining,
+      dartsInLeg: s.dartsInLeg,
+      legPointsScored: s.legPointsScored,
+      isBust: s.isBust,
+      lastBanner: s.lastBanner,
+      matchWinner: s.matchWinner,
+      dcConnected: s.dcConnected,
+      dcMode: s.dcMode,
+      dcMatchUrl: s.dcMatchUrl,
+      dcLastSubmitStatus: s.dcLastSubmitStatus,
+    }))
+  );
 
   const activePlayer = usePlayerStore((s) => s.getActivePlayer());
   const currentVisitThrows = useLiveBoardStore((s) => s.currentVisitThrows);
+  const playerName = activePlayer?.name || 'Player';
 
   const dartsLeftInVisit = Math.max(1, 3 - currentVisitThrows.length);
   const legAvg = dartsInLeg > 0 ? (legPointsScored / dartsInLeg) * 3 : 0;
@@ -152,20 +178,10 @@ export const LiveMatchWidget: React.FC = () => {
       {/* Top Broadcast Match Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant={isDartCounter ? 'emerald' : 'sky'} size="sm" dot>
+          <Badge variant="sky" size="sm" dot>
             <Radio className="w-3 h-3" />
-            {isDartCounter ? 'DartCounter' : 'Online'} {startScore} •{' '}
-            {outRule === 'double' ? 'Double Out' : 'Straight Out'}
+            Online {startScore} • {outRule === 'double' ? 'Double Out' : 'Straight Out'}
           </Badge>
-          {isDartCounter && (
-            <Badge variant={dcMode === 'auto' ? 'amber' : 'slate'} size="sm">
-              {dcMode === 'auto'
-                ? 'AUTO-SCORE'
-                : dcMode === 'confirm'
-                ? 'IPAD CONFIRM'
-                : 'SYNC ONLY'}
-            </Badge>
-          )}
           {legsToWin > 0 && (
             <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
               First to {legsToWin}
@@ -176,7 +192,7 @@ export const LiveMatchWidget: React.FC = () => {
         {/* Legs Scoreboard Pill */}
         <div className="flex items-center gap-3 px-4 py-1.5 rounded-xl bg-slate-900/90 border border-white/12 font-mono">
           <span className="text-xs sm:text-sm font-extrabold text-emerald-300 truncate max-w-[120px]">
-            {activePlayer.name}
+            {playerName}
           </span>
           <span className="text-lg sm:text-xl font-black text-white tabular-nums">
             {playerLegs} — {opponentLegs}
@@ -187,21 +203,13 @@ export const LiveMatchWidget: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Remaining Score (+ Opponent Head-to-Head when DartCounter live) & Dynamic Checkout Route */}
+      {/* Main Remaining Score & Dynamic Checkout Route */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-5 sm:gap-7">
           {/* Player Remaining */}
-          <div
-            className={cn(
-              'rounded-2xl transition-all',
-              isDartCounter && isPlayerTurn && 'pr-3 border-r border-white/10'
-            )}
-          >
+          <div className="rounded-2xl transition-all">
             <div className="text-[11px] font-mono uppercase tracking-widest text-slate-400 font-bold flex items-center gap-1.5">
-              {isDartCounter && isPlayerTurn && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              )}
-              <span>{isDartCounter ? `${activePlayer.name} (You)` : 'Remaining Score'}</span>
+              <span>Remaining Score</span>
             </div>
             <div className="flex items-baseline gap-4 mt-0.5">
               <span className="text-6xl sm:text-7xl font-black font-mono tabular-nums text-white leading-none">
@@ -218,7 +226,7 @@ export const LiveMatchWidget: React.FC = () => {
             </div>
           </div>
 
-          {/* Opponent Live Remaining (populated automatically by DartCounter Extension!) */}
+          {/* Opponent Live Remaining */}
           {opponentRemaining !== null && (
             <div className={cn(!isPlayerTurn && 'opacity-100', isPlayerTurn && 'opacity-75')}>
               <div className="text-[11px] font-mono uppercase tracking-widest text-slate-400 font-bold flex items-center gap-1.5">
@@ -231,7 +239,7 @@ export const LiveMatchWidget: React.FC = () => {
                 <span className="text-4xl sm:text-5xl font-black font-mono tabular-nums text-slate-200 leading-none">
                   {opponentRemaining}
                 </span>
-                {opponentAvg !== null && (
+                {typeof opponentAvg === 'number' && Number.isFinite(opponentAvg) && (
                   <span className="text-xs font-mono text-slate-400 tabular-nums">
                     3DA <strong className="text-sky-300">{opponentAvg.toFixed(1)}</strong>
                   </span>
@@ -271,19 +279,11 @@ export const LiveMatchWidget: React.FC = () => {
             </span>
           ) : (
             <span className="inline-block px-3.5 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-xs sm:text-sm font-mono text-slate-400">
-              {isDartCounter && !isPlayerTurn ? `${opponentName} throwing...` : 'Power scoring phase'}
+              Power scoring phase
             </span>
           )}
         </div>
       </div>
-
-      {/* DartCounter Last Auto-Submit Micro Status */}
-      {isDartCounter && dcLastSubmitStatus && !lastBanner && (
-        <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between pt-1 border-t border-white/[0.06]">
-          <span>DartCounter Bridge</span>
-          <span className="text-emerald-300/90 font-bold truncate ml-2">{dcLastSubmitStatus}</span>
-        </div>
-      )}
 
       {/* Bust / Leg Won Broadcast Callout Strip */}
       {lastBanner && (

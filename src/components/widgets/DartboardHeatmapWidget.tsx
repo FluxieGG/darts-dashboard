@@ -49,9 +49,15 @@ export const DartboardHeatmapWidget: React.FC = () => {
     return overlays;
   }, [checkoutRoute]);
 
+  const sessionThrows = stats?.sessionThrows ?? [];
   const latestDart =
-    currentVisitThrows[currentVisitThrows.length - 1] || stats.sessionThrows[0];
-  const totalPlottedDarts = stats.sessionThrows.length + currentVisitThrows.length;
+    currentVisitThrows[currentVisitThrows.length - 1] || sessionThrows[0];
+  const hasLatestFiniteCoords = Boolean(
+    latestDart &&
+      Number.isFinite(latestDart.coords?.x) &&
+      Number.isFinite(latestDart.coords?.y)
+  );
+  const totalPlottedDarts = sessionThrows.length + currentVisitThrows.length;
 
   const modeLabel =
     heatmapMode === 'both'
@@ -96,7 +102,7 @@ export const DartboardHeatmapWidget: React.FC = () => {
           dimInactiveSegments={Boolean(checkoutRoute)}
         >
           <DartPlotOverlay
-            sessionThrows={stats.sessionThrows}
+            sessionThrows={sessionThrows}
             currentVisitThrows={currentVisitThrows}
             mode={heatmapMode}
           />
@@ -110,9 +116,9 @@ export const DartboardHeatmapWidget: React.FC = () => {
             ? `Target highlighted: ${checkoutRoute[0]} (${matchRemaining} left)`
             : 'Live dart precision telemetry'}
         </span>
-        {latestDart?.coords ? (
+        {hasLatestFiniteCoords && latestDart?.coords ? (
           <span className="text-emerald-400 font-bold tabular-nums">
-            {latestDart.segment.name} ({latestDart.coords.x.toFixed(3)},{' '}
+            {latestDart.segment?.name ?? 'Dart'} ({latestDart.coords.x.toFixed(3)},{' '}
             {latestDart.coords.y.toFixed(3)})
           </span>
         ) : (

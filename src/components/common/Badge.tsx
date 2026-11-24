@@ -17,12 +17,12 @@ export const Badge: React.FC<BadgeProps> = ({
   dot = false,
 }) => {
   const variantStyles = {
-    emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25',
-    amber: 'bg-amber-500/10 text-amber-400 border-amber-500/25',
-    rose: 'bg-rose-500/10 text-rose-400 border-rose-500/25',
-    sky: 'bg-sky-500/10 text-sky-400 border-sky-500/25',
-    purple: 'bg-purple-500/10 text-purple-400 border-purple-500/25',
-    slate: 'bg-slate-800/80 text-slate-300 border-slate-700/60',
+    emerald: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+    amber: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+    rose: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+    sky: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
+    purple: 'bg-purple-500/10 text-purple-300 border-purple-500/20',
+    slate: 'bg-white/[0.04] text-slate-300 border-white/[0.08]',
   }[variant];
 
   const dotColors = {
@@ -35,7 +35,7 @@ export const Badge: React.FC<BadgeProps> = ({
   }[variant];
 
   const sizeStyles = {
-    sm: 'text-[11px] px-2 py-0.5 gap-1.5',
+    sm: 'text-[11px] px-2.5 py-0.5 gap-1.5',
     md: 'text-xs px-2.5 py-1 gap-2',
     lg: 'text-sm px-3.5 py-1.5 gap-2.5 font-semibold',
   }[size];

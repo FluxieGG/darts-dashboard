@@ -21,7 +21,7 @@ function getMissingComboPiece(combo: ShanghaiVisitCombo, target: number): string
   return `T${target}`;
 }
 
-function resolvePointsWinner(players: ShanghaiPlayerState[]): ShanghaiPlayerState {
+function resolvePointsWinner(players: ShanghaiPlayerState[]): ShanghaiPlayerState | undefined {
   const sorted = sortPlayersForStandings(players, null);
   return sorted[0];
 }
@@ -89,7 +89,13 @@ export function applyDartToState(
   state: ShanghaiState,
   dart: DartThrow
 ): { nextState: ShanghaiState; feedback: ShanghaiFeedback } {
-  if (state.isFinished || state.turnComplete || state.visitDarts.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.visitDarts.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', callout: null } };
   }
 
@@ -171,7 +177,7 @@ export function applyDartToState(
   } else if (isThirdDart && isLastPlayerOfFinalRound) {
     const topPlayer = resolvePointsWinner(nextPlayers);
     isFinished = true;
-    winnerId = topPlayer.id;
+    winnerId = topPlayer?.id ?? null;
     winReason = 'points';
     turnComplete = true;
   }
@@ -269,7 +275,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: ShanghaiState): ShanghaiState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   const isLastPlayer = state.activePlayerIndex === state.players.length - 1;
   if (isLastPlayer && state.currentRound >= state.totalRounds) {
@@ -277,7 +285,7 @@ export function advanceTurn(state: ShanghaiState): ShanghaiState {
     return {
       ...state,
       isFinished: true,
-      winnerId: topPlayer.id,
+      winnerId: topPlayer?.id ?? null,
       winReason: 'points',
       turnComplete: true,
     };
@@ -336,10 +344,12 @@ export function buildGameResult(state: ShanghaiState, startedAt: number): GameRe
     highlights.push(`Sharpshooter: ${mostAccurate.name} (${mostAccurate.targetHits} hits)`);
   }
 
-  let headline = `${winner.name} wins Shanghai with ${winner.score} pts!`;
-  if (state.winReason === 'shanghai') {
+  let headline = winner
+    ? `${winner.name} wins Shanghai with ${winner.score} pts!`
+    : 'Shanghai match complete!';
+  if (winner && state.winReason === 'shanghai') {
     headline = `👑 ${winner.name} hits SHANGHAI on ${state.currentRound}s!`;
-  } else if (sorted.length >= 2 && sorted[0].score === sorted[1].score) {
+  } else if (winner && sorted.length >= 2 && sorted[0].score === sorted[1].score) {
     headline = `🏆 ${winner.name} edges a thriller at ${winner.score} pts!`;
   }
 

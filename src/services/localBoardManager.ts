@@ -41,36 +41,94 @@ function normalizeBed(rawBed?: string, multiplier?: number, segName?: string): D
   return 'Single';
 }
 
+function isValidDartNumber(n: number): boolean {
+  return Number.isFinite(n) && Number.isInteger(n) && ((n >= 0 && n <= 20) || n === 25 || n === 50);
+}
+
+function isValidDartMultiplier(m: number): boolean {
+  return Number.isFinite(m) && Number.isInteger(m) && m >= 0 && m <= 3;
+}
+
+function createMissThrow(idx: number, bouncer = false, failed = false, method?: string): DartThrow {
+  const segName = bouncer ? 'Bouncer' : 'Miss';
+  return {
+    id: `ad-dart-${idx}-${segName}-nc`,
+    visitDartIndex: idx,
+    segment: {
+      name: segName,
+      number: 0,
+      bed: 'Outside',
+      multiplier: 0,
+    },
+    score: 0,
+    coords: undefined,
+    bouncer,
+    failed,
+    method,
+    timestamp: Date.now(),
+  };
+}
+
 /**
  * Parse a single throw object directly from Autodarts Desktop's authoritative output.
  * Handles both modern flat payloads (`segmentName`, `segmentNumber`, `multiplier`, `coordsX`, `coordsY`)
  * and legacy nested payloads (`segment: { ... }`, `coords: { x, y }`).
  */
 export function parseAutodartsThrow(raw: BoardManagerRawThrow, idx: number): DartThrow {
+  if (!raw || typeof raw !== 'object') {
+    return createMissThrow(idx);
+  }
+
   const isBouncer = Boolean(raw.bouncer);
   const isFailed = Boolean(raw.failed);
+  const seg = raw.segment && typeof raw.segment === 'object' ? raw.segment : undefined;
 
-  const rawName = raw.segmentName ?? raw.segment?.name;
-  const rawNumber = raw.segmentNumber ?? raw.segment?.number;
-  const rawMultiplier = raw.multiplier ?? raw.segment?.multiplier;
-  const rawBed = raw.bed ?? raw.segment?.bed;
+  const rawNameCandidate = raw.segmentName ?? seg?.name;
+  const rawName =
+    typeof rawNameCandidate === 'string' && rawNameCandidate.trim().length > 0
+      ? rawNameCandidate.trim()
+      : undefined;
+  const rawNumber = raw.segmentNumber ?? seg?.number;
+  const rawMultiplier = raw.multiplier ?? seg?.multiplier;
+  const rawBedCandidate = raw.bed ?? seg?.bed;
+  const rawBed =
+    typeof rawBedCandidate === 'string' && rawBedCandidate.trim().length > 0
+      ? rawBedCandidate.trim()
+      : undefined;
 
-  const isOutside =
+  const allSegmentFieldsMissing =
+    rawName === undefined &&
+    rawNumber === undefined &&
+    rawMultiplier === undefined &&
+    rawBed === undefined;
+
+  const hasFiniteNumber = typeof rawNumber === 'number' && Number.isFinite(rawNumber);
+  const hasFiniteMultiplier = typeof rawMultiplier === 'number' && Number.isFinite(rawMultiplier);
+
+  let isOutside =
     isBouncer ||
+    allSegmentFieldsMissing ||
     rawBed?.toLowerCase() === 'outside' ||
+    rawBed?.toLowerCase() === 'miss' ||
     rawName?.toUpperCase() === 'MISS' ||
     rawName?.toUpperCase() === 'M0' ||
-    rawName?.toUpperCase().startsWith('M') ||
-    rawNumber === 0 ||
-    rawMultiplier === 0;
+    Boolean(rawName && rawName.toUpperCase().startsWith('M')) ||
+    (hasFiniteNumber && rawNumber === 0) ||
+    (hasFiniteMultiplier && rawMultiplier === 0);
 
-  let number = typeof rawNumber === 'number' ? rawNumber : 0;
-  let multiplier = typeof rawMultiplier === 'number' ? rawMultiplier : isOutside ? 0 : 1;
+  let number = hasFiniteNumber ? rawNumber : 0;
+  let multiplier = hasFiniteMultiplier
+    ? rawMultiplier
+    : rawMultiplier !== undefined
+    ? 0
+    : isOutside
+    ? 0
+    : 1;
   let segName = rawName || (isBouncer ? 'Bouncer' : 'Miss');
 
-  // Fallback parsing from segmentName if numeric fields were omitted
-  if (rawName && (rawNumber === undefined || rawMultiplier === undefined)) {
-    const upper = rawName.toUpperCase().trim();
+  // Fallback parsing from segmentName if numeric fields were omitted or non-finite
+  if (rawName && (!hasFiniteNumber || !hasFiniteMultiplier)) {
+    const upper = rawName.toUpperCase();
     if (upper === 'BULL' || upper === 'DBULL' || upper === 'D25' || upper === '50') {
       number = 25;
       multiplier = 2;
@@ -89,13 +147,27 @@ export function parseAutodartsThrow(raw: BoardManagerRawThrow, idx: number): Dar
     } else if (/^M\d*$/.test(upper) || upper === 'MISS') {
       number = 0;
       multiplier = 0;
+      isOutside = true;
     } else if (/^\d+$/.test(upper)) {
       number = parseInt(upper, 10);
       multiplier = 1;
     }
   }
 
-  // Compute exact score directly from Autodarts segment number & multiplier
+  // Strictly validate dart number (0..20, 25, or 50) and multiplier (0..3)
+  if (!isValidDartNumber(number) || !isValidDartMultiplier(multiplier)) {
+    number = 0;
+    multiplier = 0;
+    isOutside = true;
+  }
+
+  if (number === 0 || multiplier === 0) {
+    number = 0;
+    multiplier = 0;
+    isOutside = true;
+  }
+
+  // Compute exact score directly from validated segment number & multiplier
   // Guard against double-multiplying if an API sends number=50 & multiplier=2 for Bullseye
   let score = 0;
   if (!isBouncer && !isOutside) {
@@ -115,30 +187,39 @@ export function parseAutodartsThrow(raw: BoardManagerRawThrow, idx: number): Dar
     segName = 'Bull';
   } else if (score === 25 && number === 25) {
     segName = '25';
+  } else if (!rawName && number > 0) {
+    segName = multiplier === 3 ? `T${number}` : multiplier === 2 ? `D${number}` : `S${number}`;
   }
 
-  const bed = normalizeBed(rawBed, multiplier, segName);
+  const finalMultiplier = isOutside || isBouncer ? 0 : multiplier;
+  const bed: DartBedType =
+    isOutside || isBouncer ? 'Outside' : normalizeBed(rawBed, finalMultiplier, segName);
 
   // Extract coordinates from either flat (`coordsX`, `coordsY`) or nested (`coords.x`, `coords.y`)
-  const cx = typeof raw.coordsX === 'number' ? raw.coordsX : raw.coords?.x;
-  const cy = typeof raw.coordsY === 'number' ? raw.coordsY : raw.coords?.y;
+  const nestedCoords = raw.coords && typeof raw.coords === 'object' ? raw.coords : undefined;
+  const cx = raw.coordsX !== undefined ? raw.coordsX : nestedCoords?.x;
+  const cy = raw.coordsY !== undefined ? raw.coordsY : nestedCoords?.y;
   const hasCoords =
-    !isBouncer && typeof cx === 'number' && typeof cy === 'number' && !isNaN(cx) && !isNaN(cy);
+    !isBouncer &&
+    typeof cx === 'number' &&
+    typeof cy === 'number' &&
+    Number.isFinite(cx) &&
+    Number.isFinite(cy);
 
   return {
     id: `ad-dart-${idx}-${segName}-${hasCoords ? `${cx.toFixed(4)}_${cy.toFixed(4)}` : 'nc'}`,
     visitDartIndex: idx,
     segment: {
       name: segName,
-      number,
+      number: isOutside || isBouncer ? 0 : number,
       bed,
-      multiplier: isOutside || isBouncer ? 0 : multiplier,
+      multiplier: finalMultiplier,
     },
     score,
     coords: hasCoords ? { x: cx, y: cy } : undefined,
     bouncer: isBouncer,
     failed: isFailed,
-    method: raw.method,
+    method: typeof raw.method === 'string' ? raw.method : undefined,
     timestamp: Date.now(),
   };
 }
@@ -204,7 +285,12 @@ export class LocalBoardManagerService {
   private httpUrl: string;
   private pollIntervalMs: number;
   private reconnectTimeout: number | null = null;
-  private pollInterval: number | null = null;
+  private pollTimeout: number | null = null;
+  private pollInFlight = false;
+  private pollAbortController: AbortController | null = null;
+  private consecutivePollFailures = 0;
+  private readonly maxPollBackoffMs = 5000;
+  private readonly pollRequestTimeoutMs = 1500;
   private retryDelayMs = 1500;
   private maxRetryDelayMs = 10000;
   private isIntentionalClose = false;
@@ -234,18 +320,14 @@ export class LocalBoardManagerService {
 
   public connect(): void {
     this.isIntentionalClose = false;
+    this.consecutivePollFailures = 0;
     this.cleanupSocket();
     this.stopPolling();
 
-    // 1. Immediately hydrate from /api/state so darts already in the board show up right away
-    this.pollStateOnce();
+    // 1. Immediately hydrate & kick off non-overlapping self-scheduling HTTP sync loop
+    void this.pollStateOnce();
 
-    // 2. Start reliable HTTP sync polling alongside WebSocket
-    this.pollInterval = window.setInterval(() => {
-      this.pollStateOnce();
-    }, this.pollIntervalMs);
-
-    // 3. Connect to WebSocket for sub-50ms push updates
+    // 2. Connect to WebSocket for sub-50ms push updates
     this.connectWebSocket();
   }
 
@@ -257,21 +339,29 @@ export class LocalBoardManagerService {
       this.ws = new WebSocket(this.wsUrl);
 
       this.ws.onopen = () => {
+        if (this.isIntentionalClose) return;
         this.wsConnected = true;
         this.retryDelayMs = 1500;
+        this.consecutivePollFailures = 0;
         this.emitConnectionState();
+        // Immediately resume fast polling interval & sync state upon WS reconnect
+        if (!this.pollInFlight) {
+          void this.pollStateOnce();
+        }
       };
 
       this.ws.onmessage = (event) => {
+        if (this.isIntentionalClose) return;
         try {
           const payload = JSON.parse(event.data);
           const candidate = payload?.data ? payload.data : payload;
+          this.consecutivePollFailures = 0;
           // If the WS payload contains a throws array, apply it directly;
           // otherwise trigger an immediate HTTP /api/state read for the full state
           if (candidate && Array.isArray(candidate.throws)) {
             this.handleStateSnapshot(candidate as BoardManagerStatePayload);
           } else {
-            this.pollStateOnce();
+            void this.pollStateOnce();
           }
         } catch {
           // Ignore non-JSON frames
@@ -279,11 +369,10 @@ export class LocalBoardManagerService {
       };
 
       this.ws.onclose = () => {
+        if (this.isIntentionalClose) return;
         this.wsConnected = false;
         this.emitConnectionState();
-        if (!this.isIntentionalClose) {
-          this.scheduleReconnect();
-        }
+        this.scheduleReconnect();
       };
 
       this.ws.onerror = () => {
@@ -302,10 +391,11 @@ export class LocalBoardManagerService {
     this.isIntentionalClose = true;
     this.cleanupSocket();
     this.stopPolling();
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
+    if (this.reconnectTimeout !== null) {
+      window.clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+    this.consecutivePollFailures = 0;
     this.wsConnected = false;
     this.httpConnected = false;
     this.emitConnectionState();
@@ -327,10 +417,39 @@ export class LocalBoardManagerService {
   }
 
   private stopPolling(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
+    if (this.pollTimeout !== null) {
+      window.clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
     }
+    if (this.pollAbortController) {
+      try {
+        this.pollAbortController.abort();
+      } catch {
+        // ignore
+      }
+      this.pollAbortController = null;
+    }
+  }
+
+  private getNextPollDelayMs(): number {
+    if (this.consecutivePollFailures <= 0) {
+      return this.pollIntervalMs;
+    }
+    // Exponential offline backoff: 1000ms -> 2000ms -> 4000ms -> 5000ms (capped at 5s)
+    return Math.min(1000 * Math.pow(2, this.consecutivePollFailures - 1), this.maxPollBackoffMs);
+  }
+
+  private scheduleNextPoll(delayMs?: number): void {
+    if (this.isIntentionalClose) return;
+    if (this.pollTimeout !== null) {
+      window.clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
+    }
+    const waitMs = delayMs ?? this.getNextPollDelayMs();
+    this.pollTimeout = window.setTimeout(() => {
+      this.pollTimeout = null;
+      void this.pollStateOnce();
+    }, waitMs);
   }
 
   private emitConnectionState(): void {
@@ -342,23 +461,42 @@ export class LocalBoardManagerService {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimeout) return;
+    if (this.isIntentionalClose || this.reconnectTimeout !== null) return;
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null;
+      if (this.isIntentionalClose) return;
       this.retryDelayMs = Math.min(this.retryDelayMs * 1.5, this.maxRetryDelayMs);
       this.connectWebSocket();
     }, this.retryDelayMs);
   }
 
   private async pollStateOnce(): Promise<void> {
-    const snapshot = await this.fetchStatePoll();
-    if (snapshot) {
-      this.httpConnected = true;
-      this.emitConnectionState();
-      this.handleStateSnapshot(snapshot);
-    } else {
-      this.httpConnected = false;
-      this.emitConnectionState();
+    if (this.isIntentionalClose || this.pollInFlight) return;
+    if (this.pollTimeout !== null) {
+      window.clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
+    }
+
+    this.pollInFlight = true;
+    try {
+      const snapshot = await this.fetchStatePoll();
+      if (this.isIntentionalClose) return;
+
+      if (snapshot) {
+        this.consecutivePollFailures = 0;
+        this.httpConnected = true;
+        this.emitConnectionState();
+        this.handleStateSnapshot(snapshot);
+      } else {
+        this.consecutivePollFailures += 1;
+        this.httpConnected = false;
+        this.emitConnectionState();
+      }
+    } finally {
+      this.pollInFlight = false;
+      if (!this.isIntentionalClose) {
+        this.scheduleNextPoll();
+      }
     }
   }
 
@@ -370,7 +508,11 @@ export class LocalBoardManagerService {
    * - Commits the completed visit ONCE when darts are pulled (throws returns to [])
    */
   public handleStateSnapshot(snapshot: BoardManagerStatePayload): void {
-    const rawThrows = Array.isArray(snapshot.throws) ? snapshot.throws : [];
+    if (this.isIntentionalClose) return;
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const rawThrows = Array.isArray(snapshot.throws)
+      ? snapshot.throws.filter((t): t is BoardManagerRawThrow => Boolean(t && typeof t === 'object'))
+      : [];
 
     // Deduplicate identical snapshots
     const fingerprint = JSON.stringify({
@@ -419,16 +561,33 @@ export class LocalBoardManagerService {
   }
 
   /**
-   * Fetch current board state from local Autodarts HTTP API
+   * Fetch current board state from local Autodarts HTTP API with a 1500ms timeout
    */
   public async fetchStatePoll(): Promise<BoardManagerStatePayload | null> {
+    if (this.isIntentionalClose) return null;
+
+    const controller = new AbortController();
+    this.pollAbortController = controller;
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, this.pollRequestTimeoutMs);
+
     try {
-      const res = await fetch(this.httpUrl, { cache: 'no-store' });
-      if (!res.ok) return null;
+      const res = await fetch(this.httpUrl, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (this.isIntentionalClose || !res.ok) return null;
       const data = await res.json();
+      if (this.isIntentionalClose) return null;
       return (data.data ? data.data : data) as BoardManagerStatePayload;
     } catch {
       return null;
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (this.pollAbortController === controller) {
+        this.pollAbortController = null;
+      }
     }
   }
 

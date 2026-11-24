@@ -122,6 +122,7 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
   const [legsToWin, setLegsToWin] = useState<number>(3);
   const [botLevel, setBotLevel] = useState<number>(4);
   const [showQuickPad, setShowQuickPad] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const om = state?.onlineMatch;
   const dcConnected = Boolean(om?.dcConnected);
@@ -131,7 +132,7 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
   const onlineFriends = [...(om?.dcOnlineFriends || [])].sort(
     (a, b) =>
       getFriendStatusMeta(a.status).sortOrder - getFriendStatusMeta(b.status).sortOrder ||
-      a.name.localeCompare(b.name)
+      (a.name || '').localeCompare(b.name || '')
   );
   const activeFriendsCount = onlineFriends.filter(
     (f) => getFriendStatusMeta(f.status).sortOrder < 3
@@ -166,16 +167,34 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
     setEditedPendingScore(Math.max(0, Math.min(180, effectivePendingScore + delta)));
   };
 
-  const handleConfirmPending = () => {
-    if (!pendingVisit || effectivePendingScore === null) return;
-    const isModified = effectivePendingScore !== pendingVisit.score;
-    void dispatch(
-      {
-        type: 'dc_confirm_visit',
-        overrideScore: isModified ? effectivePendingScore : undefined,
-      },
-      `Sent ${effectivePendingScore} to DartCounter!`
-    );
+  const handleConfirmPending = async () => {
+    if (isSubmitting || !pendingVisit || effectivePendingScore === null) return;
+    setIsSubmitting(true);
+    try {
+      const isModified = effectivePendingScore !== pendingVisit.score;
+      await dispatch(
+        {
+          type: 'dc_confirm_visit',
+          overrideScore: isModified ? effectivePendingScore : undefined,
+        },
+        `Sent ${effectivePendingScore} to DartCounter!`
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleForceSend = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await dispatch(
+        { type: 'dc_force_send_visit' },
+        `Sending ${liveVisitTotal} to DartCounter...`
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const liveBoardThrows = state?.currentVisitThrows || [];
@@ -358,7 +377,7 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
                   Online Match Started • Use app.dartcounter.net/match
                 </div>
                 <div className="text-sm sm:text-base font-black text-slate-900 mt-0.5 truncate">
-                  {state?.activePlayer.name || 'You'} ({om.remaining}) vs {om.opponentName} (
+                  {state?.activePlayer?.name || 'You'} ({om.remaining}) vs {om.opponentName} (
                   {om.opponentRemaining ?? '—'}) • Legs {om.playerLegs}–{om.opponentLegs}
                 </div>
               </div>
@@ -455,7 +474,7 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
                       Confirm Score for DartCounter
                     </div>
                     <div className="text-xs sm:text-sm font-mono font-bold text-slate-600 mt-1">
-                      Darts: {pendingVisit.throws.join(' • ')}
+                      Darts: {(pendingVisit.throws || []).join(' • ')}
                       {pendingVisit.isCheckout && (
                         <span className="ml-2 px-2 py-0.5 rounded-md bg-[#107C41] text-white text-[10px] font-black uppercase">
                           Checkout
@@ -547,26 +566,29 @@ export const DartCounterRemoteScreen: React.FC<DartCounterRemoteScreenProps> = (
                 {/* GIANT 1-TAP CONFIRM & SEND BUTTON */}
                 <button
                   type="button"
-                  onClick={handleConfirmPending}
-                  className="w-full py-4 px-5 rounded-2xl bg-[#107C41] hover:bg-emerald-700 text-white font-black text-base sm:text-lg uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-[0_10px_24px_-4px_rgba(16,124,65,0.5)] active:scale-[0.98] cursor-pointer"
+                  disabled={isSubmitting}
+                  onClick={() => void handleConfirmPending()}
+                  className="w-full py-4 px-5 rounded-2xl bg-[#107C41] hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-black text-base sm:text-lg uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-[0_10px_24px_-4px_rgba(16,124,65,0.5)] active:scale-[0.98] cursor-pointer"
                 >
                   <Send className="w-5 h-5" />
-                  <span>Confirm &amp; Send {effectivePendingScore} to DartCounter</span>
+                  <span>
+                    {isSubmitting
+                      ? 'Sending...'
+                      : `Confirm & Send ${effectivePendingScore} to DartCounter`}
+                  </span>
                 </button>
               </div>
             ) : liveBoardThrows.length > 0 ? (
               <button
                 type="button"
-                onClick={() =>
-                  void dispatch(
-                    { type: 'dc_force_send_visit' },
-                    `Sending ${liveVisitTotal} to DartCounter...`
-                  )
-                }
-                className="w-full py-3.5 px-4 rounded-2xl bg-[#107C41] hover:bg-emerald-700 text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-md"
+                disabled={isSubmitting}
+                onClick={() => void handleForceSend()}
+                className="w-full py-3.5 px-4 rounded-2xl bg-[#107C41] hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] cursor-pointer shadow-md"
               >
                 <Send className="w-4 h-4" />
-                Confirm &amp; Send {liveVisitTotal} to DartCounter Now
+                {isSubmitting
+                  ? 'Sending...'
+                  : `Confirm & Send ${liveVisitTotal} to DartCounter Now`}
               </button>
             ) : (
               <div className="p-4 rounded-2xl bg-[#F4F5F7] border border-dashed border-slate-300 text-center space-y-1">

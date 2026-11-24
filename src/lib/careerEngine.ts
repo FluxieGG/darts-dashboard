@@ -8,24 +8,55 @@ import {
 } from '../types/career';
 import { isDouble, isInnerBull, isMiss, isOuterBull, isTreble } from '../games/utils/dartHelpers';
 
+const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_STREAK_STEPS = 4000;
+
+/**
+ * Strictly validates a YYYY-MM-DD local date key against real calendar components.
+ */
+export function isValidDateKey(key: unknown): key is string {
+  if (typeof key !== 'string' || !DATE_KEY_REGEX.test(key)) return false;
+  const [y, m, d] = key.split('-').map((n) => parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(y, m - 1, d);
+  return (
+    !Number.isNaN(dt.getTime()) &&
+    dt.getFullYear() === y &&
+    dt.getMonth() === m - 1 &&
+    dt.getDate() === d
+  );
+}
+
 /**
  * Local timezone YYYY-MM-DD key
  */
 export function getLocalDateKey(date: Date = new Date()): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
+  const safeDate = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+  const y = safeDate.getFullYear();
+  const m = String(safeDate.getMonth() + 1).padStart(2, '0');
+  const d = String(safeDate.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
 export function parseDateKey(dateKey: string): Date {
+  if (!isValidDateKey(dateKey)) {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
   const [y, m, d] = dateKey.split('-').map((n) => parseInt(n, 10));
-  return new Date(y, (m || 1) - 1, d || 1);
+  return new Date(y, m - 1, d);
 }
 
 export function addDaysToDateKey(dateKey: string, deltaDays: number): string {
+  if (!isValidDateKey(dateKey) || !Number.isFinite(deltaDays)) {
+    return '';
+  }
   const dt = parseDateKey(dateKey);
-  dt.setDate(dt.getDate() + deltaDays);
+  dt.setDate(dt.getDate() + Math.trunc(deltaDays));
+  if (Number.isNaN(dt.getTime())) {
+    return '';
+  }
   return getLocalDateKey(dt);
 }
 
@@ -125,10 +156,21 @@ export function computeStreaks(
   dailyLogs: Record<string, DailyCareerLog>,
   today: Date = new Date()
 ): StreakSummary {
-  const activeDates = Object.values(dailyLogs)
-    .filter((log) => log.totalDarts > 0 || log.gamesPlayed > 0)
-    .map((log) => log.date)
-    .sort();
+  const safeLogs = dailyLogs && typeof dailyLogs === 'object' ? dailyLogs : {};
+  const activeDates = Array.from(
+    new Set(
+      Object.keys(safeLogs).filter((key) => {
+        if (!isValidDateKey(key)) return false;
+        const log = safeLogs[key];
+        return Boolean(
+          log &&
+            typeof log === 'object' &&
+            ((Number.isFinite(log.totalDarts) && log.totalDarts > 0) ||
+              (Number.isFinite(log.gamesPlayed) && log.gamesPlayed > 0))
+        );
+      })
+    )
+  ).sort();
 
   const activeSet = new Set(activeDates);
   const todayKey = getLocalDateKey(today);
@@ -137,10 +179,18 @@ export function computeStreaks(
 
   // Current streak: counts back from today (or yesterday if haven't thrown yet today)
   let currentStreak = 0;
-  let cursor = playedToday ? todayKey : activeSet.has(yesterdayKey) ? yesterdayKey : null;
-  while (cursor && activeSet.has(cursor)) {
+  let steps = 0;
+  let cursor: string | null = playedToday
+    ? todayKey
+    : yesterdayKey && activeSet.has(yesterdayKey)
+    ? yesterdayKey
+    : null;
+  while (cursor && activeSet.has(cursor) && steps < MAX_STREAK_STEPS) {
     currentStreak++;
-    cursor = addDaysToDateKey(cursor, -1);
+    steps++;
+    const prev = addDaysToDateKey(cursor, -1);
+    if (!prev || prev === cursor) break;
+    cursor = prev;
   }
 
   // Longest streak across all history
@@ -148,7 +198,8 @@ export function computeStreaks(
   let run = 0;
   let prevDate: string | null = null;
   for (const dateKey of activeDates) {
-    if (prevDate && addDaysToDateKey(prevDate, 1) === dateKey) {
+    const expectedNext: string = prevDate ? addDaysToDateKey(prevDate, 1) : '';
+    if (prevDate && expectedNext && expectedNext === dateKey) {
       run++;
     } else {
       run = 1;
@@ -158,7 +209,7 @@ export function computeStreaks(
   }
 
   const weekKeys = getCurrentWeekDateKeys(today);
-  const daysPlayedThisWeek = weekKeys.filter((k) => activeSet.has(k)).length;
+  const daysPlayedThisWeek = weekKeys.filter((k) => k && activeSet.has(k)).length;
 
   return {
     currentStreak,
@@ -174,58 +225,81 @@ export function computeStreaks(
  */
 export function recomputeRecords(dailyLogs: Record<string, DailyCareerLog>): PersonalRecords {
   const rec = createEmptyRecords();
-  const logs = Object.values(dailyLogs);
+  const safeLogs = dailyLogs && typeof dailyLogs === 'object' ? dailyLogs : {};
+  const validKeys = Object.keys(safeLogs).filter((key) => isValidDateKey(key));
 
-  for (const log of logs) {
-    rec.totalCareerDarts += log.totalDarts;
-    rec.totalCareerVisits += log.visitsCount;
-    rec.total180s += log.ton180;
-    rec.total140Plus += log.ton140Plus;
-    rec.total100Plus += log.ton100Plus + log.ton140Plus + log.ton180;
-    rec.totalBulls += log.bullsHit;
-    rec.totalTrebles += log.treblesHit;
-    rec.totalDoubles += log.doublesHit;
-    rec.totalGamesWon += log.gamesWon;
+  for (const key of validKeys) {
+    const log = safeLogs[key];
+    if (!log || typeof log !== 'object') continue;
+    const totalDarts = Number.isFinite(log.totalDarts) && log.totalDarts > 0 ? log.totalDarts : 0;
+    const visitsCount = Number.isFinite(log.visitsCount) && log.visitsCount > 0 ? log.visitsCount : 0;
+    const ton180 = Number.isFinite(log.ton180) && log.ton180 > 0 ? log.ton180 : 0;
+    const ton140Plus = Number.isFinite(log.ton140Plus) && log.ton140Plus > 0 ? log.ton140Plus : 0;
+    const ton100Plus = Number.isFinite(log.ton100Plus) && log.ton100Plus > 0 ? log.ton100Plus : 0;
+    const bullsHit = Number.isFinite(log.bullsHit) && log.bullsHit > 0 ? log.bullsHit : 0;
+    const treblesHit = Number.isFinite(log.treblesHit) && log.treblesHit > 0 ? log.treblesHit : 0;
+    const doublesHit = Number.isFinite(log.doublesHit) && log.doublesHit > 0 ? log.doublesHit : 0;
+    const gamesWon = Number.isFinite(log.gamesWon) && log.gamesWon > 0 ? log.gamesWon : 0;
+    const threeDartAvg = Number.isFinite(log.threeDartAvg) && log.threeDartAvg >= 0 ? log.threeDartAvg : 0;
+    const highestVisit = Number.isFinite(log.highestVisit) && log.highestVisit > 0 ? log.highestVisit : 0;
+    const logDate = isValidDateKey(log.date) ? log.date : key;
+
+    rec.totalCareerDarts += totalDarts;
+    rec.totalCareerVisits += visitsCount;
+    rec.total180s += ton180;
+    rec.total140Plus += ton140Plus;
+    rec.total100Plus += ton100Plus + ton140Plus + ton180;
+    rec.totalBulls += bullsHit;
+    rec.totalTrebles += treblesHit;
+    rec.totalDoubles += doublesHit;
+    rec.totalGamesWon += gamesWon;
 
     // Best day 3DA (prefer days with >= 9 darts once available, else fallback to >= 3)
-    const qualifiesStrong = log.totalDarts >= 9;
-    if (log.totalDarts >= 3) {
+    const qualifiesStrong = totalDarts >= 9;
+    if (totalDarts >= 3) {
       const currentBestStrong =
         rec.bestDay3DA && rec.bestDay3DA.detail ? !rec.bestDay3DA.detail.includes('warmup') : false;
 
       if (
         !rec.bestDay3DA ||
         (qualifiesStrong && !currentBestStrong) ||
-        (qualifiesStrong === currentBestStrong && log.threeDartAvg > rec.bestDay3DA.value)
+        (qualifiesStrong === currentBestStrong && threeDartAvg > rec.bestDay3DA.value)
       ) {
         rec.bestDay3DA = {
-          value: log.threeDartAvg,
-          date: log.date,
-          detail: qualifiesStrong ? `${log.totalDarts} darts` : `${log.totalDarts} darts (warmup)`,
+          value: threeDartAvg,
+          date: logDate,
+          detail: qualifiesStrong ? `${totalDarts} darts` : `${totalDarts} darts (warmup)`,
         };
       }
     }
 
-    if (log.highestVisit > 0 && (!rec.highestVisit || log.highestVisit > rec.highestVisit.value)) {
+    if (highestVisit > 0 && (!rec.highestVisit || highestVisit > rec.highestVisit.value)) {
       rec.highestVisit = {
-        value: log.highestVisit,
-        date: log.date,
-        detail: log.highestVisitDarts.join(' • '),
+        value: highestVisit,
+        date: logDate,
+        detail: Array.isArray(log.highestVisitDarts) ? log.highestVisitDarts.join(' • ') : '',
       };
     }
 
-    if (log.totalDarts > 0 && (!rec.mostDartsInDay || log.totalDarts > rec.mostDartsInDay.value)) {
+    if (totalDarts > 0 && (!rec.mostDartsInDay || totalDarts > rec.mostDartsInDay.value)) {
       rec.mostDartsInDay = {
-        value: log.totalDarts,
-        date: log.date,
-        detail: `${log.visitsCount} visits`,
+        value: totalDarts,
+        date: logDate,
+        detail: `${visitsCount} visits`,
       };
     }
   }
 
-  const streaks = computeStreaks(dailyLogs);
+  const streaks = computeStreaks(safeLogs);
   rec.longestStreakDays = streaks.longestStreak;
   return rec;
+}
+
+function sanitizeDartScore(dart: DartThrow | null | undefined): number {
+  const score = dart?.score;
+  return typeof score === 'number' && Number.isFinite(score) && score >= 0
+    ? Math.min(60, Math.round(score))
+    : 0;
 }
 
 /**
@@ -236,11 +310,11 @@ export function applyVisitToCareerVault(
   throws: DartThrow[],
   now: Date = new Date()
 ): PlayerCareerVault {
-  if (throws.length === 0) return vault;
+  if (!Array.isArray(throws) || throws.length === 0) return vault;
 
   const dateKey = getLocalDateKey(now);
   const existing = vault.dailyLogs[dateKey] || createEmptyDailyLog(dateKey);
-  const visitScore = throws.reduce((sum, d) => sum + d.score, 0);
+  const visitScore = throws.reduce((sum, t) => sum + sanitizeDartScore(t), 0);
 
   const nextSegments = { ...existing.segmentCounts };
   let trebles = 0;
@@ -250,11 +324,11 @@ export function applyVisitToCareerVault(
   let hadMiss = false;
 
   for (const dart of throws) {
-    if (isMiss(dart)) {
+    if (!dart || !dart.segment || isMiss(dart)) {
       hadMiss = true;
       continue;
     }
-    const segName = dart.segment.name;
+    const segName = dart.segment.name || 'Miss';
     nextSegments[segName] = (nextSegments[segName] || 0) + 1;
     if (isTreble(dart)) trebles++;
     if (isDouble(dart) && !isInnerBull(dart)) doubles++;
@@ -262,8 +336,12 @@ export function applyVisitToCareerVault(
     if (isOuterBull(dart)) outerBulls++;
   }
 
-  const nextTotalDarts = existing.totalDarts + throws.length;
-  const nextTotalPoints = existing.totalPoints + visitScore;
+  const prevTotalDarts = Number.isFinite(existing.totalDarts) && existing.totalDarts >= 0 ? existing.totalDarts : 0;
+  const prevTotalPoints = Number.isFinite(existing.totalPoints) && existing.totalPoints >= 0 ? existing.totalPoints : 0;
+  const prevHighestVisit = Number.isFinite(existing.highestVisit) && existing.highestVisit >= 0 ? existing.highestVisit : 0;
+
+  const nextTotalDarts = prevTotalDarts + throws.length;
+  const nextTotalPoints = prevTotalPoints + visitScore;
   const next3DA = nextTotalDarts > 0 ? parseFloat(((nextTotalPoints / nextTotalDarts) * 3).toFixed(2)) : 0;
 
   const nextHighlights = [...existing.highlights];
@@ -278,7 +356,7 @@ export function applyVisitToCareerVault(
   else if (visitScore >= 100) pushHighlight(`Ton+ Visit (${visitScore})`);
   if (bulls > 0) pushHighlight('Inner Bullseye (50)');
 
-  const isNewHighVisit = visitScore > existing.highestVisit;
+  const isNewHighVisit = visitScore > prevHighestVisit;
 
   const updatedLog: DailyCareerLog = {
     ...existing,
@@ -286,8 +364,10 @@ export function applyVisitToCareerVault(
     totalPoints: nextTotalPoints,
     threeDartAvg: next3DA,
     visitsCount: existing.visitsCount + 1,
-    highestVisit: isNewHighVisit ? visitScore : existing.highestVisit,
-    highestVisitDarts: isNewHighVisit ? throws.map((t) => t.segment.name) : existing.highestVisitDarts,
+    highestVisit: isNewHighVisit ? visitScore : prevHighestVisit,
+    highestVisitDarts: isNewHighVisit
+      ? throws.map((t) => t?.segment?.name || 'Miss')
+      : existing.highestVisitDarts,
     ton60Plus: existing.ton60Plus + (visitScore >= 60 && visitScore < 100 ? 1 : 0),
     ton100Plus: existing.ton100Plus + (visitScore >= 100 && visitScore < 140 ? 1 : 0),
     ton140Plus: existing.ton140Plus + (visitScore >= 140 && visitScore < 180 ? 1 : 0),

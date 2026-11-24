@@ -18,8 +18,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host $lnkPath -ForegroundColor Cyan"
 echo.
 echo On your next fresh reboot, Windows will automatically:
-echo   1. Launch Autodarts Desktop (port 3180)
+echo   1. Launch Autodarts Desktop (port 3180) and wait for calibration
 echo   2. Start the Dashboard + iPad Oche Relay silently in background (port 5173)
-echo   3. Open Edge in Fullscreen Kiosk Mode and arm Side-by-Side Split-Cam
+echo   3. Ready for you to open http://localhost:5173 manually in your browser
 echo.
 pause

@@ -7,6 +7,7 @@ import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
 import { CalloutBanner, GameCallout, VisitPillsStrip } from '../components/ArcadePrimitives';
+import { gameEventBus } from '../../services/gameEventBus';
 import { cn } from '../../lib/utils';
 import { AlertTriangle, Check, Crown, Scissors, ShieldCheck, Target } from 'lucide-react';
 import {
@@ -216,6 +217,7 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
     setHistory(nextStack);
     setState(prev.state);
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.visitDarts);
   }, []);
 
   const handleRestart = useCallback(() => {
@@ -229,6 +231,7 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
     setHistory([]);
     setState(fresh);
     setCallout(null);
+    gameEventBus.resetVisitBuffer([]);
   }, [clearTimers, players, config]);
 
   useEffect(() => {
@@ -237,7 +240,7 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, history.length]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(history.length > 0);
@@ -310,7 +313,7 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
       setHistory(nextHistory);
       setState(nextState);
 
-      if (willHalveOnEarlyPull) {
+      if (willHalveOnEarlyPull && prevPlayer && prevChallenge) {
         const halvedScore = Math.floor(prevPlayer.score / 2);
         soundEngine.playHazard(soundEnabled);
         triggerCallout(
@@ -345,11 +348,10 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
   const activePlayer = state.players[state.activePlayerIndex];
   useActiveTurnTint(activePlayer?.colorHex);
   const currentChallenge = state.challenges[state.currentRoundIndex];
-  const potentialHalvedScore = Math.floor(activePlayer.score / 2);
   const dartsRemaining = Math.max(0, 3 - state.visitDarts.length);
 
   const segmentOverlays = useMemo(
-    () => buildChallengeOverlays(currentChallenge),
+    () => (currentChallenge ? buildChallengeOverlays(currentChallenge) : {}),
     [currentChallenge]
   );
 
@@ -364,6 +366,10 @@ export const HalveItGame: React.FC<GameModuleProps> = ({
     });
     return map;
   }, [state.players]);
+
+  if (!activePlayer || !currentChallenge) return null;
+
+  const potentialHalvedScore = Math.floor(activePlayer.score / 2);
 
   return (
     <div className="space-y-4 sm:space-y-5">

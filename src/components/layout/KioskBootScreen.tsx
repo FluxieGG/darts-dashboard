@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useCareerStore } from '../../store/useCareerStore';
-import { useReplayStore } from '../../store/useReplayStore';
+import { isDartCounterClippingDisabled, useReplayStore } from '../../store/useReplayStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { fetchRemoteInfo } from '../../services/remoteBridge';
 import { hydrateDashboardStateFromDisk } from '../../services/dashboardPersistence';
@@ -37,6 +37,9 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
 }) => {
   const isLocalConnectedRef = useRef(isLocalConnected);
   isLocalConnectedRef.current = isLocalConnected;
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const hasStartedRef = useRef(false);
 
   const [fadeOut, setFadeOut] = useState(false);
   const [ipadUrl, setIpadUrl] = useState<string | null>(null);
@@ -78,6 +81,8 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
   };
 
   useEffect(() => {
+    if (hasStartedRef.current) return;
+    hasStartedRef.current = true;
     let cancelled = false;
 
     const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
@@ -124,7 +129,7 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
       setStage('remote', 'running', 'Detecting LAN address for iPad Oche Deck...');
       const info = await fetchRemoteInfo();
       if (cancelled) return;
-      const bestUrl = info?.interfaces[0]?.url || info?.fallbackUrl || null;
+      const bestUrl = info?.interfaces?.[0]?.url || info?.fallbackUrl || null;
       setIpadUrl(bestUrl);
       setStage(
         'remote',
@@ -135,13 +140,20 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
 
       // STAGE 4: Side-by-Side Split-Cam Buffer (Enabled Immediately by Default)
       const replay = useReplayStore.getState();
-      if (replay.autoStartCamera) {
+      if (isDartCounterClippingDisabled()) {
+        setStage('camera', 'done', 'Paused in DartCounter mode');
+      } else if (replay.autoStartCamera) {
         setStage('camera', 'running', 'Detecting all cameras & arming Split-Cam...');
         await replay.refreshCameras();
-        await replay.startCamera();
+        if (cancelled) return;
+        if (!isDartCounterClippingDisabled()) {
+          await replay.startCamera();
+        }
         if (cancelled) return;
         const after = useReplayStore.getState();
-        if (after.status === 'buffering' || after.status === 'capturing') {
+        if (isDartCounterClippingDisabled()) {
+          setStage('camera', 'done', 'Paused in DartCounter mode');
+        } else if (after.status === 'buffering' || after.status === 'capturing') {
           const camName = after.activeCameraLabel || 'Oche Webcam';
           setStage(
             'camera',
@@ -164,7 +176,7 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
       setFadeOut(true);
       await sleep(320);
       if (!cancelled) {
-        onComplete();
+        onCompleteRef.current();
       }
     };
 
@@ -172,8 +184,9 @@ export const KioskBootScreen: React.FC<KioskBootScreenProps> = ({
 
     return () => {
       cancelled = true;
+      hasStartedRef.current = false;
     };
-  }, [onComplete]);
+  }, []);
 
   return (
     <div

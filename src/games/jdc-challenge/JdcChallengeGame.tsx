@@ -7,6 +7,7 @@ import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
 import { CalloutBanner, GameCallout, VisitPillsStrip } from '../components/ArcadePrimitives';
+import { gameEventBus } from '../../services/gameEventBus';
 import {
   advanceJdcRound,
   applyDartToJdc,
@@ -51,7 +52,7 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
 
   const stateRef = useRef(state);
   const turnStartRef = useRef(state);
-  const historyRef = useRef<JdcState[]>([]);
+  const historyRef = useRef<Array<{ state: JdcState; turnStartState: JdcState }>>([]);
   const startedAtRef = useRef(Date.now());
   const completedRef = useRef(false);
   const calloutTimerRef = useRef<number | null>(null);
@@ -60,8 +61,14 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
   useActiveTurnTint(state.player.colorHex);
 
   const clearTimers = useCallback(() => {
-    if (calloutTimerRef.current !== null) window.clearTimeout(calloutTimerRef.current);
-    if (completeTimerRef.current !== null) window.clearTimeout(completeTimerRef.current);
+    if (calloutTimerRef.current !== null) {
+      window.clearTimeout(calloutTimerRef.current);
+      calloutTimerRef.current = null;
+    }
+    if (completeTimerRef.current !== null) {
+      window.clearTimeout(completeTimerRef.current);
+      completeTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => clearTimers, [clearTimers]);
@@ -87,14 +94,16 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
   );
 
   const handleUndo = useCallback(() => {
-    const prev = historyRef.current.pop();
-    if (!prev) return;
+    const snap = historyRef.current.pop();
+    if (!snap) return;
     clearTimers();
     completedRef.current = false;
-    stateRef.current = prev;
-    if (prev.visitDarts.length === 0) turnStartRef.current = prev;
-    setState(prev);
+    stateRef.current = snap.state;
+    turnStartRef.current = snap.turnStartState;
+    setState(snap.state);
     setHistoryLen(historyRef.current.length);
+    setCallout(null);
+    gameEventBus.resetVisitBuffer(snap.state.visitDarts);
   }, [clearTimers]);
 
   const handleRestart = useCallback(() => {
@@ -108,6 +117,7 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
     setState(fresh);
     setHistoryLen(0);
     setCallout(null);
+    gameEventBus.resetVisitBuffer([]);
   }, [players, config, clearTimers]);
 
   useEffect(() => {
@@ -116,7 +126,7 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, historyLen]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(historyLen > 0);
@@ -127,7 +137,7 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
     onDartThrown: (dart) => {
       const current = stateRef.current;
       if (current.isFinished || current.turnComplete) return;
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartRef.current });
       const { nextState, feedback } = applyDartToJdc(current, dart);
       stateRef.current = nextState;
       setState(nextState);
@@ -155,7 +165,7 @@ export const JdcChallengeGame: React.FC<GameModuleProps> = ({
     onVisitCompleted: () => {
       const current = stateRef.current;
       if (current.isFinished || current.visitDarts.length === 0) return;
-      historyRef.current.push(current);
+      historyRef.current.push({ state: current, turnStartState: turnStartRef.current });
       const next = advanceJdcRound(current);
       stateRef.current = next;
       turnStartRef.current = next;

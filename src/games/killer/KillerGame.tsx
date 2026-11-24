@@ -147,6 +147,7 @@ export const KillerGame: React.FC<GameModuleProps> = ({
     const nextHistory = stack.slice(0, -1);
     commitState(prevSnapshot.state, prevSnapshot.turnStartState, nextHistory);
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prevSnapshot.state.visitEntries.map((e) => e.dart));
   }, [commitState]);
 
   const handleRestart = useCallback(() => {

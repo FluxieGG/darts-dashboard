@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useId, useMemo } from 'react';
 import {
   DARTBOARD_RADIUS,
   SEGMENT_ORDER,
@@ -46,6 +46,10 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
   onBoardClick,
   children,
 }) => {
+  const uid = useId().replace(/:/g, '');
+  const rimGradientId = `${uid}-rimGradient`;
+  const wireShadowId = `${uid}-wireShadow`;
+
   const center = 200;
   const boardScale = 145; // radius 1.0 = 145 SVG units, leaving ring for numbers up to 195
 
@@ -58,8 +62,8 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
   const rOuterDouble = DARTBOARD_RADIUS.OUTER_DOUBLE * boardScale;
   const rNumberRing = 188;
 
-  // Render all 20 segments
-  const segments = useMemo(() => {
+  // Memoize static 20-wedge arc geometry separately so overlay/highlight updates never recompute 80 trig arcs
+  const staticSegments = useMemo(() => {
     return SEGMENT_ORDER.map((num, idx) => {
       // Polar angle for segment center: 20 is at 90 deg (top)
       const centerAngle = getSegmentCenterAngle(num);
@@ -68,36 +72,12 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
 
       // In official dartboards:
       // Even index (20, 18, 13, 10, 2, 3, 7, 8, 14, 12):
-      // Single beds: Black (#171C26)
-      // Double/Treble: Red (#EF4444 or #DC2626)
+      // Single beds: Black (#121824), Double/Treble: Red (#DC2626)
       // Odd index (1, 4, 6, 15, 17, 19, 16, 11, 9, 5):
-      // Single beds: Cream / Off-white (#E2E8F0 / #CBD5E1)
-      // Double/Treble: Green (#10B981 or #059669)
+      // Single beds: Cream / Off-white (#E2E8F0), Double/Treble: Green (#10B981)
       const isEven = idx % 2 === 0;
       const singleColor = isEven ? '#121824' : '#E2E8F0';
       const ringColor = isEven ? '#DC2626' : '#10B981';
-
-      // Check for highlight & game overlays
-      const isHighT = highlightSegment === `T${num}`;
-      const isHighD = highlightSegment === `D${num}`;
-      const isHighS = highlightSegment === `S${num}`;
-
-      const wholeOverlay = segmentOverlays?.[String(num)];
-      const overlayT =
-        segmentOverlays?.[`T${num}`] ||
-        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'triple')
-          ? wholeOverlay
-          : undefined);
-      const overlayD =
-        segmentOverlays?.[`D${num}`] ||
-        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'double')
-          ? wholeOverlay
-          : undefined);
-      const overlayS =
-        segmentOverlays?.[`S${num}`] ||
-        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'single')
-          ? wholeOverlay
-          : undefined);
 
       // Numbers position on number ring
       const numAngleRad = (centerAngle * Math.PI) / 180;
@@ -122,14 +102,6 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
         pathInnerSingle: describeArcSector(center, center, rOuterBull, rInnerTreble, startAngle, endAngle),
         singleColor,
         ringColor,
-        isHighD,
-        isHighT,
-        isHighS,
-        overlayT,
-        overlayD,
-        overlayS,
-        badge: wholeOverlay?.badge || overlayS?.badge || overlayD?.badge || overlayT?.badge,
-        badgeColor: wholeOverlay?.badgeColor || '#FFFFFF',
       };
     });
   }, [
@@ -140,24 +112,63 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
     rInnerTreble,
     rOuterBull,
     rNumberRing,
-    highlightSegment,
-    segmentOverlays,
   ]);
+
+  // Attach dynamic highlight & overlay styles without recomputing arc paths
+  const segments = useMemo(() => {
+    return staticSegments.map((seg) => {
+      const { num } = seg;
+      const isHighT = highlightSegment === `T${num}`;
+      const isHighD = highlightSegment === `D${num}`;
+      const isHighS = highlightSegment === `S${num}`;
+
+      const wholeOverlay = segmentOverlays?.[String(num)];
+      const overlayT =
+        segmentOverlays?.[`T${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'triple')
+          ? wholeOverlay
+          : undefined);
+      const overlayD =
+        segmentOverlays?.[`D${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'double')
+          ? wholeOverlay
+          : undefined);
+      const overlayS =
+        segmentOverlays?.[`S${num}`] ||
+        (wholeOverlay && (!wholeOverlay.beds || wholeOverlay.beds === 'all' || wholeOverlay.beds === 'single')
+          ? wholeOverlay
+          : undefined);
+
+      return {
+        ...seg,
+        isHighD,
+        isHighT,
+        isHighS,
+        overlayT,
+        overlayD,
+        overlayS,
+        badge: wholeOverlay?.badge || overlayS?.badge || overlayD?.badge || overlayT?.badge,
+        badgeColor: wholeOverlay?.badgeColor || '#FFFFFF',
+      };
+    });
+  }, [staticSegments, highlightSegment, segmentOverlays]);
 
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!onBoardClick) return;
     const rect = e.currentTarget.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return;
+
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
     // Normalize to 400x400 coordinate space
-    const scale = 400 / rect.width;
-    const svgX = clickX * scale;
-    const svgY = clickY * scale;
+    const svgX = (clickX / rect.width) * 400;
+    const svgY = (clickY / rect.height) * 400;
 
     // Convert to bull-centered Autodarts coordinate: +x right, +y up, radius 1.0 = rOuterDouble
     const normX = (svgX - center) / rOuterDouble;
     const normY = (center - svgY) / rOuterDouble;
+    if (!Number.isFinite(normX) || !Number.isFinite(normY)) return;
 
     onBoardClick({ x: normX, y: normY });
   };
@@ -174,24 +185,24 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
       >
         <defs>
           {/* Subtle outer metallic rim gradient */}
-          <radialGradient id="rimGradient" cx="50%" cy="50%" r="50%">
+          <radialGradient id={rimGradientId} cx="50%" cy="50%" r="50%">
             <stop offset="90%" stopColor="#0F172A" />
             <stop offset="96%" stopColor="#334155" />
             <stop offset="100%" stopColor="#0B0F17" />
           </radialGradient>
 
           {/* Wire highlight filter */}
-          <filter id="wireShadow" x="-10%" y="-10%" width="120%" height="120%">
+          <filter id={wireShadowId} x="-10%" y="-10%" width="120%" height="120%">
             <feDropShadow dx="0" dy="0.5" stdDeviation="0.4" floodColor="#000" floodOpacity="0.8" />
           </filter>
         </defs>
 
         {/* Outer Catch Ring / Number Ring */}
-        <circle cx={center} cy={center} r={rNumberRing} fill="url(#rimGradient)" stroke="#1E293B" strokeWidth="2" />
+        <circle cx={center} cy={center} r={rNumberRing} fill={`url(#${rimGradientId})`} stroke="#1E293B" strokeWidth="2" />
         <circle cx={center} cy={center} r={rOuterDouble} fill="#0B0F17" stroke="#64748B" strokeWidth="1.2" />
 
         {/* Segments: Singles, Doubles, Trebles */}
-        <g id="dartboard-beds">
+        <g id={`${uid}-dartboard-beds`}>
           {segments.map((s) => {
             const hasAnyOverlay = Boolean(s.overlayS || s.overlayD || s.overlayT || s.isHighS || s.isHighD || s.isHighT);
             const inactiveOpacity = dimInactiveSegments && !hasAnyOverlay ? 0.35 : 1;
@@ -335,7 +346,7 @@ export const SvgDartboard: React.FC<SvgDartboardProps> = ({
         )}
 
         {/* Segment Number Wire Labels */}
-        <g id="number-ring" className="font-bold text-[14px] select-none pointer-events-none">
+        <g id={`${uid}-number-ring`} className="font-bold text-[14px] select-none pointer-events-none">
           {segments.map((s) => (
             <text
               key={`num-${s.num}`}

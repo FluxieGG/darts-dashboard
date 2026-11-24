@@ -10,7 +10,6 @@ import {
   ReplayTriggerSettings,
 } from '../types/replay';
 import { ocheCamService } from '../services/ocheCamService';
-import { soundEngine } from '../games/utils/soundEngine';
 import { useGameStore } from './useGameStore';
 import { useOnlineMatchStore } from './useOnlineMatchStore';
 
@@ -32,8 +31,43 @@ export interface SavedClipConfirmation {
 
 let savedConfirmTimer: number | null = null;
 let inFlightStartPromise: Promise<void> | null = null;
-let deviceChangeListenerAttached = false;
+let startEpoch = 0;
 let deviceChangeRetryTimer: number | null = null;
+const pendingRevokeBlobUrls = new Set<string>();
+
+function revokeBlobUrlDeferred(url: string | null | undefined, delayMs = 250): void {
+  if (!url || !url.startsWith('blob:')) return;
+  pendingRevokeBlobUrls.delete(url);
+  window.setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }, delayMs);
+}
+
+function scheduleRevokeIfUnused(url: string | null | undefined, delayMs = 250): void {
+  if (!url || !url.startsWith('blob:')) return;
+  const s = useReplayStore.getState();
+  const inUse = s.activeOverlayClip?.url === url || s.lastRecordedClip?.url === url;
+  if (inUse) {
+    pendingRevokeBlobUrls.add(url);
+  } else {
+    revokeBlobUrlDeferred(url, delayMs);
+  }
+}
+
+function flushUnusedDeferredBlobUrls(): void {
+  if (pendingRevokeBlobUrls.size === 0) return;
+  const s = useReplayStore.getState();
+  for (const url of Array.from(pendingRevokeBlobUrls)) {
+    const inUse = s.activeOverlayClip?.url === url || s.lastRecordedClip?.url === url;
+    if (!inUse) {
+      revokeBlobUrlDeferred(url);
+    }
+  }
+}
 
 interface ReplayStoreState {
   // Persisted settings
@@ -74,7 +108,7 @@ interface ReplayStoreState {
   /** True while cameras/clipping were automatically paused for Target DartCounter stability */
   pausedForDartCounter: boolean;
 
-  /* [DEV-TEST: REMOVE WHEN DONE] One-shot debug trigger to clip the very next dart */
+  /** Hidden PIN 0161 Dev Console one-shot clip trigger for the very next dart */
   devCaptureNextDartArmed: boolean;
   lastCaptureBanner: string | null;
 
@@ -115,7 +149,7 @@ interface ReplayStoreState {
   closeGallery: () => void;
   deleteClip: (filename: string) => Promise<void>;
 
-  /* [DEV-TEST: REMOVE WHEN DONE] Arm/disarm one-shot next-dart capture */
+  /** Arm/disarm the PIN 0161 Dev Console one-shot next-dart capture */
   armDevNextDartCapture: () => void;
   cancelDevNextDartCapture: () => void;
 
@@ -170,7 +204,23 @@ export const useReplayStore = create<ReplayStoreState>()(
       setConnectedRemotes: (connectedRemotes) => set({ connectedRemotes }),
 
       pauseForDartCounter: () => {
+        startEpoch += 1;
+        inFlightStartPromise = null;
+        if (savedConfirmTimer !== null) {
+          window.clearTimeout(savedConfirmTimer);
+          savedConfirmTimer = null;
+        }
+
         const s = get();
+        const prevUnsavedUrl =
+          s.lastRecordedClip && !s.lastRecordedClip.isSavedToDisk && s.lastRecordedClip.url.startsWith('blob:')
+            ? s.lastRecordedClip.url
+            : null;
+        const prevOverlayBlobUrl =
+          s.activeOverlayClip && s.activeOverlayClip.url.startsWith('blob:')
+            ? s.activeOverlayClip.url
+            : null;
+
         const wasRunning =
           s.cameraEnabled ||
           s.status === 'buffering' ||
@@ -186,10 +236,16 @@ export const useReplayStore = create<ReplayStoreState>()(
           boardFeedActive: false,
           devCaptureNextDartArmed: false,
           activeOverlayClip: null,
+          pendingSaveBundle: null,
+          savedConfirmation: null,
+          lastRecordedClip: s.lastRecordedClip?.isSavedToDisk ? s.lastRecordedClip : null,
           lastCaptureBanner: null,
           errorMessage: null,
           boardFeedError: null,
         });
+        scheduleRevokeIfUnused(prevUnsavedUrl);
+        scheduleRevokeIfUnused(prevOverlayBlobUrl);
+        flushUnusedDeferredBlobUrls();
       },
 
       resumeFromDartCounter: () => {
@@ -225,9 +281,14 @@ export const useReplayStore = create<ReplayStoreState>()(
       },
 
       loadSavedClips: async () => {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 8000);
         try {
           const dir = encodeURIComponent(get().saveDir || DEFAULT_REPLAY_SAVE_DIR);
-          const res = await fetch(`/api/replays/list?dir=${dir}`, { cache: 'no-store' });
+          const res = await fetch(`/api/replays/list?dir=${dir}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
           if (!res.ok) return;
           const data = await res.json();
           if (data?.ok && Array.isArray(data.clips)) {
@@ -235,25 +296,42 @@ export const useReplayStore = create<ReplayStoreState>()(
           }
         } catch {
           // ignore
+        } finally {
+          window.clearTimeout(timer);
         }
       },
 
       startCamera: async (override) => {
+        if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
+          ocheCamService.stop();
+          return;
+        }
+
+        const isExplicitOverride = Boolean(
+          override?.ocheDeviceId || override?.autoDetect || override?.strictSelection
+        );
+
         // Deduplicate concurrent startup calls (e.g. KioskBootScreen + App mount) unless explicit override
-        if (inFlightStartPromise && !override?.ocheDeviceId && !override?.autoDetect) {
+        if (inFlightStartPromise && !isExplicitOverride) {
           return inFlightStartPromise;
         }
 
+        const epoch = ++startEpoch;
+
         const runStart = async () => {
           const state = get();
+          if (isDartCounterClippingDisabled() || state.pausedForDartCounter) {
+            ocheCamService.stop();
+            return;
+          }
+
           const ocheDeviceId = override?.autoDetect
             ? undefined
             : override?.ocheDeviceId ?? state.selectedDeviceId;
           const strictSelection = Boolean(override?.strictSelection);
           const autoDetect = Boolean(override?.autoDetect);
-          // Board Cam is permanently locked to Autodarts Desktop's 3-camera live stream
+          // Board Cam is permanently locked to Autodarts Desktop's 3-camera live stream; kiosk has no audio
           const boardCameraMode: BoardCameraMode = 'autodarts';
-          const includeAudio = state.includeAudio;
 
           set({
             status: 'starting',
@@ -266,10 +344,29 @@ export const useReplayStore = create<ReplayStoreState>()(
               ocheDeviceId: ocheDeviceId || undefined,
               strictSelection,
               autoDetect,
-              includeAudio,
+              includeAudio: false,
               boardCameraMode,
             });
+            if (epoch !== startEpoch) {
+              return;
+            }
+            if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
+              ocheCamService.stop();
+              return;
+            }
+            if (!ocheCamService.isRunning()) {
+              return;
+            }
+
             const cams = await ocheCamService.listCameras();
+            if (epoch !== startEpoch) {
+              return;
+            }
+            if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
+              ocheCamService.stop();
+              return;
+            }
+
             const activeTrack = ocheCamService.getOcheStream()?.getVideoTracks()[0];
             const activeInfo = ocheCamService.getActiveCameraInfo();
             const resolvedId =
@@ -298,7 +395,17 @@ export const useReplayStore = create<ReplayStoreState>()(
               boardFeedError: boardStatus.error,
             });
           } catch (err) {
+            if (epoch !== startEpoch) {
+              return;
+            }
+            if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
+              ocheCamService.stop();
+              return;
+            }
             const cams = await ocheCamService.listCameras().catch(() => get().availableCameras);
+            if (epoch !== startEpoch) {
+              return;
+            }
             const message =
               (err as Error).message ||
               'Could not access Oche webcam. Check USB cable, camera permissions, or device selection.';
@@ -327,6 +434,13 @@ export const useReplayStore = create<ReplayStoreState>()(
       },
 
       stopCamera: () => {
+        startEpoch += 1;
+        inFlightStartPromise = null;
+        const s = get();
+        const prevUnsavedUrl =
+          s.lastRecordedClip && !s.lastRecordedClip.isSavedToDisk && s.lastRecordedClip.url.startsWith('blob:')
+            ? s.lastRecordedClip.url
+            : null;
         ocheCamService.stop();
         set({
           cameraEnabled: false,
@@ -334,9 +448,14 @@ export const useReplayStore = create<ReplayStoreState>()(
           activeCameraLabel: null,
           boardFeedActive: false,
           devCaptureNextDartArmed: false,
+          pendingSaveBundle: null,
+          lastRecordedClip: s.lastRecordedClip?.isSavedToDisk ? s.lastRecordedClip : null,
+          lastCaptureBanner: null,
           errorMessage: null,
           boardFeedError: null,
         });
+        scheduleRevokeIfUnused(prevUnsavedUrl);
+        flushUnusedDeferredBlobUrls();
       },
 
       setSelectedDeviceId: (selectedDeviceId) => set({ selectedDeviceId }),
@@ -351,7 +470,7 @@ export const useReplayStore = create<ReplayStoreState>()(
 
       setAutodartsCamCustomUrl: (autodartsCamCustomUrl) => set({ autodartsCamCustomUrl }),
 
-      setIncludeAudio: (includeAudio) => set({ includeAudio }),
+      setIncludeAudio: () => set({ includeAudio: false }),
 
       setSaveDir: (saveDir) => set({ saveDir }),
 
@@ -365,8 +484,14 @@ export const useReplayStore = create<ReplayStoreState>()(
 
       setPlaybackRate: (playbackRate) => set({ playbackRate }),
 
-      openOverlayClip: (activeOverlayClip) => set({ activeOverlayClip }),
-      closeOverlayClip: () => set({ activeOverlayClip: null }),
+      openOverlayClip: (activeOverlayClip) => {
+        set({ activeOverlayClip });
+        flushUnusedDeferredBlobUrls();
+      },
+      closeOverlayClip: () => {
+        set({ activeOverlayClip: null });
+        flushUnusedDeferredBlobUrls();
+      },
       openGallery: () => {
         void get().loadSavedClips();
         set({ isGalleryOpen: true });
@@ -396,6 +521,7 @@ export const useReplayStore = create<ReplayStoreState>()(
                   ? null
                   : s.activeOverlayClip,
             }));
+            flushUnusedDeferredBlobUrls();
           }
         } catch {
           // ignore
@@ -412,7 +538,7 @@ export const useReplayStore = create<ReplayStoreState>()(
 
       triggerActionReplay: async (meta) => {
         // Clipping is permanently disabled during Target DartCounter sessions for stability
-        if (isDartCounterClippingDisabled()) {
+        if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
           return null;
         }
         if (!ocheCamService.isRunning()) {
@@ -440,6 +566,13 @@ export const useReplayStore = create<ReplayStoreState>()(
 
         try {
           const bundle = await ocheCamService.recordTenSecondClip(meta);
+          if (isDartCounterClippingDisabled() || get().pausedForDartCounter) {
+            set({
+              status: 'idle',
+              lastCaptureBanner: null,
+            });
+            return null;
+          }
           if (!bundle) {
             set({
               status: ocheCamService.isRunning() ? 'buffering' : 'idle',
@@ -450,12 +583,11 @@ export const useReplayStore = create<ReplayStoreState>()(
 
           const finalMeta = bundle.meta;
           const resolvedCategory = finalMeta.isDevTest ? 'dev' : finalMeta.category || 'game';
-
-          // Revoke previous unsaved object URL if we are replacing it
           const prevClip = get().lastRecordedClip;
-          if (prevClip && !prevClip.isSavedToDisk && prevClip.url.startsWith('blob:')) {
-            URL.revokeObjectURL(prevClip.url);
-          }
+          const prevUnsavedUrl =
+            prevClip && !prevClip.isSavedToDisk && prevClip.url.startsWith('blob:')
+              ? prevClip.url
+              : null;
 
           const hasRemoteConnected = get().connectedRemotes > 0;
           // Automatic game clips & winning shots ALWAYS auto-save straight to disk;
@@ -471,6 +603,7 @@ export const useReplayStore = create<ReplayStoreState>()(
               bundle,
               get().saveDir || DEFAULT_REPLAY_SAVE_DIR
             );
+            const suppressOverlay = isDartCounterClippingDisabled() || get().pausedForDartCounter;
 
             set((s) => ({
               status: ocheCamService.isRunning() ? 'buffering' : 'idle',
@@ -479,16 +612,20 @@ export const useReplayStore = create<ReplayStoreState>()(
               lastRecordedClip: saved,
               pendingSaveBundle: null,
               activeOverlayClip:
-                s.triggers.autoShowOverlay || finalMeta.isDevTest || finalMeta.forceAutoSave
+                !suppressOverlay &&
+                (s.triggers.autoShowOverlay || finalMeta.isDevTest || finalMeta.forceAutoSave)
                   ? saved
                   : s.activeOverlayClip,
             }));
+
+            // Only revoke previous unsaved blob URL if it is no longer displayed in activeOverlayClip
+            scheduleRevokeIfUnused(prevUnsavedUrl);
+            flushUnusedDeferredBlobUrls();
 
             return saved;
           } else {
             // IPAD / OCHE REMOTE CONNECTED -> SHOW REPLAY IMMEDIATELY & LET IPAD CLICK TO SAVE
             const blobUrl = URL.createObjectURL(bundle.blob);
-            const resolvedCategory = finalMeta.isDevTest ? 'dev' : finalMeta.category || 'game';
             const resolvedSubfolder =
               resolvedCategory === 'dev'
                 ? 'Dev Tests'
@@ -526,6 +663,10 @@ export const useReplayStore = create<ReplayStoreState>()(
                 s.triggers.autoShowOverlay || finalMeta.isDevTest ? previewClip : s.activeOverlayClip,
             }));
 
+            // Only revoke previous unsaved blob URL if it is no longer displayed in activeOverlayClip
+            scheduleRevokeIfUnused(prevUnsavedUrl);
+            flushUnusedDeferredBlobUrls();
+
             return previewClip;
           }
         } catch (err) {
@@ -558,8 +699,6 @@ export const useReplayStore = create<ReplayStoreState>()(
             saveDir || DEFAULT_REPLAY_SAVE_DIR
           );
 
-          soundEngine.playBonusHit(useGameStore.getState().soundEnabled);
-
           const confirmId = Date.now();
           const confirmation: SavedClipConfirmation = {
             id: confirmId,
@@ -582,8 +721,13 @@ export const useReplayStore = create<ReplayStoreState>()(
                 : s.activeOverlayClip,
           }));
 
+          // Decouple blob URL revocation from savedConfirmTimer: register for safe revocation
+          // immediately (revokes now if overlay isn't showing it, or as soon as overlay closes/changes)
+          scheduleRevokeIfUnused(tempBlobUrl);
+
           if (savedConfirmTimer !== null) {
             window.clearTimeout(savedConfirmTimer);
+            flushUnusedDeferredBlobUrls();
           }
           savedConfirmTimer = window.setTimeout(() => {
             savedConfirmTimer = null;
@@ -595,10 +739,7 @@ export const useReplayStore = create<ReplayStoreState>()(
                   ? null
                   : s.activeOverlayClip,
             }));
-            if (tempBlobUrl) {
-              // Revoke temp blob URL safely AFTER the <video> element unmounts
-              window.setTimeout(() => URL.revokeObjectURL(tempBlobUrl), 250);
-            }
+            flushUnusedDeferredBlobUrls();
           }, 2200);
 
           return saved;
@@ -628,14 +769,26 @@ export const useReplayStore = create<ReplayStoreState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.boardCameraMode = 'autodarts';
+          state.includeAudio = false;
         }
       },
     }
   )
 );
 
+const REPLAY_STORE_CLEANUP_KEY = Symbol.for('autodarts.useReplayStore.listenerCleanup');
+type GlobalWithReplayCleanup = typeof globalThis & {
+  [REPLAY_STORE_CLEANUP_KEY]?: () => void;
+};
+
+// Tear down any previous module-level listeners before re-attaching (guards against Vite HMR duplicates)
+const prevListenerCleanup = (globalThis as GlobalWithReplayCleanup)[REPLAY_STORE_CLEANUP_KEY];
+if (prevListenerCleanup) {
+  prevListenerCleanup();
+}
+
 // Keep live Autodarts 3-cam board feed status/errors synced into the store
-ocheCamService.onBoardFeedStatusChange(({ active, error }) => {
+const unsubBoardStatus = ocheCamService.onBoardFeedStatusChange(({ active, error }) => {
   useReplayStore.setState((s) => {
     const isNewBoardError = Boolean(error) && !s.boardFeedError;
     return {
@@ -647,7 +800,7 @@ ocheCamService.onBoardFeedStatusChange(({ active, error }) => {
 });
 
 // Keep live Oche webcam disconnect/recovery events synced into the store
-ocheCamService.onOcheStatusChange(({ active, error, label }) => {
+const unsubOcheStatus = ocheCamService.onOcheStatusChange(({ active, error, label }) => {
   if (!active && error) {
     useReplayStore.setState((s) => ({
       cameraEnabled: false,
@@ -662,24 +815,57 @@ ocheCamService.onOcheStatusChange(({ active, error, label }) => {
 });
 
 // Automatically detect newly plugged-in USB cameras and recover Split-Cam if currently errored
-if (
+const handleDeviceChange = () => {
+  if (deviceChangeRetryTimer !== null) {
+    window.clearTimeout(deviceChangeRetryTimer);
+  }
+  deviceChangeRetryTimer = window.setTimeout(() => {
+    deviceChangeRetryTimer = null;
+    const state = useReplayStore.getState();
+    void state.refreshCameras();
+    if (
+      state.autoStartCamera &&
+      state.status === 'error' &&
+      !state.pausedForDartCounter &&
+      !isDartCounterClippingDisabled()
+    ) {
+      void state.startCamera({ autoDetect: true });
+    }
+  }, 1200);
+};
+
+const hasDeviceChangeSupport =
   typeof window !== 'undefined' &&
   typeof navigator !== 'undefined' &&
-  navigator.mediaDevices?.addEventListener &&
-  !deviceChangeListenerAttached
-) {
-  deviceChangeListenerAttached = true;
-  navigator.mediaDevices.addEventListener('devicechange', () => {
-    if (deviceChangeRetryTimer !== null) {
-      window.clearTimeout(deviceChangeRetryTimer);
+  Boolean(navigator.mediaDevices?.addEventListener);
+
+if (hasDeviceChangeSupport) {
+  navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+}
+
+const cleanupReplayListeners = () => {
+  unsubBoardStatus();
+  unsubOcheStatus();
+  if (hasDeviceChangeSupport) {
+    navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+  }
+  if (deviceChangeRetryTimer !== null) {
+    window.clearTimeout(deviceChangeRetryTimer);
+    deviceChangeRetryTimer = null;
+  }
+  if (savedConfirmTimer !== null) {
+    window.clearTimeout(savedConfirmTimer);
+    savedConfirmTimer = null;
+  }
+};
+
+(globalThis as GlobalWithReplayCleanup)[REPLAY_STORE_CLEANUP_KEY] = cleanupReplayListeners;
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    cleanupReplayListeners();
+    if ((globalThis as GlobalWithReplayCleanup)[REPLAY_STORE_CLEANUP_KEY] === cleanupReplayListeners) {
+      delete (globalThis as GlobalWithReplayCleanup)[REPLAY_STORE_CLEANUP_KEY];
     }
-    deviceChangeRetryTimer = window.setTimeout(() => {
-      deviceChangeRetryTimer = null;
-      const state = useReplayStore.getState();
-      void state.refreshCameras();
-      if (state.autoStartCamera && state.status === 'error') {
-        void state.startCamera({ autoDetect: true });
-      }
-    }, 1200);
   });
 }

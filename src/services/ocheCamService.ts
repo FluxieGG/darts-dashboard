@@ -165,10 +165,17 @@ function drawCornerLabel(
 }
 
 /**
- * Finds the index of a 2-byte JPEG marker (`a`, `b`) inside a Uint8Array starting at `from`.
+ * Finds the index of a 2-byte JPEG marker (`a`, `b`) inside a Uint8Array starting at `from` up to `limit`.
  */
-function findMarker(buf: Uint8Array, a: number, b: number, from = 0): number {
-  for (let i = from; i < buf.length - 1; i++) {
+function findMarker(
+  buf: Uint8Array,
+  a: number,
+  b: number,
+  from = 0,
+  limit = buf.length
+): number {
+  const end = Math.min(limit, buf.length) - 1;
+  for (let i = from; i < end; i++) {
     if (buf[i] === a && buf[i + 1] === b) return i;
   }
   return -1;
@@ -177,9 +184,9 @@ function findMarker(buf: Uint8Array, a: number, b: number, from = 0): number {
 /**
  * Flight Club-style Broadcast Compositor & Per-Camera Rolling Ring Buffers.
  *
- * Layout (1600×900 16:9 broadcast frame — 3 synchronized single-camera channels):
- *   LEFT  (700×900): Oche / Throwing Camera (USB webcam via getUserMedia)
- *   RIGHT (900×900): ONE single crisp straight-on Autodarts Board Camera
+ * Layout (1280×720 16:9 broadcast frame — 3 synchronized single-camera channels):
+ *   LEFT  (560×720): Oche / Throwing Camera (USB webcam via getUserMedia)
+ *   RIGHT (720×720): ONE single crisp straight-on Autodarts Board Camera
  *                    (Cam 0 TOP: 9..4 | Cam 1 RIGHT: 13..3 | Cam 2 LEFT: 19..14)
  *
  * Each of the 3 board cameras runs its own synchronized rolling ring buffer so that
@@ -193,15 +200,22 @@ class OcheCamService {
 
   private ocheVideoEl: HTMLVideoElement | null = null;
   private boardFrameBitmap: ImageBitmap | null = null;
-  /** Dedicated GPU WebGL Single-Camera Straight-On Board Atlas (2700×900 = 3 crisp 900×900 views, clips only!) */
+  /** Dedicated GPU WebGL Single-Camera Straight-On Board Atlas (2160×720 = 3 crisp 720×720 views, clips only!) */
   private virtualBoardCam: VirtualBoardCamera | null = null;
   private virtualBoardReady = false;
   private boardStreamAbort: AbortController | null = null;
+  private boardAttemptAbort: AbortController | null = null;
+  private boardAttemptStartedAt = 0;
   private boardReconnectTimer: number | null = null;
   private boardFrameCount = 0;
 
   private canvasEls: Array<HTMLCanvasElement | null> = [null, null, null];
-  private renderInterval: number | null = null;
+  private renderTimer: number | null = null;
+
+  private lifecycleEpoch = 0;
+  private captureEpoch = 0;
+  private capturePostRollTimer: number | null = null;
+  private cancelActiveCapture: (() => void) | null = null;
 
   private isDualMode = true;
   private boardFeedActive = false;
@@ -229,15 +243,14 @@ class OcheCamService {
   private readonly DEFAULT_PRE_TARGET_SEC = 5;
   private readonly MANUAL_PRE_TARGET_SEC = 15;
   private readonly DEFAULT_POST_TARGET_SEC = 5;
-  private readonly SLOT_SPAWN_INTERVAL_MS = 7000;
-  private readonly SLOT_MAX_AGE_MS = 16000;
+  private readonly SLOT_SPAWN_INTERVAL_MS = 10000;
+  private readonly SLOT_MAX_AGE_MS = 18000;
+  private readonly MAX_SLOTS_PER_CAM = 2;
 
   private pickSupportedMimeType(): string {
-    // Prefer VP8 first for ultra-lightweight real-time encoding across all 3 single-cam ring buffers
+    // Prefer video-only VP8 first (kiosk has no audio — avoids audio encoder overhead)
     const candidates = [
-      'video/webm;codecs=vp8,opus',
       'video/webm;codecs=vp8',
-      'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp9',
       'video/webm',
     ];
@@ -430,39 +443,61 @@ class OcheCamService {
     const abort = new AbortController();
     this.boardStreamAbort = abort;
     this.boardLastFrameAt = 0;
+    this.boardAttemptStartedAt = Date.now();
     this.virtualBoardCam = new VirtualBoardCamera(720);
     this.virtualBoardReady = false;
 
-    // Watchdog: if Autodarts 3-cam feed fails to deliver frames within 12s on boot (or stalls > 45s), surface a warning
-    // (Autodarts Desktop naturally slows MJPEG output during idle/standby, so keep stall tolerance generous.)
+    // Watchdog: if an attempt receives no frames within 15s (initial hang) or stalls > 45s mid-stream,
+    // abort the current per-attempt controller so connectLoop tears down the reader and reconnects.
     const startedAt = Date.now();
     this.boardWatchdogTimer = window.setInterval(() => {
       if (abort.signal.aborted) return;
       const now = Date.now();
-      if (this.boardLastFrameAt === 0 && now - startedAt > 12000) {
-        if (!this.boardFeedError) {
-          this.setBoardFeedStatus(
-            false,
-            'Autodarts 3-camera board stream not sending frames (check Autodarts Desktop on port 3180)'
-          );
+      const attemptStart = this.boardAttemptStartedAt || startedAt;
+      const attemptGotFrame = this.boardLastFrameAt >= attemptStart && this.boardLastFrameAt > 0;
+
+      if (!attemptGotFrame && now - attemptStart > 15000) {
+        this.setBoardFeedStatus(
+          false,
+          'Autodarts 3-camera board stream not sending frames — reconnecting...'
+        );
+        if (this.boardAttemptAbort && !this.boardAttemptAbort.signal.aborted) {
+          this.boardAttemptAbort.abort();
         }
-      } else if (this.boardLastFrameAt > 0 && now - this.boardLastFrameAt > 45000) {
+      } else if (attemptGotFrame && now - this.boardLastFrameAt > 45000) {
         this.setBoardFeedStatus(
           false,
           'Autodarts 3-camera board stream stalled — reconnecting...'
         );
+        if (this.boardAttemptAbort && !this.boardAttemptAbort.signal.aborted) {
+          this.boardAttemptAbort.abort();
+        }
+      } else if (this.boardLastFrameAt === 0 && now - startedAt > 12000 && !this.boardFeedError) {
+        this.setBoardFeedStatus(
+          false,
+          'Autodarts 3-camera board stream not sending frames (check Autodarts Desktop on port 3180)'
+        );
       }
     }, 5000);
 
+    const INITIAL_BUF_SIZE = 512 * 1024;
+    const MAX_BUF_SIZE = 4 * 1024 * 1024;
+
     const connectLoop = async () => {
       if (abort.signal.aborted) return;
+
+      const attemptAbort = new AbortController();
+      this.boardAttemptAbort = attemptAbort;
+      this.boardAttemptStartedAt = Date.now();
+      const onOuterAbort = () => attemptAbort.abort();
+      abort.signal.addEventListener('abort', onOuterAbort, { once: true });
 
       try {
         // Use Autodarts Desktop's original lightweight RAW 3-cam stream (NO ?warp=true!)
         // so Autodarts Desktop CPU & auto-scoring stay 100% untouched and fast!
         const res = await fetch('/api/replays/board-stream', {
           cache: 'no-store',
-          signal: abort.signal,
+          signal: attemptAbort.signal,
         });
 
         if (!res.ok || !res.body) {
@@ -470,97 +505,135 @@ class OcheCamService {
         }
 
         const reader = res.body.getReader();
-        let acc = new Uint8Array(0);
+        let buf = new Uint8Array(INITIAL_BUF_SIZE);
+        let len = 0;
         let decoding = false;
 
-        while (!abort.signal.aborted) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value || value.length === 0) continue;
+        try {
+          while (!abort.signal.aborted && !attemptAbort.signal.aborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value || value.length === 0) continue;
 
-          // Append incoming bytes (cap accumulator at 4MB so memory never grows if stream glitches)
-          if (acc.length > 4 * 1024 * 1024) {
-            acc = new Uint8Array(value);
-          } else {
-            const next = new Uint8Array(acc.length + value.length);
-            next.set(acc, 0);
-            next.set(value, acc.length);
-            acc = next;
-          }
-
-          // Extract the latest complete JPEG frame (FF D8 ... FF D9) in buffer
-          let latestJpeg: Uint8Array | null = null;
-          let searchOffset = 0;
-
-          while (true) {
-            const soi = findMarker(acc, 0xff, 0xd8, searchOffset);
-            if (soi === -1) {
-              // Keep last 2 bytes in case FF D8 split across chunks
-              if (acc.length > 2) {
-                acc = acc.slice(acc.length - 2);
+            // Append into reusable staging buffer (grow up to 4MB cap, reset on overflow)
+            if (len + value.length > MAX_BUF_SIZE) {
+              len = 0;
+              if (value.length > MAX_BUF_SIZE) {
+                continue;
               }
-              break;
             }
-            const eoi = findMarker(acc, 0xff, 0xd9, soi + 2);
-            if (eoi === -1) {
-              // Incomplete frame — drop bytes before SOI and wait for more chunks
-              if (soi > 0) {
-                acc = acc.slice(soi);
+            if (len + value.length > buf.length) {
+              const nextCap = Math.min(MAX_BUF_SIZE, Math.max(buf.length * 2, len + value.length));
+              const nextBuf = new Uint8Array(nextCap);
+              if (len > 0) {
+                nextBuf.set(buf.subarray(0, len), 0);
               }
-              break;
+              buf = nextBuf;
             }
-            const frameEnd = eoi + 2;
-            latestJpeg = acc.slice(soi, frameEnd);
-            searchOffset = frameEnd;
-          }
+            buf.set(value, len);
+            len += value.length;
 
-          if (searchOffset > 0 && searchOffset <= acc.length) {
-            acc = acc.slice(searchOffset);
-          }
+            // Scan for the final complete JPEG frame (FF D8 ... FF D9) without slicing intermediate frames
+            let latestStart = -1;
+            let latestEnd = -1;
+            let searchOffset = 0;
+            let compactFrom = 0;
 
-          if (latestJpeg && !decoding) {
-            decoding = true;
-            const blob = new Blob([latestJpeg as BlobPart], { type: 'image/jpeg' });
-            createImageBitmap(blob)
-              .then((bitmap) => {
-                if (abort.signal.aborted) {
-                  bitmap.close();
-                  return;
-                }
-                const prev = this.boardFrameBitmap;
-                this.boardFrameBitmap = bitmap;
-                if (prev) prev.close();
-                // Render into our dedicated GPU WebGL Virtual Straight-On Board Camera (clips only!)
-                if (this.virtualBoardCam && this.virtualBoardCam.render(bitmap)) {
-                  this.virtualBoardReady = true;
-                }
-                this.boardFrameCount += 1;
-                this.boardLastFrameAt = Date.now();
-                this.setBoardFeedStatus(true, null);
-              })
-              .catch(() => {
-                // Skip malformed partial frame and continue
-              })
-              .finally(() => {
-                decoding = false;
-              });
+            while (searchOffset < len) {
+              const soi = findMarker(buf, 0xff, 0xd8, searchOffset, len);
+              if (soi === -1) {
+                // Keep trailing 0xFF byte in case FF D8 splits across chunks
+                compactFrom = len > 0 && buf[len - 1] === 0xff ? len - 1 : len;
+                break;
+              }
+              const eoi = findMarker(buf, 0xff, 0xd9, soi + 2, len);
+              if (eoi === -1) {
+                // Incomplete frame — compact so SOI moves to index 0
+                compactFrom = soi;
+                break;
+              }
+              latestStart = soi;
+              latestEnd = eoi + 2;
+              searchOffset = latestEnd;
+              compactFrom = latestEnd;
+            }
+
+            // Only copy & decode the final complete JPEG frame in the buffer when idle
+            if (latestStart !== -1 && latestEnd > latestStart && !decoding) {
+              decoding = true;
+              const jpegCopy = buf.slice(latestStart, latestEnd);
+              const blob = new Blob([jpegCopy as BlobPart], { type: 'image/jpeg' });
+              createImageBitmap(blob)
+                .then((bitmap) => {
+                  if (abort.signal.aborted || attemptAbort.signal.aborted) {
+                    bitmap.close();
+                    return;
+                  }
+                  const prev = this.boardFrameBitmap;
+                  this.boardFrameBitmap = bitmap;
+                  if (prev) prev.close();
+                  // Render into our dedicated GPU WebGL Virtual Straight-On Board Camera (clips only!)
+                  if (this.virtualBoardCam && this.virtualBoardCam.render(bitmap)) {
+                    this.virtualBoardReady = true;
+                  } else {
+                    this.virtualBoardReady = false;
+                  }
+                  this.boardFrameCount += 1;
+                  this.boardLastFrameAt = Date.now();
+                  this.setBoardFeedStatus(true, null);
+                })
+                .catch(() => {
+                  // Skip malformed partial frame and continue
+                })
+                .finally(() => {
+                  decoding = false;
+                });
+            }
+
+            // Compact staging buffer in-place (zero allocation)
+            if (compactFrom > 0) {
+              if (compactFrom < len) {
+                buf.copyWithin(0, compactFrom, len);
+                len -= compactFrom;
+              } else {
+                len = 0;
+              }
+            }
+          }
+        } finally {
+          await reader.cancel().catch(() => {});
+          try {
+            reader.releaseLock();
+          } catch {
+            // ignore
           }
         }
 
         if (!abort.signal.aborted) {
-          throw new Error('Autodarts 3-cam stream ended');
+          throw new Error(
+            attemptAbort.signal.aborted
+              ? 'Autodarts 3-cam stream stalled — reconnecting...'
+              : 'Autodarts 3-cam stream ended'
+          );
         }
       } catch (err) {
         if (abort.signal.aborted) return;
-        this.setBoardFeedStatus(
-          false,
-          (err as Error).message || 'Waiting for Autodarts Desktop 3-camera stream on port 3180...'
-        );
+        const message =
+          attemptAbort.signal.aborted && this.boardFeedError
+            ? this.boardFeedError
+            : (err as Error).message ||
+              'Waiting for Autodarts Desktop 3-camera stream on port 3180...';
+        this.setBoardFeedStatus(false, message);
         // Auto-retry every 2 seconds while running
         this.boardReconnectTimer = window.setTimeout(() => {
           this.boardReconnectTimer = null;
           void connectLoop();
         }, 2000);
+      } finally {
+        abort.signal.removeEventListener('abort', onOuterAbort);
+        if (this.boardAttemptAbort === attemptAbort) {
+          this.boardAttemptAbort = null;
+        }
       }
     };
 
@@ -575,6 +648,10 @@ class OcheCamService {
     if (this.boardReconnectTimer !== null) {
       window.clearTimeout(this.boardReconnectTimer);
       this.boardReconnectTimer = null;
+    }
+    if (this.boardAttemptAbort) {
+      this.boardAttemptAbort.abort();
+      this.boardAttemptAbort = null;
     }
     if (this.boardStreamAbort) {
       this.boardStreamAbort.abort();
@@ -591,19 +668,26 @@ class OcheCamService {
     this.virtualBoardReady = false;
     this.boardFrameCount = 0;
     this.boardLastFrameAt = 0;
+    this.boardAttemptStartedAt = 0;
   }
 
   /**
    * Opens the best available Oche / Throwing webcam by:
    * 1. Discovering Autodarts Desktop's 3 board camera VID:PIDs (so we skip busy Autodarts cams!)
    * 2. Ordering all detected USB cameras with dedicated non-Autodarts webcams first
-   * 3. Automatically falling back across every detected camera if a saved deviceId is stale or busy
+   * 3. Automatically falling back across non-board cameras if a saved deviceId is stale or busy
    */
-  private async openBestOcheCamera(options: StartOcheCamOptions): Promise<MediaStream> {
-    const { ocheDeviceId, strictSelection = false, autoDetect = false, includeAudio = false } = options;
+  private async openBestOcheCamera(
+    options: StartOcheCamOptions,
+    epoch: number
+  ): Promise<MediaStream | null> {
+    const { ocheDeviceId, strictSelection = false, autoDetect = false } = options;
 
     const vidPids = await this.fetchAutodartsCamVidPids();
+    if (epoch !== this.lifecycleEpoch) return null;
+
     const allCams = await this.listCameras();
+    if (epoch !== this.lifecycleEpoch) return null;
 
     const orderedCandidates: CameraDeviceInfo[] = [];
     const pushUnique = (cam: CameraDeviceInfo | undefined) => {
@@ -626,18 +710,17 @@ class OcheCamService {
       // User explicitly picked this exact camera — try it first, then fall back to non-board cams
       pushUnique(savedCam);
       nonBoardCams.forEach(pushUnique);
-      boardCams.forEach(pushUnique);
+    } else if (autoDetect) {
+      // Auto-detect: ONLY probe non-Autodarts cameras — never touch Autodarts' locked board cameras
+      nonBoardCams.forEach(pushUnique);
     } else {
-      // Auto-boot / Auto-detect:
+      // Auto-boot:
       // Prefer saved camera ONLY if it is NOT an Autodarts Desktop board camera!
       if (savedCam && !isAutodartsBoardLabel(savedCam.label, vidPids)) {
         pushUnique(savedCam);
       }
-      // Next try all dedicated non-Autodarts cameras (e.g. "USB  Live camera")
+      // Next try all dedicated non-Autodarts cameras (e.g. "USB Live camera")
       nonBoardCams.forEach(pushUnique);
-      // Finally fall back to remaining cameras only if nothing else opened
-      if (savedCam) pushUnique(savedCam);
-      boardCams.forEach(pushUnique);
     }
 
     const attemptErrors: string[] = [];
@@ -652,7 +735,7 @@ class OcheCamService {
       try {
         return await navigator.mediaDevices.getUserMedia({
           video: idealConstraints,
-          audio: includeAudio,
+          audio: false,
         });
       } catch (err) {
         const name = (err as DOMException)?.name || '';
@@ -660,7 +743,7 @@ class OcheCamService {
         if (name === 'OverconstrainedError') {
           return await navigator.mediaDevices.getUserMedia({
             video: deviceId ? { deviceId: { exact: deviceId } } : true,
-            audio: includeAudio,
+            audio: false,
           });
         }
         throw err;
@@ -668,13 +751,19 @@ class OcheCamService {
     };
 
     for (const candidate of orderedCandidates) {
+      if (epoch !== this.lifecycleEpoch) return null;
       try {
         const stream = await tryOpenDevice(candidate.deviceId);
+        if (epoch !== this.lifecycleEpoch) {
+          stream.getTracks().forEach((t) => t.stop());
+          return null;
+        }
         const track = stream.getVideoTracks()[0];
         this.activeOcheDeviceId = track?.getSettings()?.deviceId || candidate.deviceId;
         this.activeOcheCameraLabel = track?.label || candidate.label || 'Oche Webcam';
         return stream;
       } catch (err) {
+        if (epoch !== this.lifecycleEpoch) return null;
         const domErr = err as DOMException;
         const name = domErr?.name || 'Error';
         if (name === 'NotAllowedError' || name === 'SecurityError') {
@@ -684,219 +773,298 @@ class OcheCamService {
       }
     }
 
-    // Last resort: if enumerateDevices returned 0 labeled devices (e.g. before permission grant), try generic default
-    try {
-      const stream = await tryOpenDevice(undefined);
-      const track = stream.getVideoTracks()[0];
-      this.activeOcheDeviceId = track?.getSettings()?.deviceId || null;
-      this.activeOcheCameraLabel = track?.label || 'Oche Webcam';
-      return stream;
-    } catch (err) {
-      const domErr = err as DOMException;
-      const name = domErr?.name || 'Error';
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
-        throw new Error('Camera permission denied in browser. Allow camera access on localhost:5173.');
-      }
-      if (allCams.length === 0) {
-        throw new Error('No cameras detected on this PC. Check USB connections.');
-      }
-      if (nonBoardCams.length === 0 && boardCams.length > 0) {
-        throw new Error(
-          `Only ${boardCams.length} Autodarts board camera(s) detected — Oche webcam not found. Check USB cable.`
-        );
-      }
-      const detail = attemptErrors[0] || domErr?.message || 'Could not start video source';
-      throw new Error(`Unable to open Oche webcam (${detail})`);
+    if (epoch !== this.lifecycleEpoch) return null;
+
+    // Never probe generic default getUserMedia if we already know only locked Autodarts board cameras exist
+    if (nonBoardCams.length === 0 && boardCams.length > 0 && !(strictSelection && savedCam)) {
+      throw new Error(
+        `Only ${boardCams.length} Autodarts board camera(s) detected — Oche webcam not found. Check USB cable.`
+      );
     }
+
+    // Last resort: only when enumerateDevices returned 0 usable labeled devices (e.g. before permission grant)
+    const shouldTryGenericDefault =
+      !autoDetect || (allCams.length === 0 || allCams.every((c) => !c.deviceId));
+    if (shouldTryGenericDefault && boardCams.length === 0) {
+      try {
+        const stream = await tryOpenDevice(undefined);
+        if (epoch !== this.lifecycleEpoch) {
+          stream.getTracks().forEach((t) => t.stop());
+          return null;
+        }
+        const track = stream.getVideoTracks()[0];
+        this.activeOcheDeviceId = track?.getSettings()?.deviceId || null;
+        this.activeOcheCameraLabel = track?.label || 'Oche Webcam';
+        return stream;
+      } catch (err) {
+        if (epoch !== this.lifecycleEpoch) return null;
+        const domErr = err as DOMException;
+        const name = domErr?.name || 'Error';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          throw new Error('Camera permission denied in browser. Allow camera access on localhost:5173.');
+        }
+        attemptErrors.push(domErr?.message || name);
+      }
+    }
+
+    if (allCams.length === 0) {
+      throw new Error('No cameras detected on this PC. Check USB connections.');
+    }
+    const detail = attemptErrors[0] || 'Could not start video source';
+    throw new Error(`Unable to open Oche webcam (${detail})`);
   }
 
-  public async start(options: StartOcheCamOptions = {}): Promise<MediaStream> {
+  public async start(options: StartOcheCamOptions = {}): Promise<MediaStream | null> {
     this.stop();
+    const epoch = ++this.lifecycleEpoch;
 
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Camera API (getUserMedia) is not available in this browser context.');
     }
 
-    const { includeAudio = false } = options;
-
     // 1. Auto-detect & open the best available Oche / Throwing camera (skipping locked Autodarts board cams)
-    const ocheStream = await this.openBestOcheCamera(options);
-    this.ocheStream = ocheStream;
-    this.ocheVideoEl = this.createHiddenVideo(ocheStream);
-
-    // Watch for live USB webcam unplug / driver drop mid-session
-    const videoTrack = ocheStream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.addEventListener('ended', () => {
-        if (this.ocheStream === ocheStream) {
-          this.stop();
-          this.emitOcheStatus(false, 'Oche webcam disconnected — check USB cable');
-        }
-      });
+    const ocheStream = await this.openBestOcheCamera(options, epoch);
+    if (!ocheStream || epoch !== this.lifecycleEpoch) {
+      if (ocheStream) {
+        ocheStream.getTracks().forEach((t) => t.stop());
+      }
+      return null;
     }
-    this.emitOcheStatus(true, null);
 
-    // 2. Always lock Board Cam to Autodarts Desktop's 3-camera live stream (port 3180)
-    this.isDualMode = true;
-    this.setBoardFeedStatus(false, null);
-    this.startAutodartsThreeCamReader();
+    try {
+      this.ocheStream = ocheStream;
+      this.ocheVideoEl = this.createHiddenVideo(ocheStream);
 
-    // 3. Create 3 Synchronized 1280×720 16:9 Broadcast Canvas Compositors (one per single board cam!)
-    //    LEFT  (560×720): Oche / Throwing Reaction Webcam
-    //    RIGHT (720×720): ONE single crisp straight-on Board Cam (Cam 0 TOP | Cam 1 RIGHT | Cam 2 LEFT)
-    const canvases: HTMLCanvasElement[] = [];
-    const ctxs: Array<CanvasRenderingContext2D | null> = [];
-    for (let i = 0; i < 3; i++) {
-      const c = document.createElement('canvas');
-      c.width = 1280;
-      c.height = 720;
-      canvases.push(c);
-      ctxs.push(c.getContext('2d'));
-    }
-    this.canvasEls = canvases;
-
-    const drawFrame = () => {
-      const baseCanvas = this.canvasEls[0];
-      const baseCtx = ctxs[0];
-      if (!baseCanvas || !baseCtx) return;
-
-      const W = baseCanvas.width;
-      const H = baseCanvas.height;
-      const rightW = H; // 720 — exact 1:1 square for the single straight-on circular dartboard!
-      const leftW = W - rightW; // 560
-      const rightX = leftW;
-
-      // Render Oche Cam ONCE onto canvas 0 (left side), then fast-blit to canvases 1 & 2
-      baseCtx.fillStyle = '#0B0F17';
-      baseCtx.fillRect(0, 0, leftW, H);
-      if (this.ocheVideoEl) {
-        drawCover(baseCtx, this.ocheVideoEl, 0, 0, leftW, H);
+      // Watch for live USB webcam unplug / driver drop mid-session
+      const videoTrack = ocheStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.addEventListener('ended', () => {
+          if (this.ocheStream === ocheStream && epoch === this.lifecycleEpoch) {
+            this.stop();
+            this.emitOcheStatus(false, 'Oche webcam disconnected — check USB cable');
+          }
+        });
       }
-      drawCornerLabel(baseCtx, 'OCHE CAM', 18, 18, '#F43F5E');
+      this.emitOcheStatus(true, null);
 
-      const virtualAtlas = this.virtualBoardReady ? this.virtualBoardCam?.getCanvas() : null;
-      const panelSize = this.virtualBoardCam?.getPanelSize() ?? 720;
-      const hasRawStrip = Boolean(this.boardFrameBitmap && this.boardFrameBitmap.width > 0);
+      // 2. Always lock Board Cam to Autodarts Desktop's 3-camera live stream (port 3180)
+      this.isDualMode = true;
+      this.setBoardFeedStatus(false, null);
+      this.startAutodartsThreeCamReader();
 
-      for (let camIdx = 0; camIdx < 3; camIdx++) {
-        const ctx = ctxs[camIdx];
-        if (!ctx) continue;
+      // 3. Create 3 Synchronized 1280×720 16:9 Broadcast Canvas Compositors (one per single board cam!)
+      //    LEFT  (560×720): Oche / Throwing Reaction Webcam
+      //    RIGHT (720×720): ONE single crisp straight-on Board Cam (Cam 0 TOP | Cam 1 RIGHT | Cam 2 LEFT)
+      const canvases: HTMLCanvasElement[] = [];
+      const ctxs: Array<CanvasRenderingContext2D | null> = [];
+      for (let i = 0; i < 3; i++) {
+        const c = document.createElement('canvas');
+        c.width = 1280;
+        c.height = 720;
+        canvases.push(c);
+        ctxs.push(c.getContext('2d'));
+      }
+      this.canvasEls = canvases;
 
-        if (camIdx > 0) {
-          ctx.drawImage(baseCanvas, 0, 0, leftW, H, 0, 0, leftW, H);
+      const drawFrame = () => {
+        const baseCanvas = this.canvasEls[0];
+        const baseCtx = ctxs[0];
+        if (!baseCanvas || !baseCtx) return;
+
+        const W = baseCanvas.width;
+        const H = baseCanvas.height;
+        if (!W || !H) return;
+        const rightW = H; // 720 — exact 1:1 square for the single straight-on circular dartboard!
+        const leftW = W - rightW; // 560
+        const rightX = leftW;
+
+        // Render Oche Cam ONCE onto canvas 0 (left side), then fast-blit to canvases 1 & 2
+        baseCtx.fillStyle = '#0B0F17';
+        baseCtx.fillRect(0, 0, leftW, H);
+        if (this.ocheVideoEl) {
+          drawCover(baseCtx, this.ocheVideoEl, 0, 0, leftW, H);
         }
+        drawCornerLabel(baseCtx, 'OCHE CAM', 18, 18, '#F43F5E');
 
-        const camInfo = BOARD_CAMERAS[camIdx as BoardCameraIndex];
+        const virtualAtlas = this.virtualBoardReady ? this.virtualBoardCam?.getCanvas() : null;
+        const panelSize = this.virtualBoardCam?.getPanelSize() ?? 720;
+        const hasRawStrip = Boolean(this.boardFrameBitmap && this.boardFrameBitmap.width > 0);
 
-        if (virtualAtlas) {
-          // Slice ONLY this single crisp straight-on board camera from the 2700×900 WebGL atlas
-          ctx.drawImage(
-            virtualAtlas,
-            camIdx * panelSize,
-            0,
-            panelSize,
-            panelSize,
-            rightX,
-            0,
-            rightW,
-            H
-          );
-          drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#10B981');
-        } else if (hasRawStrip && this.boardFrameBitmap) {
-          // WebGL-unavailable fallback: crop ONLY this single camera's 1/3rd raw slice
-          const sliceW = this.boardFrameBitmap.width / 3;
-          drawCover(ctx, this.boardFrameBitmap, rightX, 0, rightW, H, {
-            sx: camIdx * sliceW,
-            sy: 0,
-            sw: sliceW,
-            sh: this.boardFrameBitmap.height,
-          });
-          drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#10B981');
-        } else {
-          ctx.fillStyle = '#111827';
-          ctx.fillRect(rightX, 0, rightW, H);
-          ctx.fillStyle = '#94A3B8';
-          ctx.font = '700 24px "Plus Jakarta Sans", sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('BOARD CAM CONNECTING...', rightX + rightW / 2, H / 2 - 14);
-          ctx.font = '500 14px "JetBrains Mono", monospace';
-          ctx.fillStyle = '#64748B';
-          ctx.fillText(
-            this.boardFeedError
-              ? 'Start Autodarts Desktop (port 3180)'
-              : 'Linking Autodarts 3-cam feed into single-cam views...',
-            rightX + rightW / 2,
-            H / 2 + 20
-          );
-          ctx.textAlign = 'left';
-          drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#F59E0B', true);
+        for (let camIdx = 0; camIdx < 3; camIdx++) {
+          const ctx = ctxs[camIdx];
+          if (!ctx) continue;
+
+          if (camIdx > 0) {
+            ctx.drawImage(baseCanvas, 0, 0, leftW, H, 0, 0, leftW, H);
+          }
+
+          const camInfo = BOARD_CAMERAS[camIdx as BoardCameraIndex];
+
+          if (virtualAtlas) {
+            // Slice ONLY this single crisp straight-on board camera from the WebGL atlas
+            ctx.drawImage(
+              virtualAtlas,
+              camIdx * panelSize,
+              0,
+              panelSize,
+              panelSize,
+              rightX,
+              0,
+              rightW,
+              H
+            );
+            drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#10B981');
+          } else if (hasRawStrip && this.boardFrameBitmap) {
+            // WebGL-unavailable fallback: crop ONLY this single camera's 1/3rd raw slice
+            const sliceW = this.boardFrameBitmap.width / 3;
+            drawCover(ctx, this.boardFrameBitmap, rightX, 0, rightW, H, {
+              sx: camIdx * sliceW,
+              sy: 0,
+              sw: sliceW,
+              sh: this.boardFrameBitmap.height,
+            });
+            drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#10B981');
+          } else {
+            ctx.fillStyle = '#111827';
+            ctx.fillRect(rightX, 0, rightW, H);
+            ctx.fillStyle = '#94A3B8';
+            ctx.font = '700 24px "Plus Jakarta Sans", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('BOARD CAM CONNECTING...', rightX + rightW / 2, H / 2 - 14);
+            ctx.font = '500 14px "JetBrains Mono", monospace';
+            ctx.fillStyle = '#64748B';
+            ctx.fillText(
+              this.boardFeedError
+                ? 'Start Autodarts Desktop (port 3180)'
+                : 'Linking Autodarts 3-cam feed into single-cam views...',
+              rightX + rightW / 2,
+              H / 2 + 20
+            );
+            ctx.textAlign = 'left';
+            drawCornerLabel(ctx, camInfo.badgeText, rightX + 18, 18, '#F59E0B', true);
+          }
+
+          // Crisp vertical divider separating Oche Cam & Single Straight-On Board Cam
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+          ctx.fillRect(leftW - 2, 0, 4, H);
         }
+      };
 
-        // Crisp vertical divider separating Oche Cam & Single Straight-On Board Cam
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-        ctx.fillRect(leftW - 2, 0, 4, H);
+      // Self-scheduling 24fps compositor loop (zero overlap, try/catch with rate-limited error logs)
+      let lastDrawErrLogAt = 0;
+      const scheduleNextFrame = () => {
+        if (epoch !== this.lifecycleEpoch) return;
+        this.renderTimer = window.setTimeout(() => {
+          this.renderTimer = null;
+          if (epoch !== this.lifecycleEpoch) return;
+          try {
+            drawFrame();
+          } catch (err) {
+            const now = Date.now();
+            if (now - lastDrawErrLogAt > 5000) {
+              lastDrawErrLogAt = now;
+              console.warn('[OcheCam] Compositor frame error:', err);
+            }
+          }
+          scheduleNextFrame();
+        }, 42);
+      };
+
+      try {
+        drawFrame();
+      } catch (err) {
+        lastDrawErrLogAt = Date.now();
+        console.warn('[OcheCam] Initial compositor frame error:', err);
       }
-    };
+      scheduleNextFrame();
 
-    // Steady 24fps compositor loop (smooth replays with ~75% lower CPU/RAM pressure than 900p@30)
-    drawFrame();
-    this.renderInterval = window.setInterval(drawFrame, 42);
+      // 4. Capture 3 synchronized video-only single-camera broadcast streams (kiosk has no audio)
+      const streams: MediaStream[] = canvases.map((c) => c.captureStream(24));
+      this.compositeStreams = streams;
+      this.mimeType = this.pickSupportedMimeType();
 
-    // 4. Capture 3 synchronized single-camera broadcast streams
-    const audioTracks = includeAudio ? ocheStream.getAudioTracks() : [];
-    const streams: MediaStream[] = canvases.map((c) => {
-      const s = c.captureStream(24);
-      for (const audioTrack of audioTracks) {
-        s.addTrack(audioTrack);
-      }
-      return s;
-    });
-    this.compositeStreams = streams;
-    this.mimeType = this.pickSupportedMimeType();
-
-    // 5. Start overlapping MediaRecorder ring buffers for all 3 single-camera angles
-    this.spawnAllCamSlots();
-    this.rotationTimer = window.setInterval(() => {
-      if (!this.ocheStream || !this.ocheStream.active) {
-        this.stop();
-        return;
-      }
+      // 5. Start overlapping MediaRecorder ring buffers for all 3 single-camera angles (max 2 slots/cam = 6 total)
       this.spawnAllCamSlots();
-      this.pruneOldSlots();
-    }, this.SLOT_SPAWN_INTERVAL_MS);
+      this.rotationTimer = window.setInterval(() => {
+        if (epoch !== this.lifecycleEpoch) return;
+        if (!this.ocheStream || !this.ocheStream.active) {
+          this.stop();
+          this.emitOcheStatus(false, 'Oche camera stream stopped');
+          return;
+        }
+        this.pruneOldSlots();
+        this.spawnAllCamSlots();
+      }, this.SLOT_SPAWN_INTERVAL_MS);
 
-    return streams[0];
+      return streams[0];
+    } catch (err) {
+      this.stop();
+      throw err;
+    }
+  }
+
+  private destroySlot(slot: RollingSlot): void {
+    slot.recorder.ondataavailable = null;
+    slot.recorder.onstop = null;
+    slot.recorder.onerror = null;
+    try {
+      if (slot.recorder.state !== 'inactive') {
+        slot.recorder.stop();
+      }
+    } catch {
+      // ignore
+    }
+    slot.chunks.length = 0;
   }
 
   public stop(): void {
+    this.lifecycleEpoch += 1;
+    this.captureEpoch += 1;
+
+    if (this.capturePostRollTimer !== null) {
+      window.clearTimeout(this.capturePostRollTimer);
+      this.capturePostRollTimer = null;
+    }
+    if (this.cancelActiveCapture) {
+      const cancel = this.cancelActiveCapture;
+      this.cancelActiveCapture = null;
+      cancel();
+    }
+
     if (this.rotationTimer !== null) {
       window.clearInterval(this.rotationTimer);
       this.rotationTimer = null;
     }
-    if (this.renderInterval !== null) {
-      window.clearInterval(this.renderInterval);
-      this.renderInterval = null;
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+      this.renderTimer = null;
     }
 
     this.stopAutodartsThreeCamReader();
 
     for (const camSlots of this.slotsByCam) {
       for (const slot of camSlots) {
-        try {
-          if (slot.recorder.state !== 'inactive') {
-            slot.recorder.stop();
-          }
-        } catch {
-          // ignore
-        }
+        this.destroySlot(slot);
       }
     }
     this.slotsByCam = [[], [], []];
 
     if (this.ocheVideoEl) {
-      this.ocheVideoEl.srcObject = null;
+      try {
+        this.ocheVideoEl.pause();
+        this.ocheVideoEl.srcObject = null;
+        this.ocheVideoEl.load();
+      } catch {
+        // ignore
+      }
       this.ocheVideoEl = null;
+    }
+    for (const c of this.canvasEls) {
+      if (c) {
+        c.width = 0;
+        c.height = 0;
+      }
     }
     this.canvasEls = [null, null, null];
 
@@ -914,6 +1082,7 @@ class OcheCamService {
 
     this.activeOcheCameraLabel = null;
     this.activeOcheDeviceId = null;
+    this.activeCaptureMeta = null;
     this.setBoardFeedStatus(false, null);
     this.isCapturing = false;
     this.emitCaptureState(false);
@@ -928,6 +1097,23 @@ class OcheCamService {
   private spawnSlotForCam(camIdx: BoardCameraIndex): void {
     const stream = this.compositeStreams[camIdx];
     if (!stream || !stream.active) return;
+
+    // Hard-cap each camera to at most MAX_SLOTS_PER_CAM (2) active slots (max 6 encoders total).
+    // If 2 unpinned slots exist (e.g. minor timer jitter before SLOT_MAX_AGE_MS), retire the oldest first.
+    const camSlots = this.slotsByCam[camIdx];
+    if (camSlots.length >= this.MAX_SLOTS_PER_CAM) {
+      const oldestUnpinnedIdx = camSlots.findIndex((s) => !s.pinned);
+      const hasPinned = camSlots.some((s) => s.pinned);
+      if (!hasPinned && oldestUnpinnedIdx !== -1) {
+        const [removed] = camSlots.splice(oldestUnpinnedIdx, 1);
+        if (removed) {
+          this.destroySlot(removed);
+        }
+      }
+    }
+    if (this.slotsByCam[camIdx].length >= this.MAX_SLOTS_PER_CAM) {
+      return;
+    }
 
     try {
       const bitrate = 1_800_000;
@@ -950,6 +1136,12 @@ class OcheCamService {
         }
       };
 
+      recorder.onerror = (ev) => {
+        console.warn(`[OcheCam] MediaRecorder error on cam ${camIdx} slot ${slot.id}:`, ev);
+        this.destroySlot(slot);
+        this.slotsByCam[camIdx] = this.slotsByCam[camIdx].filter((s) => s.id !== slot.id);
+      };
+
       recorder.start(500);
       this.slotsByCam[camIdx].push(slot);
     } catch (err) {
@@ -965,17 +1157,21 @@ class OcheCamService {
 
       for (const slot of camSlots) {
         const age = now - slot.startedAt;
-        if (!slot.pinned && age > this.SLOT_MAX_AGE_MS && camSlots.length > 2) {
-          try {
-            if (slot.recorder.state !== 'inactive') {
-              slot.recorder.stop();
-            }
-          } catch {
-            // ignore
-          }
-          slot.chunks.length = 0;
+        const isBroken = slot.recorder.state === 'inactive';
+        if (!slot.pinned && (isBroken || age > this.SLOT_MAX_AGE_MS)) {
+          this.destroySlot(slot);
         } else {
           keep.push(slot);
+        }
+      }
+
+      // Enforce hard cap of at most MAX_SLOTS_PER_CAM active slots per camera
+      while (keep.length > this.MAX_SLOTS_PER_CAM) {
+        const oldestUnpinnedIdx = keep.findIndex((s) => !s.pinned);
+        if (oldestUnpinnedIdx === -1) break;
+        const [removed] = keep.splice(oldestUnpinnedIdx, 1);
+        if (removed) {
+          this.destroySlot(removed);
         }
       }
 
@@ -1024,6 +1220,7 @@ class OcheCamService {
       }
     }
 
+    const capEpoch = ++this.captureEpoch;
     bestSlot.pinned = true;
     this.isCapturing = true;
     this.activeCaptureMeta = meta;
@@ -1036,27 +1233,59 @@ class OcheCamService {
       const actualPreSec = Math.max(0.5, Number(((now - bestSlot.startedAt) / 1000).toFixed(1)));
       this.emitCaptureState(true, postSec);
 
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, postSec * 1000);
+      const postRollCompleted = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finishWait = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          if (this.capturePostRollTimer !== null) {
+            window.clearTimeout(this.capturePostRollTimer);
+            this.capturePostRollTimer = null;
+          }
+          if (this.cancelActiveCapture === abortFn) {
+            this.cancelActiveCapture = null;
+          }
+          resolve(ok);
+        };
+        const abortFn = () => finishWait(false);
+        this.cancelActiveCapture = abortFn;
+        this.capturePostRollTimer = window.setTimeout(() => {
+          this.capturePostRollTimer = null;
+          finishWait(true);
+        }, postSec * 1000);
       });
 
-      const blob = await new Promise<Blob>((resolve) => {
+      if (!postRollCompleted || capEpoch !== this.captureEpoch) {
+        return null;
+      }
+
+      const blob = await new Promise<Blob | null>((resolve) => {
         const rec = bestSlot.recorder;
         let settled = false;
         let safetyTimer: number | null = null;
 
-        const finish = () => {
+        const finish = (cancelled: boolean) => {
           if (settled) return;
           settled = true;
           if (safetyTimer !== null) {
             window.clearTimeout(safetyTimer);
             safetyTimer = null;
           }
+          if (this.cancelActiveCapture === abortStop) {
+            this.cancelActiveCapture = null;
+          }
+          if (cancelled) {
+            resolve(null);
+            return;
+          }
           resolve(new Blob(bestSlot.chunks, { type: rec.mimeType || 'video/webm' }));
         };
 
+        const abortStop = () => finish(true);
+        this.cancelActiveCapture = abortStop;
+
         if (rec.state === 'inactive') {
-          finish();
+          finish(false);
           return;
         }
 
@@ -1064,7 +1293,7 @@ class OcheCamService {
         safetyTimer = window.setTimeout(() => {
           safetyTimer = null;
           console.warn('[OcheCam] MediaRecorder.stop() timed out — finalizing buffered chunks.');
-          finish();
+          finish(false);
         }, 4000);
 
         const prevOnStop = rec.onstop;
@@ -1072,15 +1301,19 @@ class OcheCamService {
           if (typeof prevOnStop === 'function') {
             prevOnStop.call(rec, ev);
           }
-          finish();
+          finish(false);
         };
 
         try {
           rec.stop();
         } catch {
-          finish();
+          finish(false);
         }
       });
+
+      if (!blob || capEpoch !== this.captureEpoch) {
+        return null;
+      }
 
       const finalMeta = this.activeCaptureMeta || meta;
       if (blob.size === 0) return null;
@@ -1096,20 +1329,27 @@ class OcheCamService {
         createdAt: Date.now(),
       };
     } finally {
-      this.activeCaptureMeta = null;
-      bestSlot.chunks.length = 0;
+      this.destroySlot(bestSlot);
       this.slotsByCam[camIdx] = this.slotsByCam[camIdx].filter((s) => s.id !== bestSlot.id);
-      this.isCapturing = false;
-      this.emitCaptureState(false);
+      if (capEpoch === this.captureEpoch) {
+        this.activeCaptureMeta = null;
+        this.cancelActiveCapture = null;
+        this.isCapturing = false;
+        this.emitCaptureState(false);
+      }
     }
   }
 
   /**
-   * Upgrades metadata on an already-in-flight capture (e.g. if a Bullseye or Ton+
-   * triggered capture milliseconds before the game detected the winning checkout).
+   * Upgrades metadata on an already-in-flight capture (e.g. if a Bullseye or T20
+   * triggered capture before a 180 / 140+ visit finished or a winning checkout landed).
    */
   public upgradeActiveCaptureMeta(meta: CaptureClipMetadata): boolean {
     if (!this.isCapturing) return false;
+    // Never downgrade a Game Winning Shot capture with a lower-priority non-winning trigger
+    if (this.activeCaptureMeta?.forceAutoSave && !meta.forceAutoSave) {
+      return false;
+    }
     this.activeCaptureMeta = {
       ...(this.activeCaptureMeta || {}),
       ...meta,
@@ -1147,25 +1387,37 @@ class OcheCamService {
       params.set('cy', meta.coords.y.toFixed(4));
     }
 
-    const res = await fetch(`/api/replays/clip?${params.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': blob.type || 'video/webm' },
-      body: blob,
-    });
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 25000);
+    try {
+      const res = await fetch(`/api/replays/clip?${params.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'video/webm' },
+        body: blob,
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      throw new Error(`Failed to save clip (${res.status})`);
+      if (!res.ok) {
+        throw new Error(`Failed to save clip (${res.status})`);
+      }
+
+      const data = await res.json();
+      if (!data?.ok || !data?.clip) {
+        throw new Error(data?.error || 'Clip save returned error');
+      }
+
+      return {
+        ...(data.clip as ReplayClipRecord),
+        isSavedToDisk: true,
+      };
+    } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') {
+        throw new Error('Clip upload timed out after 25s');
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timer);
     }
-
-    const data = await res.json();
-    if (!data?.ok || !data?.clip) {
-      throw new Error(data?.error || 'Clip save returned error');
-    }
-
-    return {
-      ...(data.clip as ReplayClipRecord),
-      isSavedToDisk: true,
-    };
   }
 
   public getBoardFrameCount(): number {

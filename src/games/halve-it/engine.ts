@@ -166,7 +166,14 @@ export function applyDartToState(
   state: HalveItState,
   dart: DartThrow
 ): { nextState: HalveItState; feedback: HalveItFeedback } {
-  if (state.isFinished || state.turnComplete || state.visitDarts.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.visitDarts.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex] ||
+    !state.challenges[state.currentRoundIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', callout: null } };
   }
 
@@ -226,7 +233,7 @@ export function applyDartToState(
     state.activePlayerIndex === state.players.length - 1;
 
   const isFinished = isThirdDart && isLastPlayerOfFinalRound;
-  const winnerId = isFinished ? sortPlayersForStandings(nextPlayers)[0].id : null;
+  const winnerId = isFinished ? (sortPlayersForStandings(nextPlayers)[0]?.id ?? null) : null;
 
   // Build dramatic audio/visual feedback
   let feedback: HalveItFeedback = { sound: 'none', callout: null };
@@ -317,7 +324,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: HalveItState): HalveItState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   // Safeguard: if a player pulled darts early (after throwing >=1 dart) without hitting the target,
   // apply the Halve It penalty before advancing so nobody can skip out of a miss!
@@ -344,7 +353,7 @@ export function advanceTurn(state: HalveItState): HalveItState {
       ...state,
       players: updatedPlayers,
       isFinished: true,
-      winnerId: winner.id,
+      winnerId: winner?.id ?? null,
       turnComplete: true,
     };
   }
@@ -405,10 +414,11 @@ export function buildGameResult(state: HalveItState, startedAt: number): GameRes
     );
   }
 
-  const headline =
-    winner.timesHalved === 0
-      ? `🛡️ ${winner.name} conquers Halve It unscathed (${winner.score} pts)!`
-      : `✂️ ${winner.name} survives the gauntlet with ${winner.score} pts!`;
+  const headline = !winner
+    ? 'Halve It match complete!'
+    : winner.timesHalved === 0
+    ? `🛡️ ${winner.name} conquers Halve It unscathed (${winner.score} pts)!`
+    : `✂️ ${winner.name} survives the gauntlet with ${winner.score} pts!`;
 
   return {
     gameId: 'halve-it',

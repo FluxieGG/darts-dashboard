@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Modal } from '../common/Modal';
 import { Badge } from '../common/Badge';
 import { useReplayStore } from '../../store/useReplayStore';
@@ -21,8 +22,9 @@ interface ReplayGalleryModalProps {
 type GalleryFilter = 'all' | ReplayClipCategory;
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (safe < 1024 * 1024) return `${(safe / 1024).toFixed(0)} KB`;
+  return `${(safe / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export const ReplayGalleryModal: React.FC<ReplayGalleryModalProps> = ({ onOpenSettings }) => {
@@ -34,9 +36,39 @@ export const ReplayGalleryModal: React.FC<ReplayGalleryModalProps> = ({ onOpenSe
     status,
     openOverlayClip,
     deleteClip,
-  } = useReplayStore();
+  } = useReplayStore(
+    useShallow((s) => ({
+      isGalleryOpen: s.isGalleryOpen,
+      closeGallery: s.closeGallery,
+      clips: s.clips,
+      saveDir: s.saveDir,
+      status: s.status,
+      openOverlayClip: s.openOverlayClip,
+      deleteClip: s.deleteClip,
+    }))
+  );
 
   const [filter, setFilter] = useState<GalleryFilter>('all');
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
+
+  const handleDeleteClip = async (clipId: string, clipKey: string) => {
+    if (deletingIds.has(clipId)) return;
+    setDeletingIds((prev) => {
+      const next = new Set(prev);
+      next.add(clipId);
+      return next;
+    });
+    try {
+      await deleteClip(clipKey);
+    } finally {
+      setDeletingIds((prev) => {
+        if (!prev.has(clipId)) return prev;
+        const next = new Set(prev);
+        next.delete(clipId);
+        return next;
+      });
+    }
+  };
 
   const counts = useMemo(() => {
     let game = 0;
@@ -216,7 +248,9 @@ export const ReplayGalleryModal: React.FC<ReplayGalleryModalProps> = ({ onOpenSe
                       >
                         {folderLabel}
                       </span>
-                      <span>{clip.durationSec.toFixed(1)}s</span>
+                      <span>
+                        {(Number.isFinite(clip.durationSec) ? clip.durationSec : 0).toFixed(1)}s
+                      </span>
                       <span>•</span>
                       <span>{formatBytes(clip.sizeBytes)}</span>
                       {clip.isDualCamera && (
@@ -252,9 +286,17 @@ export const ReplayGalleryModal: React.FC<ReplayGalleryModalProps> = ({ onOpenSe
                       </a>
                       <button
                         type="button"
-                        onClick={() => void deleteClip(clip.relativePath || clip.filename)}
+                        disabled={deletingIds.has(clip.id)}
+                        onClick={() =>
+                          void handleDeleteClip(clip.id, clip.relativePath || clip.filename)
+                        }
                         title="Delete clip from disk"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className={cn(
+                          'p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors',
+                          deletingIds.has(clip.id)
+                            ? 'opacity-40 cursor-not-allowed'
+                            : 'cursor-pointer'
+                        )}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

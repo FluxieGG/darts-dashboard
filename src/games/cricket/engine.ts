@@ -78,6 +78,7 @@ function createEmptyMarks(): Record<CricketTarget, number> {
 }
 
 export function isTargetDead(players: CricketPlayerState[], target: CricketTarget): boolean {
+  if (players.length === 0) return false;
   return players.every((p) => p.marks[target] >= 3);
 }
 
@@ -165,7 +166,13 @@ export function applyDartToState(
   state: CricketGameState,
   dart: DartThrow
 ): { nextState: CricketGameState; feedback: CricketFeedback } {
-  if (state.isFinished || state.turnComplete || state.visitEntries.length >= 3) {
+  if (
+    state.isFinished ||
+    state.turnComplete ||
+    state.visitEntries.length >= 3 ||
+    state.players.length === 0 ||
+    !state.players[state.activePlayerIndex]
+  ) {
     return { nextState: state, feedback: { sound: 'none', callout: null } };
   }
 
@@ -352,7 +359,9 @@ export function applyDartToState(
 }
 
 export function advanceTurn(state: CricketGameState): CricketGameState {
-  if (state.isFinished) return state;
+  if (state.isFinished || state.players.length === 0 || !state.players[state.activePlayerIndex]) {
+    return state;
+  }
 
   const nextPlayerIndex = (state.activePlayerIndex + 1) % state.players.length;
   const nextRound = nextPlayerIndex === 0 ? state.round + 1 : state.round;

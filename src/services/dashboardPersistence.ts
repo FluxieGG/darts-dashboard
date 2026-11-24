@@ -91,14 +91,14 @@ function buildPlayersSection(): PersistedDashboardState['players'] {
   return section;
 }
 
-function buildDashboardSnapshot(): PersistedDashboardState {
+const MAX_KEEPALIVE_BYTES = 60_000;
+
+function buildDashboardPayload(): { comparisonKey: string; body: string } {
   const layoutState = useLayoutStore.getState();
   const settingsState = useSettingsStore.getState();
   const replayState = useReplayStore.getState();
 
-  return {
-    version: 1,
-    updatedAt: Date.now(),
+  const stableData = {
     layout: normalizeLayout(layoutState.layout),
     settings: {
       dataMode: settingsState.dataMode,
@@ -113,7 +113,7 @@ function buildDashboardSnapshot(): PersistedDashboardState {
     replay: {
       autoStartCamera: replayState.autoStartCamera,
       selectedDeviceId: replayState.selectedDeviceId,
-      boardCameraMode: 'autodarts',
+      boardCameraMode: 'autodarts' as BoardCameraMode,
       boardCameraDeviceId: replayState.boardCameraDeviceId,
       autodartsCamIndex: replayState.autodartsCamIndex,
       autodartsCamCustomUrl: replayState.autodartsCamCustomUrl,
@@ -123,25 +123,24 @@ function buildDashboardSnapshot(): PersistedDashboardState {
       playbackRate: replayState.playbackRate,
     },
   };
+
+  // Serialize once per dirty check and reuse for both comparison and HTTP body
+  const comparisonKey = JSON.stringify(stableData);
+  const body = `{"version":1,"updatedAt":${Date.now()},${comparisonKey.slice(1)}`;
+  return { comparisonKey, body };
 }
 
-function stableComparisonKey(snapshot: PersistedDashboardState): string {
-  return JSON.stringify({
-    layout: snapshot.layout,
-    settings: snapshot.settings,
-    players: snapshot.players,
-    replay: snapshot.replay,
-  });
-}
-
-async function postDashboardSnapshot(snapshot: PersistedDashboardState): Promise<boolean> {
+async function postDashboardSnapshot(body: string, useKeepalive = false): Promise<boolean> {
   try {
-    const res = await fetch('/api/dashboard/state', {
+    const init: RequestInit = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(snapshot),
-      keepalive: true,
-    });
+      body,
+    };
+    if (useKeepalive) {
+      init.keepalive = true;
+    }
+    const res = await fetch('/api/dashboard/state', init);
     return res.ok;
   } catch {
     return false;
@@ -155,23 +154,32 @@ export function flushDashboardStateToDisk(): void {
     saveTimer = null;
   }
 
-  const snapshot = buildDashboardSnapshot();
-  const key = stableComparisonKey(snapshot);
-  if (key === lastSerializedPayload) return;
-  lastSerializedPayload = key;
+  const { comparisonKey, body } = buildDashboardPayload();
+  if (comparisonKey === lastSerializedPayload) return;
 
-  const json = JSON.stringify(snapshot);
-  if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+  const blob = new Blob([body], { type: 'application/json' });
+  const withinKeepaliveLimit = blob.size <= MAX_KEEPALIVE_BYTES;
+
+  if (
+    withinKeepaliveLimit &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.sendBeacon === 'function'
+  ) {
     try {
-      const blob = new Blob([json], { type: 'application/json' });
       if (navigator.sendBeacon('/api/dashboard/state', blob)) {
+        lastSerializedPayload = comparisonKey;
         return;
       }
     } catch {
-      // fall back to keepalive fetch
+      // fall back to fetch
     }
   }
-  void postDashboardSnapshot(snapshot);
+
+  void postDashboardSnapshot(body, withinKeepaliveLimit).then((ok) => {
+    if (ok) {
+      lastSerializedPayload = comparisonKey;
+    }
+  });
 }
 
 export function scheduleDashboardDiskSave(delayMs = 180): void {
@@ -182,11 +190,13 @@ export function scheduleDashboardDiskSave(delayMs = 180): void {
   }
   saveTimer = window.setTimeout(() => {
     saveTimer = null;
-    const snapshot = buildDashboardSnapshot();
-    const key = stableComparisonKey(snapshot);
-    if (key === lastSerializedPayload) return;
-    lastSerializedPayload = key;
-    void postDashboardSnapshot(snapshot);
+    const { comparisonKey, body } = buildDashboardPayload();
+    if (comparisonKey === lastSerializedPayload) return;
+    void postDashboardSnapshot(body, false).then((ok) => {
+      if (ok) {
+        lastSerializedPayload = comparisonKey;
+      }
+    });
   }, delayMs);
 }
 
@@ -311,16 +321,18 @@ export function hydrateDashboardStateFromDisk(): Promise<boolean> {
           isApplyingDiskState = false;
         }
 
-        lastSerializedPayload = stableComparisonKey(buildDashboardSnapshot());
+        lastSerializedPayload = buildDashboardPayload().comparisonKey;
         hasHydratedFromDisk = true;
         return true;
       }
 
       // First run: disk file does not exist yet — seed ./data/dashboard-state.json from current stores
       hasHydratedFromDisk = true;
-      const initialSnapshot = buildDashboardSnapshot();
-      lastSerializedPayload = stableComparisonKey(initialSnapshot);
-      await postDashboardSnapshot(initialSnapshot);
+      const { comparisonKey, body } = buildDashboardPayload();
+      const seeded = await postDashboardSnapshot(body, false);
+      if (seeded) {
+        lastSerializedPayload = comparisonKey;
+      }
       return true;
     } catch {
       hasHydratedFromDisk = true;

@@ -155,8 +155,28 @@ export function applyDartToGauntlet(
 
 export function advanceGauntletVisit(state: GauntletState): GauntletState {
   if (state.isFinished) return state;
+
+  let highestVisit = state.highestVisit;
+  let recentVisits = state.recentVisits;
+  let ton60Plus = state.ton60Plus;
+  let ton100Plus = state.ton100Plus;
+
+  if (!state.turnComplete && state.visitDarts.length > 0) {
+    highestVisit = Math.max(highestVisit, state.visitScore);
+    recentVisits = [state.visitScore, ...recentVisits].slice(0, 12);
+    if (state.visitScore >= 100) {
+      ton100Plus += 1;
+    } else if (state.visitScore >= 60) {
+      ton60Plus += 1;
+    }
+  }
+
   return {
     ...state,
+    highestVisit,
+    recentVisits,
+    ton60Plus,
+    ton100Plus,
     visitDarts: [],
     visitScore: 0,
     turnComplete: false,

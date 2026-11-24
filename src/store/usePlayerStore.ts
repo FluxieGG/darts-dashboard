@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { PlayerProfile, PlayerStats } from '../types/stats';
 import { createEmptyPlayerStats, createEmptySegmentAccuracy } from '../services/simulator';
 import { DEFAULT_DART_COLOR, getDartColorLabel } from '../lib/playerThemes';
+import { safeLocalStorage } from '../lib/storage';
 
 export interface AddPlayerOptions {
   nickname?: string;
@@ -60,8 +61,21 @@ const PARTY_DEFAULT_PLAYER: PlayerProfile = {
   dartColorName: 'Purple',
 };
 
+function createInitializedPlayerStats(playerId: string, playerName: string): PlayerStats {
+  return {
+    ...createEmptyPlayerStats(playerId, playerName),
+    totalPointsScored: 0,
+    firstNinePoints: 0,
+    firstNineDartsCount: 0,
+  };
+}
+
+export const EMPTY_PLAYER_STATS: PlayerStats = Object.freeze(
+  createInitializedPlayerStats(PRIMARY_PLAYER.id, PRIMARY_PLAYER.name)
+);
+
 function createFreshPartyState() {
-  const freshStats = createEmptyPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name);
+  const freshStats = createInitializedPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name);
   return {
     activePartyPlayerId: PARTY_DEFAULT_PLAYER.id,
     partyPlayers: [{ ...PARTY_DEFAULT_PLAYER }],
@@ -78,7 +92,7 @@ export const usePlayerStore = create<PlayerState>()(
       activePlayerId: PRIMARY_PLAYER.id,
       players: [PRIMARY_PLAYER],
       playerStats: {
-        [PRIMARY_PLAYER.id]: createEmptyPlayerStats(PRIMARY_PLAYER.id, PRIMARY_PLAYER.name),
+        [PRIMARY_PLAYER.id]: createInitializedPlayerStats(PRIMARY_PLAYER.id, PRIMARY_PLAYER.name),
       },
 
       isPartyMode: false,
@@ -105,7 +119,7 @@ export const usePlayerStore = create<PlayerState>()(
           if (exists) {
             const nextStats =
               state.partyPlayerStats[playerId] ||
-              createEmptyPlayerStats(playerId, PARTY_DEFAULT_PLAYER.name);
+              createInitializedPlayerStats(playerId, PARTY_DEFAULT_PLAYER.name);
             set({ activePartyPlayerId: playerId, partyStats: nextStats });
           }
           return;
@@ -137,7 +151,7 @@ export const usePlayerStore = create<PlayerState>()(
             dartColorName: getDartColorLabel(dartColor),
             isSaved: false,
           };
-          const newStats = createEmptyPlayerStats(id, name);
+          const newStats = createInitializedPlayerStats(id, name);
           set((s) => ({
             partyPlayers: [...s.partyPlayers, tempProfile],
             partyPlayerStats: {
@@ -162,7 +176,7 @@ export const usePlayerStore = create<PlayerState>()(
           dartColorName: getDartColorLabel(dartColor),
           isSaved,
         };
-        const newStats = createEmptyPlayerStats(id, name);
+        const newStats = createInitializedPlayerStats(id, name);
 
         set((s) => ({
           players: [...s.players, newProfile],
@@ -234,7 +248,7 @@ export const usePlayerStore = create<PlayerState>()(
             activePartyPlayerId: nextActiveId,
             partyStats:
               remainingStats[nextActiveId] ||
-              createEmptyPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name),
+              createInitializedPlayerStats(PARTY_DEFAULT_PLAYER.id, PARTY_DEFAULT_PLAYER.name),
           });
           return;
         }
@@ -243,14 +257,15 @@ export const usePlayerStore = create<PlayerState>()(
         if (!target || target.isPrimary) return;
 
         const remainingPlayers = state.players.filter((p) => p.id !== playerId);
+        const safePlayers = remainingPlayers.length > 0 ? remainingPlayers : [PRIMARY_PLAYER];
         const remainingStats = { ...state.playerStats };
         delete remainingStats[playerId];
 
         set({
-          players: remainingPlayers,
+          players: safePlayers,
           playerStats: remainingStats,
           activePlayerId:
-            state.activePlayerId === playerId ? remainingPlayers[0].id : state.activePlayerId,
+            state.activePlayerId === playerId ? safePlayers[0].id : state.activePlayerId,
         });
       },
 
@@ -269,7 +284,9 @@ export const usePlayerStore = create<PlayerState>()(
           );
         }
         return (
-          state.players.find((p) => p.id === state.activePlayerId) || state.players[0]
+          state.players.find((p) => p.id === state.activePlayerId) ||
+          state.players[0] ||
+          PRIMARY_PLAYER
         );
       },
 
@@ -278,12 +295,13 @@ export const usePlayerStore = create<PlayerState>()(
         if (state.isPartyMode) {
           return (
             state.partyPlayerStats[state.activePartyPlayerId] ||
-            state.partyStats
+            state.partyStats ||
+            EMPTY_PLAYER_STATS
           );
         }
         const stats = state.playerStats[state.activePlayerId];
         if (stats) return stats;
-        return createEmptyPlayerStats(state.activePlayerId, PRIMARY_PLAYER.name);
+        return EMPTY_PLAYER_STATS;
       },
 
       updateActiveStats: (updater) => {
@@ -295,7 +313,7 @@ export const usePlayerStore = create<PlayerState>()(
               state.partyPlayers.find((p) => p.id === partyId) || PARTY_DEFAULT_PLAYER;
             const current =
               state.partyPlayerStats[partyId] ||
-              createEmptyPlayerStats(partyProfile.id, partyProfile.name);
+              createInitializedPlayerStats(partyProfile.id, partyProfile.name);
             const updated = updater(current);
             return {
               partyStats: updated,
@@ -306,8 +324,11 @@ export const usePlayerStore = create<PlayerState>()(
             };
           }
           const activeId = state.activePlayerId;
+          const activeProfile =
+            state.players.find((p) => p.id === activeId) || PRIMARY_PLAYER;
           const current =
-            state.playerStats[activeId] || createEmptyPlayerStats(activeId, PRIMARY_PLAYER.name);
+            state.playerStats[activeId] ||
+            createInitializedPlayerStats(activeId, activeProfile.name);
           const updated = updater(current);
           return {
             playerStats: {
@@ -325,7 +346,7 @@ export const usePlayerStore = create<PlayerState>()(
             const targetId = playerId || state.activePartyPlayerId;
             const profile =
               state.partyPlayers.find((p) => p.id === targetId) || PARTY_DEFAULT_PLAYER;
-            const fresh = createEmptyPlayerStats(profile.id, profile.name);
+            const fresh = createInitializedPlayerStats(profile.id, profile.name);
             return {
               partyStats: targetId === state.activePartyPlayerId ? fresh : state.partyStats,
               partyPlayerStats: {
@@ -360,6 +381,9 @@ export const usePlayerStore = create<PlayerState>()(
             recentVisits: [],
             sessionThrows: [],
             totalDartsThrown: 0,
+            totalPointsScored: 0,
+            firstNinePoints: 0,
+            firstNineDartsCount: 0,
           };
 
           return {
@@ -373,10 +397,12 @@ export const usePlayerStore = create<PlayerState>()(
     }),
     {
       name: 'autodarts_dashboard_players_v2',
+      storage: createJSONStorage(() => safeLocalStorage),
       // Persist ONLY saved accounts (isPrimary or isSaved !== false) and NEVER Party Mode data
       partialize: (state) => {
         const savedPlayers = state.players.filter((p) => p.isPrimary || p.isSaved !== false);
-        const savedIds = new Set(savedPlayers.map((p) => p.id));
+        const safePlayers = savedPlayers.length > 0 ? savedPlayers : [PRIMARY_PLAYER];
+        const savedIds = new Set(safePlayers.map((p) => p.id));
         const savedStats: Record<string, PlayerStats> = {};
         for (const [id, stats] of Object.entries(state.playerStats)) {
           if (savedIds.has(id)) {
@@ -386,10 +412,56 @@ export const usePlayerStore = create<PlayerState>()(
         return {
           activePlayerId: savedIds.has(state.activePlayerId)
             ? state.activePlayerId
-            : savedPlayers[0]?.id || PRIMARY_PLAYER.id,
-          players: savedPlayers,
+            : safePlayers[0].id,
+          players: safePlayers,
           playerStats: savedStats,
         };
+      },
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState as Partial<PlayerState>) || {};
+        const rawPlayers = Array.isArray(persisted.players)
+          ? persisted.players.filter((p): p is PlayerProfile => Boolean(p && p.id))
+          : [];
+        const players = rawPlayers.length > 0 ? rawPlayers : [PRIMARY_PLAYER];
+        const playerIds = new Set(players.map((p) => p.id));
+        const activePlayerId =
+          persisted.activePlayerId && playerIds.has(persisted.activePlayerId)
+            ? persisted.activePlayerId
+            : players[0].id;
+        const mergedStats: Record<string, PlayerStats> = {
+          ...currentState.playerStats,
+          ...(persisted.playerStats && typeof persisted.playerStats === 'object'
+            ? persisted.playerStats
+            : {}),
+        };
+        for (const player of players) {
+          if (!mergedStats[player.id]) {
+            mergedStats[player.id] = createInitializedPlayerStats(player.id, player.name);
+          }
+        }
+        return {
+          ...currentState,
+          activePlayerId,
+          players,
+          playerStats: mergedStats,
+        };
+      },
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        if (!Array.isArray(state.players) || state.players.length === 0) {
+          state.players = [PRIMARY_PLAYER];
+        }
+        if (!state.playerStats || typeof state.playerStats !== 'object') {
+          state.playerStats = {};
+        }
+        for (const player of state.players) {
+          if (!state.playerStats[player.id]) {
+            state.playerStats[player.id] = createInitializedPlayerStats(player.id, player.name);
+          }
+        }
+        if (!state.players.some((p) => p.id === state.activePlayerId)) {
+          state.activePlayerId = state.players[0].id;
+        }
       },
     }
   )

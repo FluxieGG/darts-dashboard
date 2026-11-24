@@ -20,8 +20,6 @@ import {
   Trophy,
   Undo2,
   Users,
-  Volume2,
-  VolumeX,
   X,
 } from 'lucide-react';
 import { GameDefinition } from '../../types/games';
@@ -29,6 +27,9 @@ import { RemoteActiveGameSnapshot, RemoteCommand, RemoteKioskState } from '../..
 import { DART_COLOR_OPTIONS, DEFAULT_DART_COLOR } from '../../lib/playerThemes';
 import { Badge } from '../common/Badge';
 import { cn } from '../../lib/utils';
+
+const formatNum = (value: unknown, digits = 1, fallback = '0.0'): string =>
+  typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : fallback;
 
 interface CompanionGameProfile {
   /** Compact oche cheat-sheet chips tailored to this exact game/drill */
@@ -290,15 +291,19 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
     setConfirmAction(null);
   }, [activeGame.phase, activeGame.id]);
 
-  const canUndoNow = activeGame.phase === 'playing' && activeGame.canUndo;
-  const camBuffering = state.replayStatus === 'buffering';
-  const camCapturing = state.replayStatus === 'capturing';
+  const roster = activeGame?.roster ?? [];
+  const savedPlayers = state?.players ?? [];
+  const activePlayerName = state?.activePlayer?.name || 'Player';
+  const activePlayerColor = state?.activePlayer?.dartColor || DEFAULT_DART_COLOR;
+  const canUndoNow = activeGame.phase === 'playing' && Boolean(activeGame.canUndo);
+  const camBuffering = state?.replayStatus === 'buffering';
+  const camCapturing = state?.replayStatus === 'capturing';
   const quickTargets = profile.quickTargets || DEFAULT_QUICK_TARGETS;
 
   const handleToggleRulesOnTv = () => {
     void dispatch(
       { type: 'toggle_rules_overlay' },
-      state.isRulesOpen ? 'Closed Guide on Vertical TV' : `Showing ${gameDef.title} Guide on Vertical TV!`
+      state?.isRulesOpen ? 'Closed Guide on Vertical TV' : `Showing ${gameDef.title} Guide on Vertical TV!`
     );
   };
 
@@ -349,19 +354,19 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
 
   // Shared Replay Banner when a clip just recorded or replay is active on TV
   const renderReplayAlert = () => {
-    if (!state.hasActiveReplayOverlay && !state.lastRecording) return null;
+    if (!state?.hasActiveReplayOverlay && !state?.lastRecording) return null;
     return (
       <div
         className={cn(
           'rounded-2xl p-3.5 border-2 space-y-3 transition-all',
-          state.hasActiveReplayOverlay
+          state?.hasActiveReplayOverlay
             ? 'bg-rose-950/35 border-rose-400/65 shadow-[0_0_28px_-4px_rgba(244,63,94,0.45)]'
-            : state.lastRecording?.isSaved
+            : state?.lastRecording?.isSaved
             ? 'bg-emerald-500/10 border-emerald-400/35'
             : 'bg-emerald-500/15 border-emerald-400/75 shadow-[0_0_24px_-4px_rgba(16,185,129,0.45)]'
         )}
       >
-        {state.lastRecording && (
+        {state?.lastRecording && (
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs font-mono uppercase tracking-wider font-black text-emerald-300 flex items-center gap-1.5">
@@ -378,8 +383,8 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                 )}
               </div>
               <div className="text-sm font-bold text-white truncate mt-0.5">
-                {state.lastRecording.playerName} • {state.lastRecording.reason} (
-                {state.lastRecording.durationSec.toFixed(1)}s)
+                {state.lastRecording.playerName || 'Player'} • {state.lastRecording.reason || 'Clip'} (
+                {formatNum(state.lastRecording?.durationSec, 1)}s)
               </div>
             </div>
 
@@ -399,7 +404,7 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
           </div>
         )}
 
-        {state.hasActiveReplayOverlay && (
+        {state?.hasActiveReplayOverlay && (
           <div className="pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-mono uppercase text-slate-400 flex items-center gap-1 mr-0.5">
@@ -615,13 +620,13 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                 </h3>
                 <Badge
                   variant={
-                    activeGame.roster.length >= activeGame.minPlayers ? 'emerald' : 'amber'
+                    roster.length >= activeGame.minPlayers ? 'emerald' : 'amber'
                   }
                   size="sm"
                 >
                   {isPractice
-                    ? activeGame.roster[0]?.name || state.activePlayer.name
-                    : `${activeGame.roster.length} / ${activeGame.maxPlayers} (min ${activeGame.minPlayers})`}
+                    ? roster[0]?.name || activePlayerName
+                    : `${roster.length} / ${activeGame.maxPlayers} (min ${activeGame.minPlayers})`}
                 </Badge>
               </div>
 
@@ -632,17 +637,16 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                       className="w-3.5 h-3.5 rounded-full shrink-0"
                       style={{
                         backgroundColor:
-                          activeGame.roster[0]?.colorHex ||
-                          state.activePlayer.dartColor ||
-                          DEFAULT_DART_COLOR,
+                          roster[0]?.colorHex ||
+                          activePlayerColor,
                       }}
                     />
                     <div className="min-w-0">
                       <div className="text-sm sm:text-base font-black text-white truncate">
-                        {activeGame.roster[0]?.name || state.activePlayer.name}
+                        {roster[0]?.name || activePlayerName}
                       </div>
                       <div className="text-[11px] font-mono text-slate-400">
-                        {state.isPartyMode
+                        {state?.isPartyMode
                           ? 'Party Mode Temp Session (Not Saved)'
                           : 'Records saved to Hall of Fame & Career Vault'}
                       </div>
@@ -653,16 +657,16 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                 <>
                   {/* Active Roster Chips */}
                   <div className="flex flex-wrap gap-2">
-                    {activeGame.roster.map((p, idx) => (
+                    {roster.map((p, idx) => (
                       <span
                         key={p.id}
                         className="inline-flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl bg-slate-900 border border-white/15 text-xs sm:text-sm font-bold text-white"
-                        style={{ borderColor: `${p.colorHex}55` }}
+                        style={{ borderColor: `${p.colorHex || DEFAULT_DART_COLOR}55` }}
                       >
                         <span className="text-[10px] font-mono text-slate-400">#{idx + 1}</span>
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: p.colorHex }}
+                          style={{ backgroundColor: p.colorHex || DEFAULT_DART_COLOR }}
                         />
                         {p.name}
                         <button
@@ -682,13 +686,13 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                   </div>
 
                   {/* Quick-Add Saved Profiles */}
-                  {state.players.some((sp) => !activeGame.roster.some((r) => r.id === sp.id)) && (
+                  {savedPlayers.some((sp) => !roster.some((r) => r.id === sp.id)) && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[10px] font-mono uppercase text-slate-400 mr-1">
                         Quick Add:
                       </span>
-                      {state.players
-                        .filter((sp) => !activeGame.roster.some((r) => r.id === sp.id))
+                      {savedPlayers
+                        .filter((sp) => !roster.some((r) => r.id === sp.id))
                         .map((sp) => (
                           <button
                             key={sp.id}
@@ -770,28 +774,6 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                   <Sliders className="w-4 h-4 text-sky-400" />
                   {isPractice ? 'Drill Settings' : 'Match Settings'}
                 </h3>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void dispatch(
-                      { type: 'toggle_sound' },
-                      state.soundEnabled ? 'Sound Muted' : 'Sound Unmuted'
-                    )
-                  }
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-xs font-bold text-slate-200 cursor-pointer"
-                >
-                  {state.soundEnabled ? (
-                    <>
-                      <Volume2 className="w-3.5 h-3.5 text-sky-400" />
-                      SFX On
-                    </>
-                  ) : (
-                    <>
-                      <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                      Muted
-                    </>
-                  )}
-                </button>
               </div>
 
               {gameDef.configOptions.length === 0 ? (
@@ -882,7 +864,7 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
               {/* Primary Start CTA */}
               <button
                 type="button"
-                disabled={activeGame.roster.length < activeGame.minPlayers}
+                disabled={roster.length < activeGame.minPlayers}
                 onClick={() =>
                   void dispatch({ type: 'start_match' }, `Started ${gameDef.title}!`)
                 }
@@ -894,7 +876,7 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                 )}
               >
                 <Play className="w-5 h-5 fill-current" />
-                {activeGame.roster.length < activeGame.minPlayers
+                {roster.length < activeGame.minPlayers
                   ? `Add at least ${activeGame.minPlayers} players`
                   : `Start ${gameDef.title}`}
               </button>
@@ -937,9 +919,8 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                       className="w-3 h-3 rounded-full shrink-0"
                       style={{
                         backgroundColor:
-                          state.activeTintHex ||
-                          state.activePlayer.dartColor ||
-                          DEFAULT_DART_COLOR,
+                          state?.activeTintHex ||
+                          activePlayerColor,
                       }}
                     />
                     <span className="text-xs font-mono uppercase tracking-wider font-black text-slate-300 truncate">
@@ -948,25 +929,25 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                   </div>
                   <Badge
                     variant={
-                      state.boardStatus === 'takeout'
+                      state?.boardStatus === 'takeout'
                         ? 'amber'
-                        : state.isLocalConnected
+                        : state?.isLocalConnected
                         ? 'emerald'
                         : 'slate'
                     }
                     size="sm"
                   >
-                    {state.boardStatus === 'takeout'
+                    {state?.boardStatus === 'takeout'
                       ? 'PULL DARTS'
-                      : state.isLocalConnected
+                      : state?.isLocalConnected
                       ? 'AUTODARTS LIVE'
-                      : state.dataMode.toUpperCase()}
+                      : (state?.dataMode || 'local').toUpperCase()}
                   </Badge>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2.5">
                   {[0, 1, 2].map((idx) => {
-                    const dart = state.currentVisitThrows[idx];
+                    const dart = state?.currentVisitThrows?.[idx];
                     return (
                       <div
                         key={idx}
@@ -998,7 +979,7 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                   <div className="h-16 sm:h-20 rounded-xl bg-slate-900/90 border-2 border-white/15 flex flex-col items-center justify-center">
                     <span className="text-[10px] font-mono uppercase text-slate-400">Visit</span>
                     <span className="text-2xl sm:text-3xl font-black font-mono tabular-nums text-white leading-none mt-0.5">
-                      {state.visitScore}
+                      {state?.visitScore ?? 0}
                     </span>
                   </div>
                 </div>
@@ -1206,73 +1187,48 @@ export const GameCompanionScreen: React.FC<GameCompanionScreenProps> = ({
                   </div>
                 </button>
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    disabled={!camBuffering || camCapturing}
-                    onClick={() =>
-                      void dispatch(
-                        { type: 'trigger_manual_replay' },
-                        'Recording 20s Clip (15s back + 5s)!'
-                      )
-                    }
-                    className={cn(
-                      'p-3.5 rounded-xl border flex items-center justify-center gap-2 text-xs font-black transition-all active:scale-[0.97]',
-                      camCapturing
-                        ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
-                        : camBuffering
-                        ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
-                        : 'bg-slate-900/60 border-white/10 opacity-45 text-slate-500 cursor-not-allowed'
-                    )}
-                  >
-                    <Clapperboard className="w-4 h-4 shrink-0" />
-                    <span>{camCapturing ? 'Capturing...' : 'Clip That! (20s)'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void dispatch(
-                        { type: 'toggle_sound' },
-                        state.soundEnabled ? 'Sound Muted' : 'Sound Unmuted'
-                      )
-                    }
-                    className="p-3.5 rounded-xl bg-slate-900/80 border border-white/15 hover:border-white/30 flex items-center justify-center gap-2 text-xs font-black text-slate-200 active:scale-[0.97] cursor-pointer"
-                  >
-                    {state.soundEnabled ? (
-                      <>
-                        <Volume2 className="w-4 h-4 text-sky-400 shrink-0" />
-                        <span>Audio On</span>
-                      </>
-                    ) : (
-                      <>
-                        <VolumeX className="w-4 h-4 text-rose-400 shrink-0" />
-                        <span className="text-rose-300">Muted</span>
-                      </>
-                    )}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  disabled={!camBuffering || camCapturing}
+                  onClick={() =>
+                    void dispatch(
+                      { type: 'trigger_manual_replay' },
+                      'Recording 20s Clip (15s back + 5s)!'
+                    )
+                  }
+                  className={cn(
+                    'w-full p-3.5 rounded-xl border flex items-center justify-center gap-2 text-xs font-black transition-all active:scale-[0.97]',
+                    camCapturing
+                      ? 'bg-rose-500/25 border-rose-400/60 text-rose-200 animate-pulse'
+                      : camBuffering
+                      ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/45 text-rose-200 cursor-pointer'
+                      : 'bg-slate-900/60 border-white/10 opacity-45 text-slate-500 cursor-not-allowed'
+                  )}
+                >
+                  <Clapperboard className="w-4 h-4 shrink-0" />
+                  <span>{camCapturing ? 'Capturing...' : 'Clip That! (20s)'}</span>
+                </button>
               </section>
 
               {/* Active Players Roster */}
               <section className="card-matte rounded-2xl p-4 space-y-2.5">
                 <div className="text-xs font-mono uppercase tracking-wider font-black text-slate-400 flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5 text-emerald-400" />
-                  {isPractice ? 'Solo Trainer' : `Players (${activeGame.roster.length})`}
+                  {isPractice ? 'Solo Trainer' : `Players (${roster.length})`}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {activeGame.roster.map((p, idx) => (
+                  {roster.map((p, idx) => (
                     <span
                       key={p.id}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/85 border text-xs font-bold text-white"
-                      style={{ borderColor: `${p.colorHex}55` }}
+                      style={{ borderColor: `${p.colorHex || DEFAULT_DART_COLOR}55` }}
                     >
                       {!isPractice && (
                         <span className="text-[10px] font-mono text-slate-400">#{idx + 1}</span>
                       )}
                       <span
                         className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: p.colorHex }}
+                        style={{ backgroundColor: p.colorHex || DEFAULT_DART_COLOR }}
                       />
                       {p.name}
                     </span>

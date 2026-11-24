@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useId, useMemo } from 'react';
 import { DartThrow } from '../../types/darts';
 import { coordsToSvg } from '../../lib/geometry';
 
@@ -17,10 +17,20 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
   center = 200,
   boardScale = 145,
 }) => {
-  // Convert throws with coordinates to SVG positions
+  const uid = useId().replace(/:/g, '');
+  const currentDartGlowId = `${uid}-currentDartGlow`;
+  const heatRadialId = `${uid}-heatRadial`;
+
+  // Convert throws with finite coordinates to SVG positions
   const sessionPoints = useMemo(() => {
-    return sessionThrows
-      .filter((t) => t.coords && !t.bouncer)
+    return (sessionThrows ?? [])
+      .filter(
+        (t) =>
+          Boolean(t) &&
+          !t.bouncer &&
+          Number.isFinite(t.coords?.x) &&
+          Number.isFinite(t.coords?.y)
+      )
       .slice(0, 120) // Cap display for smooth high-FPS rendering
       .map((t, idx) => {
         const { svgX, svgY } = coordsToSvg(t.coords!, center, boardScale);
@@ -29,7 +39,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
           svgX,
           svgY,
           score: t.score,
-          segment: t.segment.name,
+          segment: t.segment?.name ?? '',
           ageIndex: idx,
         };
       });
@@ -37,8 +47,14 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
 
   // Current active visit points (up to 3)
   const currentVisitPoints = useMemo(() => {
-    return currentVisitThrows
-      .filter((t) => t.coords && !t.bouncer)
+    return (currentVisitThrows ?? [])
+      .filter(
+        (t) =>
+          Boolean(t) &&
+          !t.bouncer &&
+          Number.isFinite(t.coords?.x) &&
+          Number.isFinite(t.coords?.y)
+      )
       .map((t, idx) => {
         const { svgX, svgY } = coordsToSvg(t.coords!, center, boardScale);
         return {
@@ -46,7 +62,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
           dartNumber: idx + 1,
           svgX,
           svgY,
-          segment: t.segment.name,
+          segment: t.segment?.name ?? '',
           score: t.score,
         };
       });
@@ -60,7 +76,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
     const valid = sessionPoints.slice(0, 80);
     if (valid.length === 0) return [];
 
-    // Group nearby points within 18 SVG units
+    // Group nearby points within 22 SVG units
     const clusters: Array<{ x: number; y: number; weight: number }> = [];
 
     valid.forEach((pt) => {
@@ -84,10 +100,10 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
   }, [sessionPoints, mode]);
 
   return (
-    <g id="dart-overlay" className="pointer-events-none">
+    <g id={`${uid}-dart-overlay`} className="pointer-events-none">
       <defs>
         {/* Glow filters */}
-        <filter id="currentDartGlow" x="-50%" y="-50%" width="200%" height="200%">
+        <filter id={currentDartGlowId} x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
@@ -95,7 +111,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
           </feMerge>
         </filter>
 
-        <radialGradient id="heatRadial">
+        <radialGradient id={heatRadialId}>
           <stop offset="0%" stopColor="#10B981" stopOpacity="0.7" />
           <stop offset="40%" stopColor="#F59E0B" stopOpacity="0.45" />
           <stop offset="80%" stopColor="#F43F5E" stopOpacity="0.2" />
@@ -103,9 +119,9 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
         </radialGradient>
       </defs>
 
-      {/* Mode: Density Heatmap (Glowing cluster zones) */}
+      {/* Mode: Density Heatmap (Static crisp radial glow clusters — zero 60fps repaint churn) */}
       {(mode === 'density' || mode === 'both') && (
-        <g id="density-clusters" opacity="0.85">
+        <g id={`${uid}-density-clusters`} opacity="0.85">
           {densityClusters.map((cluster, i) => {
             const radius = Math.min(16 + cluster.weight * 5, 42);
             const opacity = Math.min(0.25 + cluster.weight * 0.12, 0.75);
@@ -115,9 +131,9 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
                 cx={cluster.x}
                 cy={cluster.y}
                 r={radius}
-                fill="url(#heatRadial)"
+                fill={`url(#${heatRadialId})`}
                 opacity={opacity}
-                className="mix-blend-screen animate-pulse-glow"
+                className="mix-blend-screen"
               />
             );
           })}
@@ -126,7 +142,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
 
       {/* Mode: Dot Plot (Session throws) */}
       {(mode === 'dots' || mode === 'both') && (
-        <g id="session-dots">
+        <g id={`${uid}-session-dots`}>
           {sessionPoints.map((pt) => {
             // Decay opacity for older darts
             const opacity = Math.max(0.3, 0.92 - pt.ageIndex * 0.012);
@@ -147,7 +163,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
       )}
 
       {/* Current Visit Throws (Prominently highlighted with dart index for 8ft visibility) */}
-      <g id="current-visit-dots">
+      <g id={`${uid}-current-visit-dots`}>
         {currentVisitPoints.map((pt) => (
           <g key={`cur-${pt.id}`} className="transition-all duration-300">
             {/* Outer pulsating beacon */}
@@ -158,6 +174,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
               fill="#10B981"
               opacity="0.35"
               className="animate-ping"
+              style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
             />
             {/* Dart Pin Head */}
             <circle
@@ -167,7 +184,7 @@ export const DartPlotOverlay: React.FC<DartPlotOverlayProps> = ({
               fill="#10B981"
               stroke="#FFFFFF"
               strokeWidth="2.2"
-              filter="url(#currentDartGlow)"
+              filter={`url(#${currentDartGlowId})`}
             />
             {/* Dart Number Label */}
             <text

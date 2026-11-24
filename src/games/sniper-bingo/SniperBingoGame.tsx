@@ -149,6 +149,7 @@ export const SniperBingoGame: React.FC<GameModuleProps> = ({
     const prev = stack[stack.length - 1];
     commitState(prev.state, prev.turnStartState, stack.slice(0, -1));
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.visitEntries.map((e) => e.dart));
   }, [commitState]);
 
   const handleRestart = useCallback(() => {
@@ -234,13 +235,17 @@ export const SniperBingoGame: React.FC<GameModuleProps> = ({
   );
 
   const activeMatchPoints = useMemo(
-    () => getMatchPointIndices(activePlayer.card, state.config.winPattern),
-    [activePlayer.card, state.config.winPattern]
+    () =>
+      activePlayer
+        ? getMatchPointIndices(activePlayer.card, state.config.winPattern)
+        : new Set<number>(),
+    [activePlayer, state.config.winPattern]
   );
 
   // Highlight ONLY the active player's remaining unstamped targets on SvgDartboard
   const segmentOverlays = useMemo<Record<string, SegmentOverlayStyle>>(() => {
     const overlays: Record<string, SegmentOverlayStyle> = {};
+    if (!activePlayer) return overlays;
 
     for (const sq of activePlayer.card) {
       if (sq.stamped) continue;
@@ -276,7 +281,9 @@ export const SniperBingoGame: React.FC<GameModuleProps> = ({
     }
 
     return overlays;
-  }, [activePlayer.card, activeMatchPoints]);
+  }, [activePlayer, activeMatchPoints]);
+
+  if (!activePlayer) return null;
 
   const isPro = state.config.cardMode === 'pro';
   const isBlackout = state.config.winPattern === 'blackout';

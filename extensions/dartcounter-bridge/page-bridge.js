@@ -7,13 +7,32 @@
 
 (() => {
   if (window.__AUTODARTS_DC_PAGE_BRIDGE__) return;
-  window.__AUTODARTS_DC_PAGE_BRIDGE__ = true;
-  document.documentElement.dataset.adPageBridgeReady = '1';
+
+  function markPageBridgeReady() {
+    if (document.documentElement?.dataset) {
+      document.documentElement.dataset.adPageBridgeReady = '1';
+    }
+  }
+  markPageBridgeReady();
+  if (!document.documentElement?.dataset) {
+    document.addEventListener('DOMContentLoaded', markPageBridgeReady, { once: true });
+  }
 
   let chMap = null;
   const lViewCache = new Map();
   let dcCoreMod = null;
   let ionicCoreMod = null;
+  let dcCoreLoadAttempted = 0;
+  let dcCoreLastAttemptAt = 0;
+  let ionicCoreLoadAttempted = 0;
+  let ionicCoreLastAttemptAt = 0;
+  const CHUNK_RETRY_COOLDOWN_MS = 60000;
+  const CHUNK_MAX_RETRIES = 3;
+
+  let cachedServices = null;
+  let cachedServicesRoute = '';
+  let lastServicesMissRefreshAt = 0;
+  let isPublishing = false;
   let lastFriendsLoadAt = 0;
 
   const origMapSet = Map.prototype.set;
@@ -34,7 +53,7 @@
   Map.prototype.set = function (k, v) {
     if (this !== lViewCache && isLikelyLView(k, v)) {
       chMap = this;
-      origMapSet.call(lViewCache, k, v);
+      if (lViewCache.size > 0) lViewCache.clear();
     }
     return origMapSet.call(this, k, v);
   };
@@ -43,7 +62,7 @@
     const res = origMapGet.call(this, k);
     if (this !== lViewCache && isLikelyLView(k, res)) {
       if (!chMap) chMap = this;
-      origMapSet.call(lViewCache, k, res);
+      if (lViewCache.size > 0) lViewCache.clear();
     }
     return res;
   };
@@ -57,14 +76,27 @@
 
   async function ensureCoreModules() {
     const origin = window.location.origin;
-    if (!dcCoreMod) {
+    const now = Date.now();
+    if (
+      !dcCoreMod &&
+      dcCoreLoadAttempted < CHUNK_MAX_RETRIES &&
+      (dcCoreLastAttemptAt === 0 || now - dcCoreLastAttemptAt >= CHUNK_RETRY_COOLDOWN_MS)
+    ) {
+      dcCoreLoadAttempted++;
+      dcCoreLastAttemptAt = now;
       try {
         dcCoreMod = await import(`${origin}/chunk-DNB4GH5K.js`);
       } catch {
         // ignore if chunk hash ever changes
       }
     }
-    if (!ionicCoreMod) {
+    if (
+      !ionicCoreMod &&
+      ionicCoreLoadAttempted < CHUNK_MAX_RETRIES &&
+      (ionicCoreLastAttemptAt === 0 || now - ionicCoreLastAttemptAt >= CHUNK_RETRY_COOLDOWN_MS)
+    ) {
+      ionicCoreLoadAttempted++;
+      ionicCoreLastAttemptAt = now;
       try {
         ionicCoreMod = await import(`${origin}/chunk-PA3TTISV.js`);
       } catch {
@@ -74,29 +106,49 @@
     return { dcCoreMod, ionicCoreMod };
   }
 
+  function isViewConnected(lv) {
+    if (!Array.isArray(lv)) return false;
+    if (lv[0] instanceof Node && !lv[0].isConnected) return false;
+    return true;
+  }
+
+  function pruneLViewCache() {
+    if (chMap) {
+      if (lViewCache.size > 0) lViewCache.clear();
+      return;
+    }
+    for (const [k, lv] of lViewCache.entries()) {
+      if (!isViewConnected(lv)) {
+        origMapDelete.call(lViewCache, k);
+      }
+    }
+  }
+
   function getAllLViews() {
+    pruneLViewCache();
     const views = [];
     const seen = new Set();
     if (chMap && typeof chMap.values === 'function') {
       for (const v of chMap.values()) {
-        if (Array.isArray(v) && !seen.has(v)) {
+        if (isViewConnected(v) && !seen.has(v)) {
+          seen.add(v);
+          views.push(v);
+        }
+      }
+    } else {
+      for (const v of lViewCache.values()) {
+        if (isViewConnected(v) && !seen.has(v)) {
           seen.add(v);
           views.push(v);
         }
       }
     }
-    for (const v of lViewCache.values()) {
-      if (Array.isArray(v) && !seen.has(v)) {
-        seen.add(v);
-        views.push(v);
-      }
-    }
     return views;
   }
 
-  function getComponentForElement(el) {
+  function getComponentForElement(el, viewsOverride) {
     if (!el) return null;
-    const views = getAllLViews();
+    const views = viewsOverride || getAllLViews();
     for (const lv of views) {
       if (lv[0] === el && lv[8] && typeof lv[8] === 'object') {
         return lv[8];
@@ -121,10 +173,11 @@
     return null;
   }
 
-  function getAllComponents() {
+  function getAllComponents(viewsOverride) {
+    const views = viewsOverride || getAllLViews();
     const comps = [];
     const seen = new Set();
-    for (const lv of getAllLViews()) {
+    for (const lv of views) {
       const c = lv[8];
       if (c && typeof c === 'object' && !seen.has(c)) {
         seen.add(c);
@@ -134,14 +187,16 @@
     return comps;
   }
 
-  function getAnyInjector() {
-    for (const lv of getAllLViews()) {
+  function getAnyInjector(viewsOverride, compsOverride) {
+    const views = viewsOverride || getAllLViews();
+    for (const lv of views) {
       const inj = lv[9];
       if (inj && typeof inj.get === 'function') {
         return inj;
       }
     }
-    for (const c of getAllComponents()) {
+    const comps = compsOverride || getAllComponents(views);
+    for (const c of comps) {
       if (c.injector && typeof c.injector.get === 'function') {
         return c.injector;
       }
@@ -153,43 +208,76 @@
    * Finds a service either by unminified property name on any live component
    * (e.g. 'authService', 'onlinePlayStateService', 'navController') OR via injector.get(token).
    */
-  function getService(propName, token) {
-    for (const c of getAllComponents()) {
+  function getService(propName, token, comps, inj) {
+    for (const c of comps) {
       if (c && c[propName] && typeof c[propName] === 'object') {
         return c[propName];
       }
     }
-    if (token) {
-      const inj = getAnyInjector();
-      if (inj) {
-        try {
-          const svc = inj.get(token, null);
-          if (svc) return svc;
-        } catch {
-          // ignore
-        }
+    if (token && inj) {
+      try {
+        const svc = inj.get(token, null);
+        if (svc) return svc;
+      } catch {
+        // ignore
       }
     }
     return null;
   }
 
-  async function getCoreServices() {
+  async function getCoreServices(viewsOverride, forceRefresh = false) {
+    const currentRoute = window.location.pathname;
+    const now = Date.now();
+    const hasCoreCached = Boolean(
+      cachedServices &&
+        cachedServices.authService &&
+        cachedServices.onlinePlayStateService &&
+        cachedServices.navController
+    );
+
+    if (
+      !forceRefresh &&
+      cachedServices &&
+      cachedServicesRoute === currentRoute &&
+      (hasCoreCached || now - lastServicesMissRefreshAt < 2500)
+    ) {
+      return cachedServices;
+    }
+
     const { dcCoreMod: dc, ionicCoreMod: ionic } = await ensureCoreModules();
-    return {
+    const views = viewsOverride || getAllLViews();
+    const comps = getAllComponents(views);
+    const inj = getAnyInjector(views, comps);
+    const prev = cachedServices || {};
+
+    cachedServices = {
       dc,
       ionic,
-      authService: getService('authService', dc?.dh),
-      onlinePlayStateService: getService('onlinePlayStateService', dc?.sg),
-      onlinePlayGameInviteService: getService('onlinePlayGameInviteService', dc?.xf),
-      onlinePlayGameSettingsStateService: getService('onlinePlayGameSettingsStateService', dc?.wd),
-      onlinePlayPreGameService: getService('onlinePlayPreGameService', dc?.Jg),
-      newLocalGameStateService: getService('newLocalGameStateService', dc?.Tc),
-      dartBotSettingsService: getService('dartBotSettingsService', dc?.fb),
-      preferenceService: getService('preferenceService', dc?.B),
-      modalService: getService('modalService', dc?.X),
-      localGamesRoutingService: getService('localGamesRoutingService', dc?.Df),
-      navController: getService('navController', ionic?.P),
+      authService: prev.authService || getService('authService', dc?.dh, comps, inj),
+      onlinePlayStateService:
+        prev.onlinePlayStateService || getService('onlinePlayStateService', dc?.sg, comps, inj),
+      onlinePlayGameInviteService:
+        prev.onlinePlayGameInviteService ||
+        getService('onlinePlayGameInviteService', dc?.xf, comps, inj),
+      onlinePlayGameSettingsStateService:
+        prev.onlinePlayGameSettingsStateService ||
+        getService('onlinePlayGameSettingsStateService', dc?.wd, comps, inj),
+      onlinePlayPreGameService:
+        prev.onlinePlayPreGameService || getService('onlinePlayPreGameService', dc?.Jg, comps, inj),
+      newLocalGameStateService:
+        prev.newLocalGameStateService || getService('newLocalGameStateService', dc?.Tc, comps, inj),
+      dartBotSettingsService:
+        prev.dartBotSettingsService || getService('dartBotSettingsService', dc?.fb, comps, inj),
+      preferenceService:
+        prev.preferenceService || getService('preferenceService', dc?.B, comps, inj),
+      modalService: prev.modalService || getService('modalService', dc?.X, comps, inj),
+      localGamesRoutingService:
+        prev.localGamesRoutingService || getService('localGamesRoutingService', dc?.Df, comps, inj),
+      navController: prev.navController || getService('navController', ionic?.P, comps, inj),
     };
+    cachedServicesRoute = currentRoute;
+    lastServicesMissRefreshAt = now;
+    return cachedServices;
   }
 
   function seedDartCounterLocalStorage(opts = {}) {
@@ -244,7 +332,7 @@
     }
   }
 
-  function extractNgMatchState(svcs) {
+  function extractNgMatchState(svcs, viewsOverride) {
     const localEl = document.querySelector('app-match-local-game');
     const onlineEl = document.querySelector('app-match-online-gameplay');
     const layoutEl = document.querySelector(
@@ -252,9 +340,9 @@
     );
 
     const comp =
-      getComponentForElement(localEl) ||
-      getComponentForElement(onlineEl) ||
-      getComponentForElement(layoutEl);
+      getComponentForElement(localEl, viewsOverride) ||
+      getComponentForElement(onlineEl, viewsOverride) ||
+      getComponentForElement(layoutEl, viewsOverride);
 
     if (!comp) return null;
 
@@ -486,11 +574,11 @@
   /**
    * Automatically handles intermediate pre-game or throwout dialogs when appropriate
    */
-  async function autoAdvanceIntermediateScreens() {
+  async function autoAdvanceIntermediateScreens(viewsOverride) {
     // 1. If <app-pre-game> is active and user hasn't readied up yet, ready up automatically!
     const preGameEl = document.querySelector('app-pre-game');
     if (preGameEl) {
-      const preComp = getComponentForElement(preGameEl);
+      const preComp = getComponentForElement(preGameEl, viewsOverride);
       if (preComp) {
         try {
           const hasReadied =
@@ -516,11 +604,14 @@
   }
 
   async function publishSnapshot() {
+    if (isPublishing) return;
+    isPublishing = true;
     try {
-      const svcs = await getCoreServices();
-      await autoAdvanceIntermediateScreens();
+      const views = getAllLViews();
+      const svcs = await getCoreServices(views, false);
+      await autoAdvanceIntermediateScreens(views);
 
-      const matchState = extractNgMatchState(svcs);
+      const matchState = extractNgMatchState(svcs, views);
       const { onlineFriends, pendingInvites, outgoingInviteTo } = extractFriendsAndInvites(svcs);
 
       const snapshot = {
@@ -533,10 +624,14 @@
         updatedAt: Date.now(),
       };
 
-      document.documentElement.dataset.adNgSnapshot = JSON.stringify(snapshot);
+      if (document.documentElement?.dataset) {
+        document.documentElement.dataset.adNgSnapshot = JSON.stringify(snapshot);
+      }
       window.dispatchEvent(new CustomEvent('ad-dc-ng-snapshot'));
     } catch {
       // ignore transient errors during route transitions
+    } finally {
+      isPublishing = false;
     }
   }
 
@@ -618,7 +713,8 @@
     };
 
     try {
-      const svcs = await getCoreServices();
+      const cmdViews = getAllLViews();
+      const svcs = await getCoreServices(cmdViews, true);
 
       // =======================================================================
       // 1. SUBMIT VISIT SCORE VIA ANGULAR COMPONENT
@@ -627,8 +723,9 @@
         const visit = detail.visit || {};
         const score = Math.max(0, Math.min(180, Math.round(Number(visit.score || 0))));
 
-        // Wait up to 4.2s if DartBot is currently finishing its throw animation
-        for (let w = 0; w < 22; w++) {
+        // Wait up to 3.5s (strictly below content.js's 6s timeout) if DartBot is finishing its throw
+        const waitDeadline = Date.now() + 3500;
+        while (Date.now() < waitDeadline) {
           const localComp = getComponentForElement(
             document.querySelector('app-match-local-game')
           );
@@ -638,15 +735,18 @@
           if (kbEl || (localComp && curUser && !curUser.is_cpu)) {
             break;
           }
-          await sleep(190);
+          const remainingMs = waitDeadline - Date.now();
+          if (remainingMs <= 0) break;
+          await sleep(Math.min(175, remainingMs));
         }
 
+        const latestViews = getAllLViews();
         const matchEl = document.querySelector(
           'app-match-local-game, app-match-online-gameplay'
         );
-        const matchComp = getComponentForElement(matchEl);
+        const matchComp = getComponentForElement(matchEl, latestViews);
         const kbEl = document.querySelector('app-keyboard-score-input');
-        const kbComp = getComponentForElement(kbEl);
+        const kbComp = getComponentForElement(kbEl, latestViews);
 
         if (matchComp && typeof matchComp.submitScore === 'function') {
           matchComp.submitScore(score);
@@ -1123,4 +1223,6 @@
   setTimeout(() => {
     void publishSnapshot();
   }, 100);
+
+  window.__AUTODARTS_DC_PAGE_BRIDGE__ = true;
 })();

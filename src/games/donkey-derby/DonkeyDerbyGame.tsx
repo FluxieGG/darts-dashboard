@@ -7,6 +7,7 @@ import { useGameBoardEvents } from '../hooks/useGameBoardEvents';
 import { useActiveTurnTint } from '../hooks/useActiveTurnTint';
 import { soundEngine } from '../utils/soundEngine';
 import { injectBoardClickThrow } from '../utils/dartHelpers';
+import { gameEventBus } from '../../services/gameEventBus';
 import { cn } from '../../lib/utils';
 import { Flag, Zap, Target, Trophy, AlertTriangle } from 'lucide-react';
 import {
@@ -65,6 +66,7 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
   historyRef.current = history;
 
   const startedAtRef = useRef<number>(Date.now());
+  const completedRef = useRef<boolean>(false);
   const calloutTimerRef = useRef<number | null>(null);
   const winTimerRef = useRef<number | null>(null);
 
@@ -100,6 +102,8 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
 
   const scheduleWinCompletion = useCallback(
     (finishedState: DonkeyDerbyState) => {
+      if (completedRef.current) return;
+      completedRef.current = true;
       if (winTimerRef.current !== null) {
         window.clearTimeout(winTimerRef.current);
       }
@@ -117,6 +121,7 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
       window.clearTimeout(winTimerRef.current);
       winTimerRef.current = null;
     }
+    completedRef.current = false;
     const nextHistory = historyRef.current.slice(0, -1);
     const prev = historyRef.current[historyRef.current.length - 1];
     historyRef.current = nextHistory;
@@ -125,10 +130,12 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
     turnStartStateRef.current = prev.turnStartState;
     setState(prev.state);
     setCallout(null);
+    gameEventBus.resetVisitBuffer(prev.state.currentVisit.map((v) => v.dart));
   }, []);
 
   const handleRestart = useCallback(() => {
     clearTimers();
+    completedRef.current = false;
     const fresh = createInitialState(players, config);
     startedAtRef.current = Date.now();
     stateRef.current = fresh;
@@ -137,6 +144,7 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
     setHistory([]);
     setState(fresh);
     setCallout(null);
+    gameEventBus.resetVisitBuffer([]);
   }, [clearTimers, players, config]);
 
   useEffect(() => {
@@ -145,7 +153,7 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
       canUndo: () => historyRef.current.length > 0,
       restartMatch: handleRestart,
     });
-  }, [registerController, handleUndo, handleRestart, history.length]);
+  }, [registerController, handleUndo, handleRestart]);
 
   useEffect(() => {
     onCanUndoChange?.(history.length > 0);
@@ -201,6 +209,7 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
       if (winTimerRef.current !== null) {
         window.clearTimeout(winTimerRef.current);
         winTimerRef.current = null;
+        completedRef.current = false;
       }
       let replayed = turnStartStateRef.current;
       let lastFeedback = null;
@@ -295,6 +304,8 @@ export const DonkeyDerbyGame: React.FC<GameModuleProps> = ({
 
     return overlays;
   }, [state.racers, state.activePlayerIndex]);
+
+  if (!activeRacer) return null;
 
   const furlongsToWin = Math.max(0, state.trackLength - activeRacer.position);
 
