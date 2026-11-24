@@ -1,23 +1,27 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useLayoutStore } from '../../store/useLayoutStore';
 import { WIDGET_REGISTRY } from '../widgets/widgetRegistry';
 import { AppErrorBoundary } from '../common/AppErrorBoundary';
 import { cn } from '../../lib/utils';
 
-export const BentoGrid: React.FC = () => {
+export const BentoGrid: React.FC = React.memo(() => {
   const layout = useLayoutStore((s) => s.layout);
 
-  // Filter only enabled widgets and sort strictly by order
-  const activeWidgets = layout.widgets
-    .filter((w) => w.enabled)
-    .sort((a, b) => a.order - b.order);
+  // Filter only enabled widgets and sort strictly by evaluated order
+  const activeWidgets = useMemo(
+    () =>
+      layout.widgets
+        .filter((w) => w.enabled)
+        .sort((a, b) => a.order - b.order),
+    [layout.widgets]
+  );
 
   return (
-    <main className="w-full max-w-[1600px] mx-auto px-4 py-4 sm:px-5 sm:py-5">
+    <main className="w-full max-w-[1560px] mx-auto px-4 py-5 sm:px-6 sm:py-6">
       {/*
-        Portrait-First Bento Grid:
-        - Vertical 1080x1920 monitors (width <= 1279px): ALWAYS uses full-bleed 2-column grid
-          so full-width widgets span 100% of the monitor width and are easily legible from 8ft away.
+        Portrait-First Minimalist Bento Grid:
+        - Vertical 1080x1920 monitors (width <= 1279px): clean 2-column grid
+          with generous breathing room for 8-foot glanceability.
         - Wide Landscape displays (xl >= 1280px): expands cleanly to a 4-column bento grid.
       */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5 auto-rows-min">
@@ -32,7 +36,6 @@ export const BentoGrid: React.FC = () => {
             <div
               key={widgetConfig.id}
               className={cn(
-                'transition-all duration-300',
                 isFullWidth ? 'col-span-2' : 'col-span-2 sm:col-span-1'
               )}
             >
@@ -45,4 +48,6 @@ export const BentoGrid: React.FC = () => {
       </div>
     </main>
   );
-};
+});
+
+BentoGrid.displayName = 'BentoGrid';

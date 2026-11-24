@@ -268,10 +268,10 @@ const KioskApp: React.FC = () => {
       data-player-tint={!isDartCounterTheme && !isPartyMode && Boolean(resolvedTintHex) ? 'on' : 'off'}
       data-turn-tint={!isDartCounterTheme && isTurnTintActive ? 'on' : 'off'}
       style={rootStyle}
-      className={`min-h-screen flex flex-col font-sans select-none antialiased transition-colors duration-300 ${
+      className={`min-h-screen flex flex-col font-sans select-none antialiased transition-colors duration-200 ${
         isDartCounterTheme
           ? 'bg-[#F4F5F7] text-[#111827]'
-          : 'bg-[#0B0F17] text-slate-100'
+          : 'bg-[#0A0C10] text-slate-100'
       }`}
     >
       {/* Ordered Kiosk Boot Sequence (Vault -> Board 3180 -> iPad Relay -> Split-Cam) */}
@@ -346,53 +346,44 @@ const KioskApp: React.FC = () => {
 
       {/* Passive Objective Completed Toast Banner */}
       {recentlyCompletedObjective && (
-        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 px-6 py-3.5 rounded-2xl bg-emerald-950/95 border-2 border-emerald-400/70 text-emerald-100 shadow-[0_0_32px_rgba(16,185,129,0.5)] flex items-center gap-3 animate-in fade-in zoom-in-95 pointer-events-none">
-          <Trophy className="w-5 h-5 text-amber-300 shrink-0" />
-          <span className="text-sm sm:text-base font-black tracking-tight">
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-full bg-[#12151C]/95 border border-emerald-400/35 text-emerald-200 shadow-lg flex items-center gap-2.5 pointer-events-none">
+          <Trophy className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="text-sm font-semibold tracking-tight">
             {recentlyCompletedObjective}
           </span>
         </div>
       )}
 
-      {/* Broadcast Footer (adapts to DartCounter Light / Party / Dark-Night themes) */}
+      {/* Quiet Minimalist Footer */}
       <footer
-        className={`border-t py-2 px-4 sm:px-6 text-center text-[11px] font-mono flex items-center justify-between transition-colors ${
+        className={`border-t py-2.5 px-5 sm:px-6 text-[11px] font-mono flex items-center justify-between transition-colors ${
           isDartCounterTheme
             ? 'bg-white border-slate-200 text-slate-500'
             : isPartyMode
-            ? 'border-purple-400/15 text-purple-300/75'
+            ? 'border-purple-400/12 text-purple-300/60'
             : 'border-white/[0.05] text-slate-600'
         }`}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {isDartCounterTheme ? (
-            <span className="flex items-center gap-1.5 text-[#F76505] font-bold">
+            <span className="flex items-center gap-1.5 text-[#F76505] font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-[#F76505]" />
-              Target DartCounter • Autodarts Auto-Scorer Active • Clipping Disabled
+              Target DartCounter • Clipping Disabled
             </span>
           ) : isPartyMode ? (
-            <span className="flex items-center gap-1.5 text-amber-300/90 font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              Party Mode Active • Personal Stats Protected
+            <span className="flex items-center gap-1.5 text-amber-300/80">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              Party Mode • Personal Stats Protected
             </span>
           ) : (
-            <>
-              <span className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/60" />
-                Oche Distance: 2.37m (7' 9¼")
-              </span>
-              <span className="hidden sm:inline">•</span>
-              <span className="hidden sm:inline">Bull Height: 1.73m (5' 8")</span>
-            </>
+            <span>Oche 2.37m • Bull 1.73m</span>
           )}
         </div>
-        <div>
+        <div className="text-right">
           <span>
             {isDartCounterTheme
-              ? 'Use app.dartcounter.net/match • Confirm scores via iPad Oche Deck'
-              : isPartyMode
-              ? 'Vice Party Session • Controlled via iPad Oche Deck'
-              : 'Autodarts Broadcast Kiosk • Controlled via iPad Oche Deck'}
+              ? 'app.dartcounter.net/match'
+              : 'iPad Oche Deck • Dev: /?dev=1'}
           </span>
         </div>
       </footer>
